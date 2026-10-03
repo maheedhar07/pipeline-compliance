@@ -14,6 +14,7 @@ defaults:
   Maven: {goals: package}
   KubernetesManifest: {action: deploy}
   Kubernetes: {command: apply}
+  "Synapse workspace deployment": {operation: deploy}
 
 tasks:
   # --- code quality / security
@@ -78,8 +79,9 @@ tasks:
   "AzureResourceGroupDeployment@*": [deploy:iac]
   "AzureCLI@*":                [azcli]
   "AzurePowerShell@*":         [azps]
-  "Synapse workspace deployment@*": [deploy:synapse]
-  "Synapse workspace deployment (validate)@*": [validate:synapse]
+  "Synapse workspace deployment@*":
+    - {when: {"inputs.operation~": "(?i)^(deploy|validateDeploy)$"}, caps: [deploy:synapse]}
+    - {when: {"inputs.operation~": "(?i)^(validate|validateDeploy)$"}, caps: [validate:synapse]}
   "SqlAzureDacpacDeployment@*": [deploy:sql]
   "SqlDacpacDeploymentOnMachineGroup@*": [deploy:sql]
   "TerraformTaskV4@*":

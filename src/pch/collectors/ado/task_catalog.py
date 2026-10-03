@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from pch.collectors.ado.client import AdoClient
+from pch.model.pipeline import Pipeline
 
 
 @dataclass
@@ -22,6 +23,22 @@ class TaskDef:
 class TaskCatalog:
     by_id: dict[str, TaskDef] = field(default_factory=dict)
     task_groups: dict[str, dict[str, Any]] = field(default_factory=dict)  # id -> task group definition
+
+    def by_name(self, name: str) -> TaskDef | None:
+        low = name.lower()
+        for d in self.by_id.values():
+            if d.name.lower() == low:
+                return d
+        return None
+
+    def annotate(self, pipeline: Pipeline) -> None:
+        """Mark marketplace/deprecated on steps that were parsed without GUID resolution (YAML)."""
+        for step in pipeline.all_steps():
+            if step.task and "@" in step.task:
+                d = self.by_name(step.task.split("@", 1)[0])
+                if d is not None:
+                    step.marketplace = step.marketplace or d.marketplace
+                    step.deprecated = step.deprecated or d.deprecated
 
     def resolve(self, task_id: str, version_spec: str | None = None) -> tuple[str, str | None, TaskDef | None]:
         """Return (task name, major version string or None if unpinned, definition)."""

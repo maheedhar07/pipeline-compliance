@@ -1,0 +1,49 @@
+# Azure Pipelines task -> GitHub Actions equivalent. DATA: extend as you learn the estate.
+# `gha: null` means there is NO direct equivalent (a migration blocker / redesign item).
+tasks:
+  DotNetCoreCLI: {gha: "actions/setup-dotnet + run: dotnet"}
+  VSTest: {gha: "run: dotnet test"}
+  VSBuild: {gha: "microsoft/setup-msbuild + run: msbuild"}
+  MSBuild: {gha: "microsoft/setup-msbuild + run: msbuild"}
+  NuGetCommand: {gha: "run: dotnet restore / nuget"}
+  Maven: {gha: "actions/setup-java + run: mvn"}
+  Gradle: {gha: "gradle/actions/setup-gradle"}
+  Npm: {gha: "actions/setup-node + run: npm"}
+  NodeTool: {gha: "actions/setup-node"}
+  UsePythonVersion: {gha: "actions/setup-python"}
+  CopyFiles: {gha: "run: cp / actions/upload-artifact"}
+  ArchiveFiles: {gha: "run: zip"}
+  PublishBuildArtifacts: {gha: "actions/upload-artifact"}
+  PublishPipelineArtifact: {gha: "actions/upload-artifact"}
+  DownloadPipelineArtifact: {gha: "actions/download-artifact"}
+  DownloadBuildArtifacts: {gha: "actions/download-artifact"}
+  PublishTestResults: {gha: "dorny/test-reporter"}
+  PublishCodeCoverageResults: {gha: "codecov/codecov-action or reportgenerator"}
+  SonarQubePrepare: {gha: "SonarSource/sonarqube-scan-action"}
+  SonarQubeAnalyze: {gha: "SonarSource/sonarqube-scan-action"}
+  SonarQubePublish: {gha: "SonarSource/sonarqube-quality-gate-action"}
+  AzureFunctionApp: {gha: "Azure/functions-action"}
+  AzureWebApp: {gha: "Azure/webapps-deploy"}
+  AzureWebAppContainer: {gha: "Azure/webapps-deploy"}
+  AzureRmWebAppDeployment: {gha: "Azure/webapps-deploy"}
+  AzureAppServiceManage: {gha: "azure/cli (az webapp deployment slot swap)"}
+  KubernetesManifest: {gha: "Azure/k8s-deploy"}
+  Kubernetes: {gha: "Azure/k8s-deploy"}
+  HelmDeploy: {gha: "azure/setup-helm + run: helm"}
+  AzureResourceManagerTemplateDeployment: {gha: "azure/arm-deploy"}
+  AzureResourceGroupDeployment: {gha: "azure/arm-deploy"}
+  AzureCLI: {gha: "azure/cli"}
+  AzurePowerShell: {gha: "azure/powershell"}
+  "Synapse workspace deployment": {gha: "Azure/Synapse-workspace-deployment"}
+  SqlAzureDacpacDeployment: {gha: "azure/sql-action"}
+  SqlDacpacDeploymentOnMachineGroup: {gha: null, note: "on-prem machine-group deployment; needs self-hosted runner redesign"}
+  TerraformTaskV4: {gha: "hashicorp/setup-terraform"}
+  TerraformTaskV3: {gha: "hashicorp/setup-terraform"}
+  Docker: {gha: "docker/build-push-action"}
+  ServiceNow-DevOps-Change: {gha: "ServiceNow/servicenow-devops-change"}
+  ManualIntervention: {gha: null, note: "use environment required reviewers"}
+  InvokeRESTAPI: {gha: null, note: "agentless server task; re-implement as a curl/script step or environment protection rule"}
+  AzureMonitor: {gha: null, note: "agentless gate; re-implement as a script"}
+  AzureFunction: {gha: null, note: "agentless gate; re-implement as a script"}
+  replacetokens: {gha: "qetza/replacetokens-action"}
+  ManifestGenerator: {gha: "microsoft/sbom-action"}
