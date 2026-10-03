@@ -92,6 +92,9 @@ def _classic_script_task(sd: SD) -> tuple[str, int, dict[str, Any]]:
 
 
 def classic_step(sd: SD, idx: int) -> dict[str, Any]:
+    task: str
+    ver: int | None
+    inputs: dict[str, Any]
     if sd.script is not None:
         task, ver, inputs = _classic_script_task(sd)
     else:
@@ -107,6 +110,9 @@ def classic_step(sd: SD, idx: int) -> dict[str, Any]:
 
 
 def classic_workflow_task(sd: SD) -> dict[str, Any]:
+    task: str
+    ver: int | None
+    inputs: dict[str, Any]
     if sd.script is not None:
         task, ver, inputs = _classic_script_task(sd)
     else:

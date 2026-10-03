@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pch.collectors.servicenow import change_is_valid, window_covers
 from pch.engine.helpers import ancestors, prod_stages
 from pch.engine.registry import rule
@@ -110,7 +112,9 @@ def dep_005(ctx: RepoContext, policy: Policy) -> RuleResult:
         return RuleResult.na("no production deployments in the last 90 days")
     if not ctx.snow.available:
         return RuleResult.unknown("ServiceNow was not queried; cannot correlate deployments")
-    ok, bad, unlinked = 0, [], []
+    ok = 0
+    bad: list[dict[str, Any]] = []
+    unlinked: list[dict[str, Any]] = []
     for p, d in deps:
         cr = None
         for ref in d.change_refs:
@@ -133,7 +137,7 @@ def dep_005(ctx: RepoContext, policy: Policy) -> RuleResult:
             bad.append({"deployment": d.id, "pipeline": p.name, "crq": cr.number, "reason": "deployed outside the CRQ window"})
         else:
             ok += 1
-    ev = {"deployments": len(deps), "valid": ok, "violations": bad[:20], "unlinked": unlinked[:20]}
+    ev: dict[str, Any] = {"deployments": len(deps), "valid": ok, "violations": bad[:20], "unlinked": unlinked[:20]}
     if bad:
         return RuleResult.failed(f"{len(bad)} of {len(deps)} production deployments lack a valid CRQ", **ev)
     if unlinked:

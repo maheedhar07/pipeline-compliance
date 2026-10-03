@@ -1,0 +1,37 @@
+# Dashboard + Postgres.   docker compose up --build
+# Demo data (no credentials):  docker compose run --rm app sh -c "pch seed-demo && pch scan --demo"
+# Real scan (needs .env):      docker compose run --rm app pch scan
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pch
+      POSTGRES_PASSWORD: pch-local-dev-only
+      POSTGRES_DB: pch
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pch -d pch"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+psycopg://pch:pch-local-dev-only@db:5432/pch
+    volumes:
+      - appdata:/app/data
+    ports:
+      # bound to localhost on purpose: the dashboard has no authentication in v1
+      - "127.0.0.1:8000:8000"
+
+volumes:
+  pgdata:
+  appdata:

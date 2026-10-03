@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -37,7 +38,7 @@ def _wrap(inner: httpx.AsyncBaseTransport, record_to: Path | None) -> httpx.Asyn
 def demo_sources(world: dict, *, record_to: Path | None = None, concurrency: int = 16) -> Sources:
     """Sources wired to the in-memory demo world (real collectors, fake network)."""
     t = _wrap(DemoTransport(world), record_to)
-    kw = {"backoff_base": 0, "max_attempts": 2, "concurrency": concurrency}
+    kw: dict[str, Any] = {"backoff_base": 0, "max_attempts": 2, "concurrency": concurrency}
     return Sources(
         ado=AdoClient(P.ORG, "demo", transport=t, **kw),
         sonar=SonarClient(f"https://{SONAR_HOST}", "demo", transport=t, **kw),
@@ -49,7 +50,7 @@ def demo_sources(world: dict, *, record_to: Path | None = None, concurrency: int
 def cache_sources(cache_dir: Path, settings: Settings, *, demo: bool = False) -> Sources:
     """Replay a previous scan's cached raw responses (pch scan --from-cache)."""
     t = CacheReplayTransport(cache_dir)
-    kw = {"backoff_base": 0, "max_attempts": 1}
+    kw: dict[str, Any] = {"backoff_base": 0, "max_attempts": 1}
     if demo:
         return Sources(
             ado=AdoClient(P.ORG, "", transport=t, **kw),
@@ -65,7 +66,7 @@ def live_sources(settings: Settings, *, record_to: Path | None = None) -> Source
     return _live(settings, _wrap(inner, record_to), {"concurrency": settings.concurrency, "timeout": settings.http_timeout})
 
 
-def _live(settings: Settings, transport: httpx.AsyncBaseTransport, kw: dict) -> Sources:
+def _live(settings: Settings, transport: httpx.AsyncBaseTransport, kw: dict[str, Any]) -> Sources:
     if not settings.ado_org:
         raise SystemExit("ADO_ORG is not set (see .env.example). Use --demo to run without credentials.")
     ado = AdoClient(settings.ado_org, settings.ado_pat.get_secret_value(), base_url=settings.ado_base_url,

@@ -352,7 +352,7 @@ def deploy_sds(s: RepoSpec, tier_label: str, conn: str, classic: bool) -> list[S
         if s.has("publish_profile"):
             sds.append(SD("AzureRmWebAppDeployment", 4, {"ConnectionType": "PublishProfile", "PublishProfilePath": "$(System.DefaultWorkingDirectory)/profile.pubxml", "WebAppKind": "functionApp", "WebAppName": app}, "Deploy Function App (publish profile)"))
         else:
-            inputs = {"azureSubscription": conn, "appType": "functionAppLinux", "appName": app, "package": "$(Pipeline.Workspace)/drop/*.zip"}
+            inputs: dict[str, Any] = {"azureSubscription": conn, "appType": "functionAppLinux", "appName": app, "package": "$(Pipeline.Workspace)/drop/*.zip"}
             if slot:
                 inputs |= {"deployToSlotOrASE": True, "resourceGroupName": f"rg-{app}", "slotName": "staging"}
             sds.append(SD("AzureFunctionApp", ver(s, 1 if s.has("deprecated_task") and s.idx % 2 == 0 else 2), inputs, "Deploy Function App"))
@@ -563,11 +563,11 @@ class WorldBuilder:
             if approve or (tier == "UAT" and s.n["gate_roll"] < 0.3):
                 pre = {"approvals": [{"rank": 1, "isAutomated": False, "isNotificationOn": True, "approver": {"displayName": "Change Approvers", "uniqueName": f"{s.project.lower()}-approvers@contoso.com"}}],
                        "approvalOptions": {"requiredApproverCount": 1, "releaseCreatorCanBeApprover": s.has("requester_can_approve"), "timeoutInMinutes": 43200}}
-            gates = {"gates": [], "gatesOptions": {"isEnabled": False}}
+            gates: dict[str, Any] = {"gates": [], "gatesOptions": {"isEnabled": False}}
             if is_prod and s.has("snow_gate"):
                 gates = {"gates": [{"tasks": [{"taskId": P.task_guid("ServiceNow-DevOps-Change"), "name": "ServiceNow CRQ gate", "version": "1.*", "inputs": {"table": "change_request", "instance": "contoso.service-now.com"}}]}],
                          "gatesOptions": {"isEnabled": True, "timeout": 1440, "samplingInterval": 15}}
-            post = {"gates": [], "gatesOptions": {"isEnabled": False}}
+            post: dict[str, Any] = {"gates": [], "gatesOptions": {"isEnabled": False}}
             if tier != "Dev" and s.has("smoke") and s.has("smoke_gate"):
                 post = {"gates": [{"tasks": [{"taskId": P.task_guid("InvokeRESTAPI"), "name": "Health endpoint check", "version": "1.*", "inputs": {"urlSuffix": "/health", "method": "GET"}}]}],
                         "gatesOptions": {"isEnabled": True, "timeout": 360}}

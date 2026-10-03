@@ -46,8 +46,8 @@ def sup_002(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
     tasks = [s for s in p.all_steps() if s.task and s.task.split("@")[0].lower() not in SCRIPT_TASKS and s.enabled]
     if not tasks:
         return RuleResult.na("no task steps")
-    unpinned = sorted({s.task.split("@")[0] for s in tasks if s.task_version is None})
-    deprecated = sorted({s.task for s in tasks if s.deprecated})
+    unpinned = sorted({(s.task or "").split("@")[0] for s in tasks if s.task_version is None})
+    deprecated = sorted({s.task or "" for s in tasks if s.deprecated})
     if unpinned or deprecated:
         msg = []
         if unpinned:

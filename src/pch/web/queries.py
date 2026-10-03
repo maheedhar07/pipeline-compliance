@@ -183,7 +183,7 @@ def trend(s: Session) -> list[dict[str, Any]]:
     scans = [x for x in store.list_scans(s, 100) if x.status == "complete"]
     scans.sort(key=lambda x: x.started_at)
     agg = {sid: (n, avg) for sid, n, avg in s.execute(select(RepoResultRow.scan_id, func.count(), func.avg(RepoResultRow.score)).group_by(RepoResultRow.scan_id))}
-    by = defaultdict(Counter)
+    by: dict[str, Counter[str]] = defaultdict(Counter)
     for sid, st, n in s.execute(select(RepoResultRow.scan_id, RepoResultRow.status, func.count()).group_by(RepoResultRow.scan_id, RepoResultRow.status)):
         by[sid][st] = n
     for sc in scans:
@@ -238,7 +238,7 @@ def testing(s: Session, scan_id: str) -> dict[str, Any]:
     lists = {st: [row_dict(r) | {"reason": r.test_state_reason} for r in rows if r.test_state == st] for st in ("NO_TESTS", "TESTS_NOT_RUN", "TESTS_NO_COVERAGE", "TESTS_LOW_COVERAGE")}
     for v in lists.values():
         v.sort(key=lambda r: (r["project"], r["repo"]))
-    buckets = Counter()
+    buckets: Counter[int] = Counter()
     for r in rows:
         if r.coverage is not None:
             buckets[min(int(r.coverage // 10) * 10, 90)] += 1
@@ -282,7 +282,7 @@ def migration(s: Session, scan_id: str) -> dict[str, Any]:
     for r in rows:
         for p in r.pipelines:
             plat[p["platform"]] += 1
-    buckets = Counter()
+    buckets: Counter[str] = Counter()
     blockers: Counter[str] = Counter()
     for r in rows:
         if r.migration_score is not None:

@@ -109,8 +109,8 @@ class Scanner:
         self.aikido_data: tuple[list, list] | None = None
         self.rules = all_rules()
 
-    def err(self, source: str, subject: str, exc: Exception | str) -> None:
-        msg = f"{type(exc).__name__}: {exc}" if isinstance(exc, Exception) else exc
+    def err(self, source: str, subject: str, exc: BaseException | str) -> None:
+        msg = f"{type(exc).__name__}: {exc}" if isinstance(exc, BaseException) else exc
         self.errors.append((source, subject, msg[:400]))
         log.warning("collection error [%s] %s: %s", source, subject, msg)
 
@@ -127,7 +127,7 @@ class Scanner:
             listing = await ado.paged(name, "_apis/build/definitions", {"includeAllProperties": "true"})
             details = await asyncio.gather(*(ado.get(name, f"_apis/build/definitions/{d['id']}") for d in listing), return_exceptions=True)
             for d, det in zip(listing, details, strict=True):
-                if isinstance(det, Exception):
+                if isinstance(det, BaseException):
                     self.err("ado", f"{name}: build definition {d.get('id')}", det)
                 else:
                     pd.build_defs.append(det)
@@ -137,7 +137,7 @@ class Scanner:
             rl = await ado.paged(name, "_apis/release/definitions", {"$expand": "environments,artifacts"}, vsrm=True)
             rdet = await asyncio.gather(*(ado.get(name, f"_apis/release/definitions/{d['id']}", vsrm=True) for d in rl), return_exceptions=True)
             for d, det in zip(rl, rdet, strict=True):
-                if isinstance(det, Exception):
+                if isinstance(det, BaseException):
                     self.err("ado", f"{name}: release definition {d.get('id')}", det)
                 else:
                     pd.release_defs.append(det)

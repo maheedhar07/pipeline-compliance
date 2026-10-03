@@ -61,13 +61,14 @@ def pipeline_readiness(p: Pipeline) -> tuple[int, list[str]]:
 def repo_readiness(ctx: RepoContext) -> tuple[int | None, list[str]]:
     if not ctx.pipelines:
         return None, []
-    scores, blockers = [], []
+    scores: list[int] = []
+    blockers: list[str] = []
     for p in ctx.pipelines:
-        s, b = pipeline_readiness(p)
+        s, bl = pipeline_readiness(p)
         scores.append(s)
-        blockers.extend(b)
+        blockers.extend(bl)
     seen: list[str] = []
-    for b in blockers:
-        if b not in seen:
-            seen.append(b)
+    for item in blockers:
+        if item not in seen:
+            seen.append(item)
     return round(sum(scores) / len(scores)), seen

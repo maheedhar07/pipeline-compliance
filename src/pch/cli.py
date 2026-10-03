@@ -42,6 +42,32 @@ def rules_list(
     typer.echo(f"\n{len(rules)} rules")
 
 
+@rules_app.command("docs")
+def rules_docs(
+    write: str | None = typer.Option(None, "--write", help="Write the markdown to this path (e.g. docs/RULES.md)"),
+    check: bool = typer.Option(False, "--check", help="Exit 1 if --write target is out of date"),
+) -> None:
+    """Render docs/RULES.md from the rule registry."""
+    from pathlib import Path
+
+    from pch.docs import render_rules_md
+
+    text = render_rules_md()
+    if not write:
+        typer.echo(text)
+        return
+    target = Path(write)
+    if check:
+        if not target.exists() or target.read_text() != text:
+            typer.echo(f"{write} is out of date: run `pch rules docs --write {write}`", err=True)
+            raise typer.Exit(1)
+        typer.echo(f"{write} is up to date")
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text)
+    typer.echo(f"wrote {write}")
+
+
 # ----------------------------------------------------------------------------- demo / scan / serve
 DEMO_DIR = "demo"
 
