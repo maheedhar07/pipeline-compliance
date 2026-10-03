@@ -4,17 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}Pipeline Compliance Hub{% endblock %}</title>
-<script>
-  // apply the stored theme before paint
-  (function(){try{var t=localStorage.getItem('pch-theme');var d=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches;if(t==='dark'||(!t&&d))document.documentElement.classList.add('dark');}catch(e){}})();
-</script>
-<script src="https://cdn.tailwindcss.com"></script>
-<script>tailwind && (tailwind.config = { darkMode: 'class' });</script>
-<script src="https://unpkg.com/htmx.org@1.9.12"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
-<link rel="stylesheet" href="/static/app.css">
+<meta name="htmx-config" content='{"allowEval":false,"includeIndicatorStyles":false,"allowScriptTags":false}'>
+<script src="/static/theme.js?v={{ asset_v }}"></script>
+<link rel="stylesheet" href="/static/vendor/tailwind.css?v={{ asset_v }}">
+<link rel="stylesheet" href="/static/app.css?v={{ asset_v }}">
 </head>
-<body class="bg-slate-50 text-sm text-slate-900 dark:bg-slate-900 dark:text-slate-100">
+<body data-page="{{ nav }}" class="bg-slate-50 text-sm text-slate-900 dark:bg-slate-900 dark:text-slate-100">
 {% from "_macros.html" import status_badge %}
 <header class="sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur dark:border-slate-700 dark:bg-slate-900/95">
   <div class="mx-auto flex max-w-[1400px] flex-wrap items-center gap-x-5 gap-y-1 px-4 py-2">
@@ -29,13 +24,14 @@
       {% if scan %}
       <form method="get" class="flex items-center gap-1">
         <label for="scan-select" class="sr-only">Scan</label>
-        <select id="scan-select" name="scan" onchange="this.form.submit()" class="rounded border border-slate-300 bg-white px-1 py-0.5 text-xs dark:border-slate-600 dark:bg-slate-800">
+        <select id="scan-select" name="scan" data-autosubmit class="rounded border border-slate-300 bg-white px-1 py-0.5 text-xs dark:border-slate-600 dark:bg-slate-800">
           {% for sc in scans %}<option value="{{ sc.id }}" {{ 'selected' if sc.id == scan.id }}>{{ sc.started_at.strftime('%Y-%m-%d') }} · {{ sc.mode }}{{ ' (latest)' if loop.first }}</option>{% endfor %}
         </select>
       </form>
       {% endif %}
-      <a href="/api/docs" class="hover:underline">API</a>
-      <button type="button" onclick="pchToggleTheme()" class="rounded border border-slate-300 px-2 py-0.5 hover:bg-slate-100 dark:border-slate-600 dark:hover:bg-slate-800" aria-label="Toggle dark mode">Theme</button>
+      {% if docs_enabled %}<a href="/api/docs" class="hover:underline">API</a>{% endif %}
+      {% if principal and principal.auth_type != 'none' %}<span class="text-slate-700 dark:text-slate-200" title="{{ principal.id }}">{{ principal.name or principal.id }}</span><a href="/.auth/logout" class="hover:underline">Sign out</a>{% endif %}
+      <button type="button" data-action="toggle-theme" class="rounded border border-slate-300 px-2 py-0.5 hover:bg-slate-100 dark:border-slate-600 dark:hover:bg-slate-800" aria-label="Toggle dark mode">Theme</button>
     </div>
   </div>
 </header>
@@ -43,7 +39,9 @@
 {% block content %}{% endblock %}
 </main>
 <footer class="mx-auto max-w-[1400px] px-4 pb-6 text-xs text-slate-500 dark:text-slate-400">Report-only: this dashboard reads your estate, it never changes it. v{{ version }}{% if scan %} · scan {{ scan.id }} · {{ scan.repos_total }} repos · {{ scan.findings_total }} findings{% endif %}</footer>
-<script src="/static/app.js"></script>
 {% block scripts %}{% endblock %}
+<script src="/static/vendor/htmx-1.9.12.min.js?v={{ asset_v }}" defer></script>
+<script src="/static/vendor/chart-4.4.3.umd.js?v={{ asset_v }}" defer></script>
+<script src="/static/app.js?v={{ asset_v }}" defer></script>
 </body>
 </html>

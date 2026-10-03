@@ -110,9 +110,28 @@ class Settings(BaseSettings):
     concurrency: int = Field(8, ge=1, le=64)
     http_timeout: float = Field(30.0, gt=0, le=300)
 
-    # --- web server (non-loopback bind policy is enforced in T5)
+    # --- web server. Bind/auth policy is enforced by pch.web.guard.assert_safe_to_serve (fails closed).
     host: str = "127.0.0.1"
-    port: int = Field(8000, ge=1, le=65535)
+    port: int = Field(8000, ge=1, le=65535)  # env PORT (App Service sets PORT / WEBSITES_PORT for containers)
+    websites_port: int | None = Field(None, ge=1, le=65535)  # env WEBSITES_PORT; used when PORT is not set
+    # Comma-separated Host header allowlist (TrustedHost), e.g. "myapp.azurewebsites.net,*.azurewebsites.net".
+    # Required (non-empty, no bare "*") when APP_ENV=prod.
+    allowed_hosts: str = ""
+    # Which proxy IPs may set X-Forwarded-*. "*" is acceptable on App Service only because the platform front end
+    # is the sole ingress to the container. # VERIFY: App Service Linux custom containers are reachable only via the front end.
+    forwarded_allow_ips: str = "127.0.0.1"
+
+    # --- web authentication (see docs/DEPLOY_AZURE.md)
+    # AUTH_MODE=none: dev only, loopback bind only. easyauth: App Service Authentication (Entra ID); the app reads
+    # X-MS-CLIENT-PRINCIPAL and authorises by Entra app role.
+    auth_mode: Literal["none", "easyauth"] = "none"
+    auth_allowed_roles: str = ""  # comma-separated app roles, e.g. "PCH.Reader"
+    auth_allow_any_authenticated: bool = False  # explicit opt-in to "any signed-in user" when no role allowlist is set
+    # Easy Auth only strips/overwrites X-MS-* when it is enabled; the app refuses to start unless the platform says so.
+    # # VERIFY: App Service exposes WEBSITE_AUTH_ENABLED=True to the container when Authentication is turned on.
+    website_auth_enabled: str = ""  # env WEBSITE_AUTH_ENABLED (set by the platform; do not set by hand)
+    auth_easyauth_assume_enabled: bool = False  # local testing only; forbidden when APP_ENV=prod
+    auth_none_allow_container_bind: bool = False  # dev only: allow non-loopback bind for AUTH_MODE=none (docker compose)
 
     @field_validator(
         "ado_base_url", "ado_vsrm_url", "sonar_url", "aikido_url", "servicenow_url", "keyvault_url", "artifact_blob_account_url"
@@ -133,6 +152,25 @@ class Settings(BaseSettings):
             if u and not u.startswith("https://"):
                 raise ValueError("Azure endpoints must be https:// URLs")
         return self
+
+    @property
+    def effective_port(self) -> int:
+        """PORT if set, else WEBSITES_PORT, else 8000."""
+        if "port" not in self.model_fields_set and self.websites_port:
+            return self.websites_port
+        return self.port
+
+    @property
+    def allowed_roles(self) -> list[str]:
+        return [r.strip() for r in self.auth_allowed_roles.split(",") if r.strip()]
+
+    @property
+    def allowed_host_list(self) -> list[str]:
+        return [h.strip().lower() for h in self.allowed_hosts.split(",") if h.strip()]
+
+    @property
+    def easyauth_platform_enabled(self) -> bool:
+        return self.website_auth_enabled.strip().lower() == "true"
 
     @property
     def is_prod(self) -> bool:

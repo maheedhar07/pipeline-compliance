@@ -47,7 +47,7 @@ def test_overview_content(client):
     t = client.get("/").text
     for needle in ("Repos scanned", "Compliant", "Critical findings", "Repos with no tests", "Classic repos", "Top 10 failing rules", "Heatmap", "Trend across scans"):
         assert needle in t
-    assert "new Chart" in t or "pchChart" in t
+    assert 'id="page-data"' in t and 'data-page="overview"' in t
 
 
 def test_repos_filters_sort_and_csv(client):

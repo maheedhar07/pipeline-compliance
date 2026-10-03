@@ -310,23 +310,35 @@ def scan(
 
 @app.command()
 def serve(
-    host: str = typer.Option(None, help="Bind address (default 127.0.0.1)"),
-    port: int = typer.Option(None, help="Port (default 8000)"),
+    host: str = typer.Option(None, help="Bind address (default HOST, else 127.0.0.1)"),
+    port: int = typer.Option(None, help="Port (default PORT, else WEBSITES_PORT, else 8000)"),
     db: str | None = typer.Option(None, "--db"),
 ) -> None:
-    """Start the dashboard (report-only, no auth, binds to localhost by default)."""
+    """Start the dashboard (report-only). Refuses to start unless the auth/bind configuration is safe."""
     import os
 
     import uvicorn
 
-    from pch.settings import get_settings
+    from pch.settings import ConfigError, get_settings
+    from pch.web.app import create_app
+    from pch.web.guard import assert_safe_to_serve
 
     s = get_settings()
     if db:
         os.environ["DATABASE_URL"] = db
         get_settings.cache_clear()
+        s = get_settings()
+    bind_host, bind_port = host or s.host, port or s.effective_port
+    try:
+        assert_safe_to_serve(s, bind_host)
+    except ConfigError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(2) from None
     _open_db(db or s.database_url)  # fail fast with a clear message instead of a traceback inside the worker
-    uvicorn.run("pch.web.app:create_app", factory=True, host=host or s.host, port=port or s.port, log_level="info")
+    web = create_app(db or s.database_url, settings=s, host=bind_host)
+    # proxy_headers: trust X-Forwarded-* only from FORWARDED_ALLOW_IPS. server_header=False: do not advertise uvicorn.
+    uvicorn.run(web, host=bind_host, port=bind_port, log_level="info", proxy_headers=True,
+                forwarded_allow_ips=s.forwarded_allow_ips, server_header=False)
 
 
 @app.command()

@@ -179,6 +179,33 @@ def check_db_migrations(s: Settings) -> Check | None:
     return Check("db_migrations", FAIL, reason)
 
 
+def check_auth(s: Settings) -> Check:
+    """Web auth posture. Never prints values; FAIL when the configuration would be refused at start-up."""
+    from pch.web.guard import guard_problems
+
+    problems = [x for x in guard_problems(s, s.host) if "AUTH" in x or "WEBSITE_AUTH" in x]
+    if s.auth_mode == "easyauth":
+        roles = f"roles allowlist set ({len(s.allowed_roles)})" if s.allowed_roles else ("any authenticated user" if s.auth_allow_any_authenticated else "NO allowlist")
+        platform = "WEBSITE_AUTH_ENABLED=True" if s.easyauth_platform_enabled else ("assumed enabled (AUTH_EASYAUTH_ASSUME_ENABLED)" if s.auth_easyauth_assume_enabled else "WEBSITE_AUTH_ENABLED not True")
+        detail = f"mode=easyauth, {roles}, {platform}"
+    else:
+        detail = "mode=none (local development only)"
+    if problems:
+        return Check("auth", FAIL, f"{detail}; " + " ".join(problems))
+    return Check("auth", WARN if s.auth_mode == "none" else OK, detail)
+
+
+def check_serve_guard(s: Settings) -> Check:
+    """Would ``pch serve`` / ``create_app`` start with this configuration (bind host from HOST)?"""
+    from pch.web.guard import UnsafeServeConfig, assert_safe_to_serve
+
+    try:
+        assert_safe_to_serve(s, s.host)
+    except UnsafeServeConfig as exc:
+        return Check("serve_guard", FAIL, str(exc).replace("\n", " "))
+    return Check("serve_guard", OK, f"safe to serve on {s.host}:{s.effective_port}")
+
+
 def check_data_dir(s: Settings) -> Check:
     d = s.data_dir
     try:
@@ -204,6 +231,8 @@ def run_checks(scope_path: Path | None = None, policy_path: Path | None = None) 
     mig = check_db_migrations(s)
     if mig is not None:
         checks.append(mig)
+    checks.append(check_auth(s))
+    checks.append(check_serve_guard(s))
     checks.append(check_data_dir(s))
     checks.append(check_artifact_store(s))
     return checks

@@ -22,11 +22,5 @@
 </div>
 {% endblock %}
 {% block scripts %}
-<script>
-const D = {{ data | tojson_safe | safe }};
-const SCAN = {{ scan_param | tojson_safe | safe }};
-pchChart('tg', (c) => ({ type: 'bar', data: { labels: D.targets.map(t => t.label), datasets: [{ label: 'Repos', data: D.targets.map(t => t.repos), backgroundColor: c.info, borderRadius: 2 }, { label: 'Non-compliant', data: D.targets.map(t => t.non_compliant), backgroundColor: c.bad, borderRadius: 2 }] },
-  options: { maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { boxWidth: 10 } } }, scales: { y: { grid: { color: c.grid }, ticks: { precision: 0 } }, x: { grid: { display: false } } },
-    onClick: (e, els) => { if (els.length) window.location = '/repos?target=' + D.targets[els[0].index].target + (SCAN ? '&scan=' + SCAN : ''); } } }));
-</script>
+<script type="application/json" id="page-data">{{ {'data': data, 'scan': scan_param} | tojson_safe }}</script>
 {% endblock %}

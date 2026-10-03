@@ -58,31 +58,5 @@
 </section>
 {% endblock %}
 {% block scripts %}
-<script>
-const D = {{ data | tojson_safe | safe }};
-const SCAN = {{ scan_param | tojson_safe | safe }};
-const go = (u) => { window.location = u + (SCAN ? (u.includes('?') ? '&' : '?') + 'scan=' + SCAN : ''); };
-pchChart('donut', (c) => ({
-  type: 'doughnut',
-  data: { labels: ['Compliant','At risk','Non-compliant'], datasets: [{ data: [D.status_counts.COMPLIANT, D.status_counts.AT_RISK, D.status_counts.NON_COMPLIANT], backgroundColor: [c.ok, c.warn, c.bad], borderWidth: 0 }] },
-  options: { maintainAspectRatio: false, cutout: '62%', plugins: { legend: { display: false } },
-    onClick: (e, els) => { if (els.length) go('/repos?status=' + ['COMPLIANT','AT_RISK','NON_COMPLIANT'][els[0].index]); } }
-}));
-pchChart('trend', (c) => ({
-  type: 'line',
-  data: { labels: D.trend.map(t => t.date), datasets: [
-    { label: 'Compliant %', data: D.trend.map(t => t.compliant_pct), borderColor: c.ok, backgroundColor: c.ok, tension: .25, pointRadius: 4 },
-    { label: 'Non-compliant %', data: D.trend.map(t => t.non_compliant_pct), borderColor: c.bad, backgroundColor: c.bad, tension: .25, pointRadius: 4 },
-    { label: 'Avg score', data: D.trend.map(t => t.avg_score), borderColor: c.info, backgroundColor: c.info, borderDash: [4,3], tension: .25, pointRadius: 3 } ] },
-  options: { maintainAspectRatio: false, scales: { y: { min: 0, max: 100, grid: { color: c.grid } }, x: { grid: { display: false } } }, plugins: { legend: { position: 'bottom', labels: { boxWidth: 10 } } },
-    onClick: (e, els) => { if (els.length) go('/scans?selected=' + D.trend[els[0].index].scan_id); } }
-}));
-pchChart('toprules', (c) => ({
-  type: 'bar',
-  data: { labels: D.top_rules.map(r => r.id), datasets: [{ label: 'Failing repos', data: D.top_rules.map(r => r.fail), backgroundColor: c.bad, borderRadius: 2 }] },
-  options: { indexAxis: 'y', maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { afterLabel: (i) => D.top_rules[i.dataIndex].title } } },
-    scales: { x: { grid: { color: c.grid } }, y: { grid: { display: false } } },
-    onClick: (e, els) => { if (els.length) go('/rules/' + D.top_rules[els[0].index].id); } }
-}));
-</script>
+<script type="application/json" id="page-data">{{ {'data': data, 'scan': scan_param} | tojson_safe }}</script>
 {% endblock %}

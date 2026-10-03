@@ -1,0 +1,36 @@
+{
+  "_comment": "Vendored third-party assets. sha256 is of the committed file. Provenance: the npm tarball named in 'source' was downloaded and its sha1 (dist.shasum) and sha512 (dist.integrity) compared with the npm registry before extracting 'path_in_package'. Re-verify with scripts/verify_vendor.sh. Update procedure: see README 'Vendored frontend assets'.",
+  "assets": [
+    {
+      "name": "htmx.org",
+      "version": "1.9.12",
+      "file": "htmx-1.9.12.min.js",
+      "path_in_package": "dist/htmx.min.js",
+      "source": "https://registry.npmjs.org/htmx.org/-/htmx.org-1.9.12.tgz",
+      "npm_shasum": "1c5bc7fb4d3eb4e8c0d72323dc774a6b9b66addc",
+      "npm_integrity": "sha512-VZAohXyF7xPGS52IM8d1T1283y+X4D+Owf3qY1NZ9RuBypyu9l8cGsxUMAG5fEAb/DhT7rDoJ9Hpu5/HxFD3cw==",
+      "license": "BSD-2-Clause",
+      "sha256": "449317ade7881e949510db614991e195c3a099c4c791c24dacec55f9f4a2a452"
+    },
+    {
+      "name": "chart.js",
+      "version": "4.4.3",
+      "file": "chart-4.4.3.umd.js",
+      "path_in_package": "dist/chart.umd.js",
+      "source": "https://registry.npmjs.org/chart.js/-/chart.js-4.4.3.tgz",
+      "npm_shasum": "3b2e11e7010fefa99b07d0349236f5098e5226ad",
+      "npm_integrity": "sha512-qK1gkGSRYcJzqrrzdR6a+I0vQ4/R+SoODXyAjscQ/4mzuNzySaMCd+hyVxitSY1+L2fjPD1Gbn+ibNqRmwQeLw==",
+      "license": "MIT",
+      "sha256": "6e708cb2c2b41604db1f5dec01724856ec53ac867899a1e4e2cfb8f0ace6bed9"
+    },
+    {
+      "name": "tailwindcss (generated CSS)",
+      "version": "3.4.17",
+      "file": "tailwind.css",
+      "source": "https://github.com/tailwindlabs/tailwindcss/releases/download/v3.4.17/ (standalone CLI, sha256 checked against sha256sums.txt)",
+      "generated_by": "scripts/build_css.sh",
+      "license": "MIT",
+      "sha256": "7736b28d38dba409428a1941619bb876c9bc3888a9d8de21637c5365904c0f57"
+    }
+  ]
+}

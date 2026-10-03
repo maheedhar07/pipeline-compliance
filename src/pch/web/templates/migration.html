@@ -27,9 +27,5 @@
 </section>
 {% endblock %}
 {% block scripts %}
-<script>
-const D = {{ data | tojson_safe | safe }};
-pchChart('plat', (c) => ({ type: 'doughnut', data: { labels: Object.keys(D.platforms), datasets: [{ data: Object.values(D.platforms), backgroundColor: [c.warn, c.bad, c.ok, c.info], borderWidth: 0 }] }, options: { maintainAspectRatio: false, cutout: '55%', plugins: { legend: { position: 'bottom', labels: { boxWidth: 10 } } } } }));
-pchChart('ready', (c) => ({ type: 'bar', data: { labels: Object.keys(D.buckets), datasets: [{ label: 'Repos', data: Object.values(D.buckets), backgroundColor: [c.bad, c.warn, c.info, c.ok], borderRadius: 2 }] }, options: { maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { grid: { color: c.grid }, ticks: { precision: 0 } }, x: { grid: { display: false } } } } }));
-</script>
+<script type="application/json" id="page-data">{{ {'data': data} | tojson_safe }}</script>
 {% endblock %}

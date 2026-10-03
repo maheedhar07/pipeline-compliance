@@ -17,7 +17,7 @@
 {%- if rate is none -%}<span class="text-slate-400">n/a</span>
 {%- else -%}
 {%- set color = 'bg-green-600' if rate >= 80 else ('bg-amber-500' if rate >= 60 else 'bg-red-600') -%}
-<div class="flex items-center gap-2"><div class="h-1.5 w-20 rounded bg-slate-200 dark:bg-slate-700"><div class="h-1.5 rounded {{ color }}" style="width: {{ rate }}%"></div></div><span class="tnum text-xs">{{ '%.0f' | format(rate) }}%</span></div>
+<div class="flex items-center gap-2"><div class="h-1.5 w-20 rounded bg-slate-200 dark:bg-slate-700"><div class="h-1.5 rounded {{ color }}" data-w="{{ rate }}"></div></div><span class="tnum text-xs">{{ '%.0f' | format(rate) }}%</span></div>
 {%- endif -%}
 {%- endmacro %}
 

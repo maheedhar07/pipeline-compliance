@@ -39,10 +39,17 @@ services:
         required: false
     environment:
       DATABASE_URL: postgresql+psycopg://pch:pch-local-dev-only@db:5432/pch
+      # Local dev only: no sign-in. Inside the container the app must listen on 0.0.0.0 for the published port to work,
+      # which AUTH_MODE=none normally refuses; AUTH_NONE_ALLOW_CONTAINER_BIND=true permits it in APP_ENV=dev only
+      # (refused in prod). Safety rests on the port mapping below being loopback-only: do NOT change it to 0.0.0.0.
+      APP_ENV: dev
+      AUTH_MODE: none
+      AUTH_NONE_ALLOW_CONTAINER_BIND: "true"
+      HOST: 0.0.0.0
     volumes:
       - appdata:/app/data
     ports:
-      # bound to localhost on purpose: the dashboard has no authentication in v1
+      # bound to the host's loopback on purpose: AUTH_MODE=none has no authentication
       - "127.0.0.1:8000:8000"
 
 volumes:

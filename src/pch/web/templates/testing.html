@@ -28,9 +28,5 @@
 {% endfor %}
 {% endblock %}
 {% block scripts %}
-<script>
-const D = {{ data | tojson_safe | safe }};
-pchChart('cov', (c) => ({ type: 'bar', data: { labels: Object.keys(D.coverage_buckets).map(k => k + '%'), datasets: [{ label: 'Repos', data: Object.values(D.coverage_buckets), backgroundColor: Object.keys(D.coverage_buckets).map((k, i) => i >= 8 ? c.ok : (i >= 6 ? c.warn : c.bad)), borderRadius: 2 }] },
-  options: { maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { grid: { color: c.grid }, ticks: { precision: 0 } }, x: { grid: { display: false } } } } }));
-</script>
+<script type="application/json" id="page-data">{{ {'data': data} | tojson_safe }}</script>
 {% endblock %}

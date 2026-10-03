@@ -101,7 +101,7 @@ docker compose run --rm app sh -c "pch seed-demo && pch scan --demo"   # demo da
 docker compose run --rm app pch scan                        # real scan (needs .env)
 ```
 
-The container image runs as a non-root user; the app port is bound to localhost in `docker-compose.yml` because the dashboard has no authentication in v1.
+The container image runs as a non-root user. Compose runs the app with `APP_ENV=dev`, `AUTH_MODE=none` and `AUTH_NONE_ALLOW_CONTAINER_BIND=true` (the app must listen on `0.0.0.0` inside the container) and publishes the port to `127.0.0.1` only. Never change that mapping: there is no sign-in in this mode.
 
 ## Pointing it at your real systems
 
@@ -187,7 +187,17 @@ Collectors are tested against fixtures in `tests/fixtures/` (no live credentials
 
 * Read-only by construction: a transport-level guard rejects non-GET requests (except the documented YAML preview POST and the Aikido OAuth token exchange); a test asserts a full scan sends nothing else, and that the web app exposes no mutating route.
 * Secret values are never persisted: raw cache files are redacted before writing, variables are classified in memory (only names and reasons are stored), and stored pipeline JSON omits script bodies and secret-like inputs.
-* The dashboard has no authentication and binds to `127.0.0.1`. For shared use, deploy it behind Entra ID, for example Azure App Service with Easy Auth in front of the container.
+* Web security (T5) is described in the next section; every control fails closed and is covered by `tests/test_web_security.py`.
+
+## Security (web)
+
+**Authentication and authorisation.** `AUTH_MODE=easyauth` (production) expects Azure App Service Authentication ("Easy Auth") with Microsoft Entra ID in front of the app. The app reads `X-MS-CLIENT-PRINCIPAL`, takes roles from its signed claims only, and allows a request only if the user holds a role listed in `AUTH_ALLOWED_ROLES` (for example the Entra app role `PCH.Reader`). No principal -> 401, no allowed role -> 403 (a minimal page, no data), malformed or oversized (>16 KB) header -> 401. Only `/api/v1/health` (status and version) and `/static/*` are reachable without a principal; pages, the JSON API, CSV export and OpenAPI all require one. `AUTH_MODE=none` is for local development: it is refused when `APP_ENV=prod` and when the bind host is not loopback. See `docs/DEPLOY_AZURE.md` and `docs/DECISIONS.md` (T5) for the matrix.
+
+**Fail-closed startup guard** (`pch.web.guard.assert_safe_to_serve`, used by `create_app` and `pch serve`; `pch doctor` reports it as `auth` and `serve_guard`). The app refuses to start when: `AUTH_MODE=none` with `APP_ENV=prod`; `none` on a non-loopback host (except `APP_ENV=dev` + `AUTH_NONE_ALLOW_CONTAINER_BIND=true`, used by docker compose); `easyauth` with neither `AUTH_ALLOWED_ROLES` nor an explicit `AUTH_ALLOW_ANY_AUTHENTICATED=true`; `easyauth` unless `WEBSITE_AUTH_ENABLED=True` (otherwise `X-MS-*` headers are not stripped and can be forged; `AUTH_EASYAUTH_ASSUME_ENABLED=true` overrides this for local testing only and is itself refused in prod); `APP_ENV=prod` without `ALLOWED_HOSTS` (or with `*`).
+
+**Browser hardening.** Strict CSP (`default-src 'self'`, no inline script or style, no third-party origins), `nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`, COOP, minimal Permissions-Policy, HSTS in prod, `Cache-Control: no-store` on all data responses, on every response including errors. Only GET/HEAD are served (405 otherwise). `/api/docs` and `/openapi.json` are disabled in prod (in dev the docs page gets its own scoped CSP using a script hash and jsDelivr). Errors are generic with a correlation id (`X-Request-ID`); no tracebacks. `ALLOWED_HOSTS` is enforced (App Service: `<app>.azurewebsites.net` or `*.azurewebsites.net`); uvicorn runs with `proxy_headers=True`, `FORWARDED_ALLOW_IPS` and no `Server` header. Query parameters are bounded and sort keys whitelisted (422/400, never 500). External data is always escaped; JSON data blocks escape `<`, `>`, `&`; only `http(s)` URLs are rendered as links; CSV cells that start with `=`, `+`, `-`, `@` are neutralised.
+
+**Vendored frontend assets (no CDN at runtime).** `src/pch/web/static/vendor/` holds Tailwind (generated, 3.4.17), HTMX 1.9.12 and Chart.js 4.4.3 with `MANIFEST.json` (version, source, sha256); a test recomputes the hashes. Rebuild Tailwind with `scripts/build_css.sh` (pinned standalone CLI, checksum verified; `--check` fails if the committed CSS is stale). To update HTMX/Chart.js: download the npm tarball, compare its `dist.shasum`/`dist.integrity` with the npm registry, copy the dist file, update `MANIFEST.json` and the filename in `templates/base.html`. Page scripts live in `static/app.js`; pages pass data through inert `<script type="application/json">` blocks.
 
 ## Roadmap
 

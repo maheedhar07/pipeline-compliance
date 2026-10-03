@@ -32,6 +32,8 @@ jobs:
       - run: ruff check .
       - run: mypy src
       - run: pytest --cov=pch --cov-report=term-missing
+      # the committed Tailwind CSS must match a fresh build with the pinned, checksum-verified standalone CLI
+      - run: scripts/build_css.sh --check
 
   # Installs every optional extra so the Azure SDK adapter tests (importorskip'd on a default install) really run,
   # and checks that the Azure lockfile is complete and installable with hashes.

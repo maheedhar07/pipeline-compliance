@@ -35,7 +35,11 @@ ENV DATABASE_URL=sqlite:////app/data/pch.db \
 VOLUME ["/app/data"]
 EXPOSE 8000
 
-# The dashboard has NO authentication in v1. Do not publish this port beyond localhost
-# unless it sits behind Entra ID (see README: Azure App Service Easy Auth).
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3).status == 200 else 1)"
-CMD ["pch", "serve", "--host", "0.0.0.0", "--port", "8000"]
+# Bind address, port and auth come from settings (HOST, PORT / WEBSITES_PORT, AUTH_MODE, ...). Nothing is hard-coded here:
+# the default HOST=127.0.0.1 is unreachable from outside the container on purpose, and `pch serve` refuses to start on a
+# non-loopback address unless authentication is configured (see README "Security").
+#   * App Service: set HOST=0.0.0.0, APP_ENV=prod, AUTH_MODE=easyauth, AUTH_ALLOWED_ROLES, ALLOWED_HOSTS, WEBSITES_PORT (docs/DEPLOY_AZURE.md)
+#   * local compose: APP_ENV=dev, AUTH_MODE=none, AUTH_NONE_ALLOW_CONTAINER_BIND=true, port published to 127.0.0.1 only
+# The probe may use a loopback Host header: the trusted-host check allows exactly /api/v1/health for that.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s CMD python -c "import os,sys,urllib.request as u; p=os.environ.get('PORT') or os.environ.get('WEBSITES_PORT') or '8000'; sys.exit(0 if u.urlopen('http://127.0.0.1:'+p+'/api/v1/health', timeout=3).status == 200 else 1)"
+CMD ["pch", "serve"]

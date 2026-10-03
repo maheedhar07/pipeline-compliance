@@ -10,3 +10,4 @@ data/
 .coverage
 htmlcov/
 dist/
+.tools/

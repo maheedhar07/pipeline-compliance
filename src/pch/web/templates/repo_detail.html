@@ -10,9 +10,9 @@
   <span class="tnum text-lg font-semibold">{{ '%.0f' | format(r.score) if r.score is not none else 'n/a' }}<span class="text-xs font-normal text-slate-500"> / 100</span></span>
   {% if r.unknowns %}<span class="text-xs text-slate-500">{{ r.unknowns }} rule(s) unknown</span>{% endif %}
   <div class="ml-auto flex gap-3 text-xs">
-    {% if r.url %}<a class="text-indigo-600 hover:underline dark:text-indigo-300" href="{{ r.url }}" target="_blank" rel="noopener">Open in Azure DevOps</a>{% endif %}
-    {% if d.sonar and d.sonar.url %}<a class="text-indigo-600 hover:underline dark:text-indigo-300" href="{{ d.sonar.url }}" target="_blank" rel="noopener">SonarQube</a>{% endif %}
-    {% if d.aikido and d.aikido.onboarded %}<a class="text-indigo-600 hover:underline dark:text-indigo-300" href="{{ d.aikido.url or '#' }}" target="_blank" rel="noopener">Aikido</a>{% endif %}
+    {% if r.url %}<a class="text-indigo-600 hover:underline dark:text-indigo-300" href="{{ r.url | safe_url }}" target="_blank" rel="noopener noreferrer">Open in Azure DevOps</a>{% endif %}
+    {% if d.sonar and d.sonar.url %}<a class="text-indigo-600 hover:underline dark:text-indigo-300" href="{{ d.sonar.url | safe_url }}" target="_blank" rel="noopener noreferrer">SonarQube</a>{% endif %}
+    {% if d.aikido and d.aikido.onboarded %}<a class="text-indigo-600 hover:underline dark:text-indigo-300" href="{{ d.aikido.url | safe_url }}" target="_blank" rel="noopener noreferrer">Aikido</a>{% endif %}
     <a class="text-indigo-600 hover:underline dark:text-indigo-300" href="/api/v1/repos/{{ r.project }}/{{ r.repo }}">JSON</a>
   </div>
 </div>
@@ -48,7 +48,7 @@
   {% for p in d.pipelines %}
     <div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
       <div class="flex flex-wrap items-center gap-2">
-        <a class="font-medium text-indigo-700 hover:underline dark:text-indigo-300" href="{{ p.url }}" target="_blank" rel="noopener">{{ p.name }}</a>
+        <a class="font-medium text-indigo-700 hover:underline dark:text-indigo-300" href="{{ p.url | safe_url }}" target="_blank" rel="noopener noreferrer">{{ p.name }}</a>
         <span class="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] dark:bg-slate-700">{{ p.platform | replace('ado_','') | replace('_',' ') }}</span>
         {% if not p.definition_in_source_control %}<span class="text-[11px] text-amber-600 dark:text-amber-400">not in source control</span>{% endif %}
         {% if p.run_stats_90d and p.run_stats_90d.total %}<span class="tnum ml-auto text-xs text-slate-500">{{ p.run_stats_90d.succeeded }}/{{ p.run_stats_90d.total }} runs ok (90d)</span>{% endif %}
@@ -90,7 +90,7 @@
           <span class="font-medium">{{ f.title }}</span>
           {% if f.pipeline_name %}<span class="text-xs text-slate-500">· {{ f.pipeline_name }}{% if f.stage %} / {{ f.stage }}{% endif %}</span>{% endif %}
           {% if f.waiver %}<span class="rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-200" title="{{ f.waiver.reason }} (owner {{ f.waiver.owner }})">{{ 'WAIVER EXPIRED ' if f.waiver.expired else 'WAIVED until ' }}{{ f.waiver.expires or '' }}</span>{% endif %}
-          {% if f.link %}<a class="ml-auto text-xs text-indigo-600 hover:underline dark:text-indigo-300" href="{{ f.link }}" target="_blank" rel="noopener">open</a>{% endif %}
+          {% if f.link %}<a class="ml-auto text-xs text-indigo-600 hover:underline dark:text-indigo-300" href="{{ f.link | safe_url }}" target="_blank" rel="noopener noreferrer">open</a>{% endif %}
         </div>
         <p class="mt-1 text-xs text-slate-700 dark:text-slate-300">{{ f.message }}</p>
         {% if f.status in ['FAIL','WARN'] and f.remediation %}<p class="mt-1 rounded bg-amber-50 px-2 py-1 text-xs text-amber-900 dark:bg-amber-900/20 dark:text-amber-100"><b>Fix:</b> {{ f.remediation }}</p>{% endif %}
@@ -101,11 +101,4 @@
   </div>
   {% endfor %}
 </section>
-{% endblock %}
-{% block scripts %}
-<script>
-document.getElementById('show-pass').addEventListener('change', function () {
-  document.querySelectorAll('li.passing').forEach(li => li.classList.toggle('hidden', !this.checked));
-});
-</script>
 {% endblock %}
