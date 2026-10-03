@@ -9,7 +9,15 @@ from typing import Any, Literal
 from urllib.parse import urlsplit
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -63,6 +71,21 @@ class Settings(BaseSettings):
     # A scan lock (or a scan left `running`) older than this is considered abandoned.
     scan_lock_stale_minutes: int = Field(360, ge=1)
 
+    # --- provider seams (see README "Providers")
+    # SECRETS_PROVIDER: env = credential env vars above (default; App Service Key Vault references arrive this way);
+    # file = one file per secret in SECRETS_DIR; azure_keyvault = read Key Vault with a managed identity.
+    # Providers are never mixed: with file/azure_keyvault the credential env vars below are ignored.
+    secrets_provider: Literal["env", "file", "azure_keyvault"] = "env"
+    secrets_dir: Path | None = None
+    keyvault_url: str = ""
+    keyvault_secret_map: dict[str, str] = Field(default_factory=dict)  # env-style name -> vault secret name
+    keyvault_cache_ttl_seconds: float = Field(300.0, ge=0, le=86400)
+    # ARTIFACT_STORE: where the redacted raw scan cache (data/raw/<scan_id>) lives. azure_blob uses a managed
+    # identity only (no account keys / connection strings / SAS).
+    artifact_store: Literal["local", "azure_blob"] = "local"
+    artifact_blob_account_url: str = ""
+    artifact_blob_container: str = ""
+
     # --- Azure DevOps
     ado_org: str = ""
     ado_pat: SecretStr = SecretStr("")
@@ -91,10 +114,25 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = Field(8000, ge=1, le=65535)
 
-    @field_validator("ado_base_url", "ado_vsrm_url", "sonar_url", "aikido_url", "servicenow_url")
+    @field_validator(
+        "ado_base_url", "ado_vsrm_url", "sonar_url", "aikido_url", "servicenow_url", "keyvault_url", "artifact_blob_account_url"
+    )
     @classmethod
     def _urls(cls, v: str) -> str:
         return _clean_url(v)
+
+    @model_validator(mode="after")
+    def _provider_settings(self) -> Settings:
+        if self.secrets_provider == "file" and self.secrets_dir is None:
+            raise ValueError("SECRETS_PROVIDER=file requires SECRETS_DIR")
+        if self.secrets_provider == "azure_keyvault" and not self.keyvault_url:
+            raise ValueError("SECRETS_PROVIDER=azure_keyvault requires KEYVAULT_URL")
+        if self.artifact_store == "azure_blob" and not (self.artifact_blob_account_url and self.artifact_blob_container):
+            raise ValueError("ARTIFACT_STORE=azure_blob requires ARTIFACT_BLOB_ACCOUNT_URL and ARTIFACT_BLOB_CONTAINER")
+        for u in (self.keyvault_url, self.artifact_blob_account_url):
+            if u and not u.startswith("https://"):
+                raise ValueError("Azure endpoints must be https:// URLs")
+        return self
 
     @property
     def is_prod(self) -> bool:
@@ -108,8 +146,12 @@ class Settings(BaseSettings):
     def is_test(self) -> bool:
         return self.app_env == "test"
 
-    def source_requirements(self) -> dict[str, dict[str, bool]]:
-        """Per configured source: required credential env var -> is it non-empty. Never exposes values."""
+    def source_requirements(self, include_secrets: bool = True) -> dict[str, dict[str, bool]]:
+        """Per configured source: required field/env var -> is it non-empty. Never exposes values.
+
+        ``include_secrets=False`` leaves out the credential fields (and ignores them when deciding whether a source
+        is configured); used when credentials come from a SecretProvider other than ``env``.
+        """
 
         def s(x: SecretStr) -> bool:
             return bool(x.get_secret_value())
@@ -120,6 +162,10 @@ class Settings(BaseSettings):
             "aikido": {"AIKIDO_CLIENT_ID": bool(self.aikido_client_id), "AIKIDO_CLIENT_SECRET": s(self.aikido_client_secret)},
             "servicenow": {"SERVICENOW_URL": bool(self.servicenow_url), "SERVICENOW_USER": bool(self.servicenow_user), "SERVICENOW_PASSWORD": s(self.servicenow_password)},
         }
+        if not include_secrets:
+            from pch.providers.secrets import SOURCE_SECRETS
+
+            groups = {k: {f: ok for f, ok in v.items() if f not in SOURCE_SECRETS[k]} for k, v in groups.items()}
         # A source counts as configured as soon as any of its credential fields is provided.
         return {k: v for k, v in groups.items() if any(v.values())}
 

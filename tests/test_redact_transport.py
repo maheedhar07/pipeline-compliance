@@ -10,6 +10,7 @@ from pch.collectors.transport import (
     ReadOnlyTransport,
     RecordingTransport,
 )
+from pch.providers import LocalArtifactStore
 
 
 def test_redact_variables():
@@ -59,12 +60,12 @@ async def test_readonly_guard_wraps_any_transport():
 async def test_record_and_replay_redacts(tmp_path):
     payload = {"value": [{"variables": {"pw": {"value": "topsecret", "isSecret": True}}}]}
     inner = httpx.MockTransport(lambda r: httpx.Response(200, json=payload))
-    async with httpx.AsyncClient(transport=RecordingTransport(inner, tmp_path)) as c:
+    async with httpx.AsyncClient(transport=RecordingTransport(inner, LocalArtifactStore(tmp_path))) as c:
         r = await c.get("https://dev.azure.com/o/_apis/x?api-version=7.1")
         assert r.json()["value"][0]["variables"]["pw"]["value"] == "topsecret"  # live caller still sees it
     files = list(tmp_path.rglob("*.json"))
     assert len(files) == 1 and "topsecret" not in files[0].read_text()
-    async with httpx.AsyncClient(transport=CacheReplayTransport(tmp_path)) as c:
+    async with httpx.AsyncClient(transport=CacheReplayTransport(LocalArtifactStore(tmp_path))) as c:
         hit = await c.get("https://dev.azure.com/o/_apis/x?api-version=7.1")
         assert hit.status_code == 200 and hit.json()["value"][0]["variables"]["pw"]["value"] is None
         miss = await c.get("https://dev.azure.com/o/_apis/other")

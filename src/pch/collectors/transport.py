@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
-from pathlib import Path
 from typing import Any
 
 import httpx
 
-from pch.collectors.redact import redact_json
+from pch.collectors.redact import redact_json, redact_text
+from pch.providers.artifacts import ArtifactStore
+
+log = logging.getLogger(__name__)
 
 # The ONLY non-GET requests that may ever leave this process.
 ALLOWED_POSTS = [
@@ -68,17 +71,22 @@ def _safe_url(url: str) -> str:
 
 
 class RecordingTransport(httpx.AsyncBaseTransport):
-    """Caches every response (redacted) under cache_dir/<host>/<hash>.json for `--from-cache`."""
+    """Caches every response (redacted BEFORE it reaches the store) as ``<host>/<hash>.json`` for `--from-cache`.
 
-    def __init__(self, inner: httpx.AsyncBaseTransport, cache_dir: Path):
+    The store is an ArtifactStore (local dir, Azure Blob, ...). A failing store never fails the scan: the first
+    failure is logged (error type only) and caching is skipped for that response.
+    """
+
+    def __init__(self, inner: httpx.AsyncBaseTransport, store: ArtifactStore):
         self.inner = inner
-        self.cache_dir = cache_dir
+        self.store = store
+        self._warned = False
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         response = await self.inner.handle_async_request(request)
         content = b"".join([c async for c in response.stream])  # type: ignore[union-attr]
         await response.stream.aclose()  # type: ignore[union-attr]
-        self._write(request, response, content)
+        await self._write(request, response, content)
         return httpx.Response(
             status_code=response.status_code,
             headers=[(k, v) for k, v in response.headers.raw if k.lower() not in (b"content-encoding", b"content-length", b"transfer-encoding")],
@@ -86,16 +94,16 @@ class RecordingTransport(httpx.AsyncBaseTransport):
             request=request,
         )
 
-    def _write(self, request: httpx.Request, response: httpx.Response, content: bytes) -> None:
+    @staticmethod
+    def build_record(request: httpx.Request, response: httpx.Response, content: bytes) -> bytes:
+        """The redacted cache record. Everything persisted passes through here."""
         body: Any
         try:
             body = redact_json(json.loads(content)) if content else None
             kind = "json"
         except ValueError:
-            body = content.decode("utf-8", "replace")[:200000]
+            body = redact_text(content.decode("utf-8", "replace")[:200000])
             kind = "text"
-        d = self.cache_dir / request.url.host
-        d.mkdir(parents=True, exist_ok=True)
         rec = {
             "method": request.method,
             "url": _safe_url(str(request.url)),
@@ -106,7 +114,17 @@ class RecordingTransport(httpx.AsyncBaseTransport):
             },
             "body": body,
         }
-        (d / f"{request_key(request)}.json").write_text(json.dumps(rec))
+        return json.dumps(rec).encode()
+
+    async def _write(self, request: httpx.Request, response: httpx.Response, content: bytes) -> None:
+        record = self.build_record(request, response, content)
+        try:
+            await self.store.put(f"{request.url.host}/{request_key(request)}.json", record)
+        except Exception as exc:  # noqa: BLE001 - the cache is best effort
+            if not self._warned:
+                self._warned = True
+                log.warning("raw cache write failed (%s); further failures are not logged, --from-cache will be incomplete",
+                            type(exc).__name__)
 
     async def aclose(self) -> None:
         await self.inner.aclose()
@@ -115,14 +133,14 @@ class RecordingTransport(httpx.AsyncBaseTransport):
 class CacheReplayTransport(httpx.AsyncBaseTransport):
     """Serves responses previously recorded by RecordingTransport (pch scan --from-cache)."""
 
-    def __init__(self, cache_dir: Path):
-        self.cache_dir = cache_dir
+    def __init__(self, store: ArtifactStore):
+        self.store = store
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        f = self.cache_dir / request.url.host / f"{request_key(request)}.json"
-        if not f.exists():
+        raw = await self.store.get(f"{request.url.host}/{request_key(request)}.json")
+        if raw is None:
             return httpx.Response(404, json={"message": "not in cache"}, request=request)
-        rec = json.loads(f.read_text())
+        rec = json.loads(raw)
         headers = dict(rec.get("headers") or {})
         if rec["kind"] == "json":
             return httpx.Response(rec["status"], json=rec["body"], headers=headers, request=request)

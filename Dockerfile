@@ -9,8 +9,11 @@ WORKDIR /build
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
+# PCH_LOCKFILE selects the hash-locked dependency set: requirements.lock (default: core + postgres) or
+# requirements-azure.lock (adds azuresql, azure-keyvault, azure-blob; see README "Dependency lockfile").
 # Regenerate with: pip-compile --generate-hashes --extra postgres -o requirements.lock pyproject.toml
-COPY requirements.lock ./
+ARG PCH_LOCKFILE=requirements.lock
+COPY ${PCH_LOCKFILE} ./requirements.lock
 RUN pip install --require-hashes --no-deps -r requirements.lock
 
 COPY pyproject.toml README.md ./

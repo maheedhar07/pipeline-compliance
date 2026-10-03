@@ -14,7 +14,7 @@ concurrency:
 jobs:
   test:
     name: lint + types + tests (py${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -33,9 +33,34 @@ jobs:
       - run: mypy src
       - run: pytest --cov=pch --cov-report=term-missing
 
+  # Installs every optional extra so the Azure SDK adapter tests (importorskip'd on a default install) really run,
+  # and checks that the Azure lockfile is complete and installable with hashes.
+  all-extras:
+    name: all extras (py3.11)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -e ".[dev,postgres,azuresql,azure-keyvault,azure-blob]"
+      - run: ruff check .
+      - run: mypy src
+      - run: pytest -p no:warnings -rs
+      - name: Azure lockfile installs with hashes
+        run: |
+          python -m venv "$RUNNER_TEMP/lockcheck"
+          "$RUNNER_TEMP/lockcheck/bin/pip" install --require-hashes --no-deps -r requirements-azure.lock
+          "$RUNNER_TEMP/lockcheck/bin/pip" install --no-deps .
+          "$RUNNER_TEMP/lockcheck/bin/python" -c "import azure.identity, azure.keyvault.secrets, azure.storage.blob, pch.providers"
+
   pip-audit:
-    name: pip-audit (locked runtime deps)
-    runs-on: ubuntu-latest
+    name: pip-audit (both lockfiles)
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -47,10 +72,11 @@ jobs:
           cache: pip
       - run: pip install pip-audit
       - run: pip-audit --require-hashes --disable-pip -r requirements.lock
+      - run: pip-audit --require-hashes --disable-pip -r requirements-azure.lock
 
   bandit:
     name: bandit (SAST)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -65,7 +91,7 @@ jobs:
 
   gitleaks:
     name: gitleaks (secret scan)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
       GITLEAKS_VERSION: "8.30.1"
@@ -89,7 +115,7 @@ jobs:
   # add `@sha256:...` after the tag to freeze them). Both services start for every matrix entry; each entry only uses its own.
   db-matrix:
     name: db portability (${{ matrix.db }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     strategy:
       fail-fast: false

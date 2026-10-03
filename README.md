@@ -54,6 +54,26 @@ All accept `--db <url>`. The schema is never created implicitly except for SQLit
 
 **Scan lock and failures:** `pch scan` takes a DB lock (table `scan_locks`, identical on all dialects); a concurrent scan exits with code 4. A lock older than `SCAN_LOCK_STALE_MINUTES` (default 360) is taken over with a warning. Scan results are committed in one transaction together with `status=complete`; on any error the scan is marked `failed`, and `running` scans abandoned by a crashed process are marked `failed` on the next scan.
 
+## Providers
+
+The core is cloud-neutral. Exactly two seams (package `pch.providers`) let a deployment swap backends; the Azure adapters are optional extras and the defaults need nothing.
+
+| Seam | Setting | Values | Extra |
+|---|---|---|---|
+| Secrets (`SecretProvider`) | `SECRETS_PROVIDER` | `env` (default), `file`, `azure_keyvault` | `.[azure-keyvault]` for Key Vault |
+| Raw scan cache (`ArtifactStore`) | `ARTIFACT_STORE` | `local` (default, `DATA_DIR/raw`), `azure_blob` | `.[azure-blob]` for Blob |
+
+**Secrets.** Only the credentials of the configured sources are resolved (`ADO_PAT`, `SONAR_TOKEN`, `AIKIDO_CLIENT_SECRET`, `SERVICENOW_PASSWORD`), when the live clients are built. Providers are explicit and never mixed: with `file` or `azure_keyvault` the credential env vars are ignored, so a stale variable can not silently win. A missing secret stops the scan with an error that names it (`secret ADO_PAT was not found via SECRETS_PROVIDER=file`), never its value. Replaying a cache (`--from-cache`) needs no credentials.
+
+* `env`: the Settings values. On Azure App Service the recommended path is to set app settings as Key Vault references (`@Microsoft.KeyVault(SecretUri=...)`); App Service resolves them with the app's managed identity and they arrive as ordinary env vars, so the default provider already works and the app needs no Azure code.
+* `file`: `<SECRETS_DIR>/<NAME>` per secret (Kubernetes secret volume, Secrets Store CSI driver). One trailing newline is stripped, names containing separators or `..` and files resolving outside the directory are rejected, world-readable files log a warning.
+* `azure_keyvault`: `KEYVAULT_URL` plus `DefaultAzureCredential` (managed identity in Azure, `az login` locally). `ADO_PAT` is read from the secret `ado-pat` (lowercase, `_` becomes `-`); override with `KEYVAULT_SECRET_MAP='{"ADO_PAT":"my-name"}'`. Values are cached in memory for `KEYVAULT_CACHE_TTL_SECONDS` (default 300), misses are never cached, SDK error text is never echoed. The identity needs *Key Vault Secrets User*.
+* A database password is part of `DATABASE_URL`, not a provider secret: use `DB_AUTH=azure_ad` (no password) or a Key Vault reference for that app setting.
+
+**Raw cache.** `pch scan` caches the redacted raw API responses (`--cache` / `--no-cache`) so `pch scan --from-cache <scan_id>` can re-evaluate them. Keys are `<scan_id>/<host>/<hash>.json`. Redaction always happens before the store is called (the stores never see an unredacted body, including non-JSON text bodies), and a store failure is logged once and never fails the scan. `local` rejects keys that escape the directory; `azure_blob` needs `ARTIFACT_BLOB_ACCOUNT_URL` and `ARTIFACT_BLOB_CONTAINER` and authenticates only with a managed identity (*Storage Blob Data Contributor* on the container): account keys, SAS tokens and connection strings are deliberately not supported. The demo `world.json.gz` stays on the local file system.
+
+A missing extra raises a clear error, e.g. `Azure Key Vault support needs the 'azure-keyvault' extra: pip install 'pipeline-compliance[azure-keyvault]'`. `pch doctor` reports the provider, `set`/`missing` for every required secret, and does a write/read/delete probe of the artifact store.
+
 ## Dependency lockfile
 
 `requirements.lock` pins every runtime dependency (plus the `postgres` extra) with hashes; the Dockerfile installs
@@ -63,6 +83,15 @@ from it with `--require-hashes`. Regenerate after editing dependencies in `pypro
 pip install pip-tools
 pip-compile --generate-hashes --extra postgres -o requirements.lock pyproject.toml   # add --upgrade to bump
 ```
+
+`requirements-azure.lock` is the same plus every Azure extra, for the organisation's Azure image (regenerate both together; CI audits both and installs the Azure one with hashes):
+
+```bash
+pip-compile --generate-hashes --extra postgres --extra azuresql --extra azure-keyvault --extra azure-blob -o requirements-azure.lock pyproject.toml
+docker build --build-arg PCH_LOCKFILE=requirements-azure.lock -t pch:azure .
+```
+
+`azuresql` additionally needs the Microsoft ODBC Driver 18 in the image (see Database).
 
 ## Docker
 
@@ -88,6 +117,7 @@ The container image runs as a non-root user; the app port is bound to localhost 
    | `APP_ENV` | `dev` (default), `test` or `prod`. In `prod` a missing `config/scope.yaml` is an error |
    | `CONCURRENCY`, `HTTP_TIMEOUT` | Parallel requests (1-64) and per-request timeout seconds (>0, <=300) |
    | `DATABASE_URL` | `sqlite:///data/pch.db` (default), `postgresql+psycopg://user:pw@host/db` or an `mssql+pyodbc://` URL, see [Database](#database) |
+| `SECRETS_PROVIDER`, `SECRETS_DIR`, `KEYVAULT_*`, `ARTIFACT_STORE`, `ARTIFACT_BLOB_*` | Secret and raw-cache backends, see [Providers](#providers) |
 | `DB_AUTH`, `DB_POOL_*`, `DB_AUTO_MIGRATE`, `SCAN_LOCK_STALE_MINUTES` | Database auth mode, pool tuning, auto-migration and scan-lock timeout, see [Database](#database) |
 
    URLs must be `http(s)` (trailing slashes are stripped). Invalid values stop startup with a clear error. `.env.example` lists every variable.

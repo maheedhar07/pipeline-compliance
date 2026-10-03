@@ -205,7 +205,7 @@ def seed_demo(
 def scan(
     demo: bool = typer.Option(False, "--demo", help="Scan the synthetic demo estate (no credentials)"),
     from_cache: str | None = typer.Option(None, "--from-cache", help="Replay the cached raw responses of a previous scan id"),
-    cache: bool | None = typer.Option(None, "--cache/--no-cache", help="Cache redacted raw responses under data/raw/<scan_id> (default: on for live, off for demo)"),
+    cache: bool | None = typer.Option(None, "--cache/--no-cache", help="Cache redacted raw responses in the artifact store (ARTIFACT_STORE; local: data/raw/<scan_id>). Default: on for live, off for demo"),
     history: int = typer.Option(3, help="Demo only: also create N older snapshots so trends have data"),
     data_dir: str = typer.Option("data", help="Data directory"),
     db: str | None = typer.Option(None, "--db", help="Database URL (default DATABASE_URL / sqlite:///data/pch.db)"),
@@ -219,6 +219,7 @@ def scan(
     from pathlib import Path
 
     from pch.orchestrator import ScanConfig, Scanner
+    from pch.providers import PrefixedStore, get_artifact_store
     from pch.settings import get_settings, load_policy, load_scope
     from pch.sources import cache_sources, demo_sources, live_sources
     from pch.timeutil import utcnow_naive
@@ -242,6 +243,7 @@ def scan(
         typer.echo(f"  scanned {done}/{total} repos", err=True)
 
     async def go() -> None:
+        artifacts = get_artifact_store(settings, data_path)
         if demo:
             from pch.demo.generator import generate_world
             from pch.demo.transport import load_world, parse_world_time
@@ -261,7 +263,7 @@ def scan(
             snapshots.append((world, now0))
             for w, now in snapshots:
                 scan_id = f"{now:%Y%m%d-%H%M%S}-demo"
-                record = (data_path / "raw" / scan_id) if cache else None
+                record = PrefixedStore(artifacts, scan_id) if cache else None
                 src = demo_sources(w, record_to=record)
                 cfg = ScanConfig(scope=scope, policy=policy, db_url=db_url, mode="demo", now=now, stale_after=stale)
                 typer.echo(f"Scanning demo estate {scan_id} ...", err=True)
@@ -274,11 +276,11 @@ def scan(
         scope, policy = load_scope(scope_file), load_policy(policy_file)
         now = utcnow_naive()
         if from_cache:
-            scan_id, src = f"{now:%Y%m%d-%H%M%S}-cache", cache_sources(data_path / "raw" / from_cache, settings)
+            scan_id, src = f"{now:%Y%m%d-%H%M%S}-cache", cache_sources(PrefixedStore(artifacts, from_cache), settings)
             mode = "cache"
         else:
             scan_id = f"{now:%Y%m%d-%H%M%S}-live"
-            src = live_sources(settings, record_to=(data_path / "raw" / scan_id) if cache is not False else None)
+            src = live_sources(settings, record_to=PrefixedStore(artifacts, scan_id) if cache is not False else None)
             mode = "live"
         cfg = ScanConfig(scope=scope, policy=policy, db_url=db_url, mode=mode, now=now, stale_after=stale)
         try:

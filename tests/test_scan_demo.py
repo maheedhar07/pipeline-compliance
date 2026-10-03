@@ -11,6 +11,7 @@ from pch.demo.generator import generate_world
 from pch.demo.transport import DemoTransport, load_world, parse_world_time, save_world
 from pch.engine.registry import all_rules
 from pch.orchestrator import ScanConfig, Scanner
+from pch.providers import LocalArtifactStore
 from pch.settings import Policy, Scope, Waiver
 from pch.sources import cache_sources, demo_sources
 from pch.store import repository as store
@@ -25,7 +26,7 @@ def world():
 
 
 def run_scan(world, db, record_to=None, policy=None, scope=None):
-    src = demo_sources(world, record_to=record_to)
+    src = demo_sources(world, record_to=LocalArtifactStore(record_to) if record_to else None)
     cfg = ScanConfig(scope=scope or Scope(projects=world["meta"]["projects"], repos=[]), policy=policy or Policy(approved_registries=["contosoacr.azurecr.io"]),
                      db_url=db, mode="demo", now=parse_world_time(world))
     sid = f"t-{abs(hash(db)) % 10000}"
@@ -120,7 +121,7 @@ def test_cache_has_no_secrets_and_replay_reproduces(world, tmp_path):
     # replay from cache
     from pch.settings import Settings
 
-    src = cache_sources(cache, Settings(ado_org="x"), demo=True)
+    src = cache_sources(LocalArtifactStore(cache), Settings(ado_org="x"), demo=True)
     cfg = ScanConfig(scope=Scope(projects=world["meta"]["projects"]), policy=Policy(approved_registries=["contosoacr.azurecr.io"]), db_url=f"sqlite:///{tmp_path}/e.db", mode="cache", now=parse_world_time(world))
 
     async def go():

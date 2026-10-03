@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 
+from pch.providers.secrets import SOURCE_SECRETS
 from pch.settings import ConfigError, Settings, format_validation_error, load_policy, load_scope
 
 OK, WARN, FAIL = "OK", "WARN", "FAIL"
@@ -52,16 +53,79 @@ def check_config_files(s: Settings, scope_path: Path | None, policy_path: Path |
     return out
 
 
+def _configured_sources(s: Settings) -> dict[str, dict[str, bool]]:
+    # With env the credential variables themselves signal that a source is configured; with another provider
+    # only the non-secret fields can (the credential env vars are ignored there).
+    return s.source_requirements(include_secrets=s.secrets_provider == "env")
+
+
 def check_sources(s: Settings) -> list[Check]:
-    configured = s.source_requirements()
+    """Non-secret fields per configured source. Credentials are reported by ``check_secrets``."""
+    configured = _configured_sources(s)
     if not configured:
         return [Check("sources", WARN, "no live source configured (demo mode only)")]
     out = []
     for src, fields in configured.items():
+        fields = {k: ok for k, ok in fields.items() if k not in SOURCE_SECRETS[src]}
         missing = [k for k, ok in fields.items() if not ok]
         detail = ", ".join(f"{k}={'set' if ok else 'missing'}" for k, ok in fields.items())
         out.append(Check(f"source:{src}", FAIL if missing else OK, detail))
     return out
+
+
+def check_secrets(s: Settings) -> list[Check]:
+    """Resolve every credential the configured sources need through the SecretProvider (set/missing only)."""
+    from pch.providers import ProviderError, get_secret_provider
+
+    try:
+        provider = get_secret_provider(s)
+    except ProviderError as exc:
+        return [Check("secrets_provider", FAIL, str(exc))]
+    configured = _configured_sources(s)
+    if not configured:
+        return [Check("secrets_provider", OK, provider.name)]
+    out = [Check("secrets_provider", OK, provider.name)]
+    for src in configured:
+        parts, bad = [], False
+        for name in SOURCE_SECRETS[src]:
+            try:
+                ok = bool(provider.get(name))
+            except ProviderError as exc:
+                parts.append(f"{name}=error ({exc})")
+                bad = True
+                continue
+            parts.append(f"{name}={'set' if ok else 'missing'}")
+            bad = bad or not ok
+        out.append(Check(f"secret:{src}", FAIL if bad else OK, ", ".join(parts)))
+    return out
+
+
+def check_artifact_store(s: Settings) -> Check:
+    """Write, read back and delete a probe key in the configured artifact store."""
+    import asyncio
+
+    from pch.providers import ProviderError, get_artifact_store
+
+    key = f".doctor/probe-{os.getpid()}"
+    try:
+        store = get_artifact_store(s)
+    except ProviderError as exc:
+        return Check("artifact_store", FAIL, str(exc))
+
+    async def probe() -> bool:
+        await store.put(key, b"ok")
+        try:
+            return await store.get(key) == b"ok"
+        finally:
+            await store.delete_prefix(key)
+
+    try:
+        ok = asyncio.run(probe())
+    except Exception as exc:  # noqa: BLE001 - never echo SDK messages
+        return Check("artifact_store", FAIL, f"{store.name}: probe failed ({type(exc).__name__})")
+    if not ok:
+        return Check("artifact_store", FAIL, f"{store.name}: probe read back different data")
+    return Check("artifact_store", OK, store.name)
 
 
 def check_database(s: Settings) -> Check:
@@ -135,11 +199,13 @@ def run_checks(scope_path: Path | None = None, policy_path: Path | None = None) 
         return checks
     checks += check_config_files(s, scope_path, policy_path)
     checks += check_sources(s)
+    checks += check_secrets(s)
     checks.append(check_database(s))
     mig = check_db_migrations(s)
     if mig is not None:
         checks.append(mig)
     checks.append(check_data_dir(s))
+    checks.append(check_artifact_store(s))
     return checks
 
 

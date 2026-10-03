@@ -12,7 +12,7 @@ import struct
 import threading
 import time
 from collections.abc import Callable
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
@@ -53,7 +53,7 @@ def default_credential() -> _Credential:
             "DB_AUTH=azure_ad requires the 'azuresql' extra (pyodbc + azure-identity): "
             "pip install 'pipeline-compliance[azuresql]' (and the Microsoft ODBC Driver 18 for SQL Server)"
         ) from exc
-    return DefaultAzureCredential()  # type: ignore[no-any-return]
+    return cast(_Credential, DefaultAzureCredential())
 
 
 class TokenProvider:
