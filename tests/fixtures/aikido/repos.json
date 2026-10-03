@@ -1,0 +1,14 @@
+[
+ {
+  "id": 101,
+  "name": "payments-api",
+  "provider": "azure_devops",
+  "active": true
+ },
+ {
+  "id": 102,
+  "name": "Payments/orders-func",
+  "provider": "azure_devops",
+  "active": true
+ }
+]

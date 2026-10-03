@@ -1,0 +1,37 @@
+{
+ "count": 3,
+ "value": [
+  {
+   "id": "e1",
+   "name": "conn-prod-wif",
+   "type": "azurerm",
+   "authorization": {
+    "scheme": "WorkloadIdentityFederation"
+   },
+   "data": {
+    "scopeLevel": "Subscription"
+   }
+  },
+  {
+   "id": "e2",
+   "name": "conn-dev-spn",
+   "type": "azurerm",
+   "authorization": {
+    "scheme": "ServicePrincipal"
+   },
+   "data": {
+    "scopeLevel": "Subscription",
+    "resourceGroupName": "rg-dev"
+   }
+  },
+  {
+   "id": "e3",
+   "name": "sonar-conn",
+   "type": "sonarqube",
+   "authorization": {
+    "scheme": "Token"
+   },
+   "data": {}
+  }
+ ]
+}

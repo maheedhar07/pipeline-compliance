@@ -1,0 +1,33 @@
+{
+ "result": [
+  {
+   "number": "CHG0030001",
+   "state": "Implement",
+   "approval": "approved",
+   "start_date": "2026-09-10 08:00:00",
+   "end_date": "2026-09-10 18:00:00",
+   "cmdb_ci": "payments-api",
+   "short_description": "Deploy payments-api"
+  },
+  {
+   "number": "CHG0030002",
+   "state": "Canceled",
+   "approval": "approved",
+   "start_date": "2026-09-11 08:00:00",
+   "end_date": "2026-09-11 18:00:00",
+   "cmdb_ci": {
+    "display_value": "payments-api",
+    "link": "x"
+   },
+   "short_description": ""
+  },
+  {
+   "number": "CHG0030003",
+   "state": "Scheduled",
+   "approval": "requested",
+   "start_date": "2026-09-12 08:00:00",
+   "end_date": "2026-09-12 18:00:00",
+   "cmdb_ci": "payments-api"
+  }
+ ]
+}

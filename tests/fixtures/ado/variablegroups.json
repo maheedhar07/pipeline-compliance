@@ -1,0 +1,28 @@
+{
+ "count": 2,
+ "value": [
+  {
+   "id": 5,
+   "name": "payments-common",
+   "type": "Vsts",
+   "variables": {
+    "a": {
+     "value": "1"
+    }
+   }
+  },
+  {
+   "id": 6,
+   "name": "payments-prod-kv",
+   "type": "AzureKeyVault",
+   "providerData": {
+    "vaultName": "kv-prod"
+   },
+   "variables": {
+    "s": {
+     "isSecret": true
+    }
+   }
+  }
+ ]
+}

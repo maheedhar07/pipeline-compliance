@@ -1,0 +1,36 @@
+[
+ {
+  "id": 1,
+  "severity": "critical",
+  "type": "open_source",
+  "first_detected_at": "2026-08-01T00:00:00Z",
+  "code_repo_id": 101
+ },
+ {
+  "id": 2,
+  "severity": "high",
+  "type": "sast",
+  "first_detected_at": "2026-09-20T00:00:00Z",
+  "code_repo_id": 101
+ },
+ {
+  "id": 3,
+  "severity": "medium",
+  "type": "iac",
+  "first_detected_at": 1788000000,
+  "code_repo_id": 102
+ },
+ {
+  "id": 4,
+  "severity": "low",
+  "type": "x",
+  "first_detected_at": "2026-09-01T00:00:00Z",
+  "code_repo_id": 999
+ },
+ {
+  "id": 5,
+  "severity": "high",
+  "type": "x",
+  "code_repo_id": 101
+ }
+]

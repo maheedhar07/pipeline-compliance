@@ -1,0 +1,15 @@
+{
+ "resource": {
+  "id": "e1",
+  "type": "endpoint"
+ },
+ "allPipelines": {
+  "authorized": false
+ },
+ "pipelines": [
+  {
+   "id": 12,
+   "authorized": true
+  }
+ ]
+}

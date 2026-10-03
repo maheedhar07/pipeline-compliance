@@ -1,0 +1,51 @@
+{
+ "count": 3,
+ "value": [
+  {
+   "id": 10,
+   "type": {
+    "id": "t1",
+    "name": "Approval"
+   },
+   "timeout": 43200,
+   "settings": {
+    "approvers": [
+     {
+      "displayName": "Alice Lead",
+      "id": "a"
+     }
+    ],
+    "minRequiredApprovers": 1,
+    "requesterCannotBeApprover": true,
+    "executionOrder": "anyOrder"
+   }
+  },
+  {
+   "id": 11,
+   "type": {
+    "id": "t2",
+    "name": "BranchControl"
+   },
+   "settings": {
+    "allowedBranches": "refs/heads/main,refs/heads/release/*",
+    "ensureProtectionOfBranch": true
+   }
+  },
+  {
+   "id": 12,
+   "type": {
+    "id": "t3",
+    "name": "TaskCheck"
+   },
+   "settings": {
+    "displayName": "ServiceNow CRQ check",
+    "definitionRef": {
+     "name": "ServiceNow-DevOps-Change"
+    },
+    "inputs": {
+     "url": "https://contoso.service-now.com/api/x"
+    }
+   }
+  }
+ ]
+}
