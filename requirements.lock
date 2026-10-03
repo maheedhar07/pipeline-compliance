@@ -9,6 +9,10 @@
 #
 #    pip-compile --extra=postgres --generate-hashes --no-index --output-file=requirements.lock pyproject.toml
 #
+alembic==1.20.0 \
+    --hash=sha256:77eb101048d95f982c0353e9233404889dcd7a6fc244c107836c0e2fc9cf7d9d \
+    --hash=sha256:db505480647bc60386c5369402f4a57a506b7539c9e9ef5e270d45cbbe4939bf
+    # via pipeline-compliance (pyproject.toml)
 annotated-doc==0.0.5 \
     --hash=sha256:117bac03a25ede5df5440e855b32d556049ca169ead221505badf432fed4b101 \
     --hash=sha256:c7e58ce09192557605d8bbd92836d7e1d520ac9580096042c0bfd197efacf1bb
@@ -63,6 +67,10 @@ jinja2==3.1.6 \
     --hash=sha256:0137fb05990d35f1275a587e9aee6d56da821fc83491a0fb838183be43f66d6d \
     --hash=sha256:85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67
     # via pipeline-compliance (pyproject.toml)
+mako==1.4.3 \
+    --hash=sha256:723296007c870bfd6b3f0c3230dba7198096e5269297ebf5e4eff9e7ffa39d4f \
+    --hash=sha256:cd6537fe88d5fec315c55c2f8529bc4ce7a9a352ad7db3eeaa6a66e2dd4ec37a
+    # via alembic
 markdown-it-py==4.2.0 \
     --hash=sha256:04a21681d6fbb623de53f6f364d352309d4094dd4194040a10fd51833e418d49 \
     --hash=sha256:9f7ebbcd14fe59494226453aed97c1070d83f8d24b6fc3a3bcf9a38092641c4a
@@ -219,7 +227,9 @@ markupsafe==3.0.4 \
     --hash=sha256:fa95848c929b6a75f6848d3c9793e59db365ee436776e57db835cdbfa79ba977 \
     --hash=sha256:fd9f8797427910198f95bced71ddfed61130d7e349213bfb8466c9c99e2c46a8 \
     --hash=sha256:fdb4ca07ab75ffadab4a8b135ad59cdbb3156b99310f3d565370da74a15d6bd3
-    # via jinja2
+    # via
+    #   jinja2
+    #   mako
 mdurl==0.1.2 \
     --hash=sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8 \
     --hash=sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba
@@ -597,7 +607,9 @@ sqlalchemy==2.1.3 \
     --hash=sha256:f87533295b84c9e19ca2a72dc26a76e0192f0a2424f8fd575a82e75e7d58f9e1 \
     --hash=sha256:fdcee9536cb3281b8810787ba651f4e5f22bd687b177de89fba2155b055b07b0 \
     --hash=sha256:ffa08e000d55504f1c4f4e8a7646318885208165c5d7da2c8359c811f6d2420d
-    # via pipeline-compliance (pyproject.toml)
+    # via
+    #   alembic
+    #   pipeline-compliance (pyproject.toml)
 starlette==1.7.0 \
     --hash=sha256:67f8e99895493dd2911a03f11314af6ceebeae4e704bb9f43dfc6a9db151c93e \
     --hash=sha256:c79f74ea63cff761804fbbfb182f1e0b440c2d07b164d24700c5a1bab5d6ff5d
@@ -614,6 +626,7 @@ typing-extensions==4.16.0 \
     --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8 \
     --hash=sha256:dc983d19a509c94dba722ee6abd33940f7c05a89e243c47e907eb4db6f1a43e5
     # via
+    #   alembic
     #   anyio
     #   fastapi
     #   opentelemetry-api

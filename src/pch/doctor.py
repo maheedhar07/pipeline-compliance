@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from pydantic import ValidationError
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.engine import make_url
 
 from pch.settings import ConfigError, Settings, format_validation_error, load_policy, load_scope
@@ -65,14 +65,19 @@ def check_sources(s: Settings) -> list[Check]:
 
 
 def check_database(s: Settings) -> Check:
-    """Connectivity only. T3 extends this with a migration-head check (see ``check_db_migrations``)."""
+    """Connectivity only; the migration state is reported separately by ``check_db_migrations``."""
+    from pch.store.azure_sql import AzureSqlUnavailable
+    from pch.store.engine import build_engine
+
     try:
         url = make_url(s.database_url)
     except Exception:  # noqa: BLE001 - message could echo the URL, keep it generic
         return Check("database", FAIL, "DATABASE_URL could not be parsed")
     shown = url.render_as_string(hide_password=True)
     try:
-        engine = create_engine(url)
+        engine = build_engine(url, s)
+    except AzureSqlUnavailable as exc:
+        return Check("database", FAIL, str(exc))
     except Exception as exc:  # noqa: BLE001 - e.g. missing DB driver
         return Check("database", FAIL, f"{shown}: cannot create engine ({type(exc).__name__})")
     try:
@@ -82,12 +87,32 @@ def check_database(s: Settings) -> Check:
         return Check("database", FAIL, f"{shown}: connection failed ({type(exc).__name__})")
     finally:
         engine.dispose()
-    return Check("database", OK, shown)
+    return Check("database", OK, shown + (" (auth: azure_ad)" if s.db_auth == "azure_ad" else ""))
 
 
 def check_db_migrations(s: Settings) -> Check | None:
-    """Extension point for T3 (Alembic head check). Returns None until migrations exist."""
-    return None
+    """Migration head vs the database's current revision. None when the database is unreachable
+    (``check_database`` already reports that)."""
+    from pch.store import migrate
+    from pch.store.engine import build_engine
+
+    try:
+        engine = build_engine(s.database_url, s)
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        st = migrate.db_state(engine)
+    except Exception:  # noqa: BLE001
+        return None
+    finally:
+        engine.dispose()
+    if st.at_head:
+        return Check("db_migrations", OK, f"at head {st.head}")
+    auto = s.db_auto_migrate or (engine.dialect.name == "sqlite" and not s.is_prod)
+    reason = migrate.not_ready_reason(st)
+    if auto and not st.unversioned:
+        return Check("db_migrations", WARN, f"{reason} (will be applied automatically on start)")
+    return Check("db_migrations", FAIL, reason)
 
 
 def check_data_dir(s: Settings) -> Check:

@@ -9,6 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from pch.model.pipeline import Pipeline
+from pch.timeutil import utcnow_naive
 
 
 class TestState(StrEnum):
@@ -162,7 +163,7 @@ class RepoContext(BaseModel):
     service_connections: dict[str, ServiceConnection] = Field(default_factory=dict)
     variable_groups: dict[str, VariableGroup] = Field(default_factory=dict)
     environments: dict[str, Environment] = Field(default_factory=dict)
-    now: datetime = Field(default_factory=datetime.utcnow)
+    now: datetime = Field(default_factory=utcnow_naive)
 
     def build_pipelines(self) -> list[Pipeline]:
         return [p for p in self.pipelines if p.platform != "ado_classic_release"]

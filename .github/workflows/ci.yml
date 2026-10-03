@@ -83,3 +83,95 @@ jobs:
           echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum -c -
           tar -xzf gitleaks.tar.gz gitleaks
       - run: ./gitleaks git --redact --no-banner --verbose .
+
+  # Runs the persistence portability suite (tests/test_db_portability.py) against real servers. Locally these tests
+  # run on SQLite only unless TEST_DATABASE_URL is set. Service images are pinned by tag (digest pinning is optional;
+  # add `@sha256:...` after the tag to freeze them). Both services start for every matrix entry; each entry only uses its own.
+  db-matrix:
+    name: db portability (${{ matrix.db }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        db: [postgres, mssql]
+    env:
+      PG_URL: postgresql+psycopg://pch:pch-ci-only@localhost:5432/pch_test
+      MSSQL_SA_PASSWORD: CiOnlyPassw0rd9X
+      MSSQL_URL: mssql+pyodbc://sa:CiOnlyPassw0rd9X@localhost:1433/pch_test?driver=ODBC+Driver+18+for+SQL+Server&TrustServerCertificate=yes
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: pch
+          POSTGRES_PASSWORD: pch-ci-only
+          POSTGRES_DB: pch_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pch -d pch_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: CiOnlyPassw0rd9X
+        ports:
+          - 1433:1433
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install Microsoft ODBC Driver 18 (SQL Server only)
+        if: matrix.db == 'mssql'
+        run: |
+          curl -sSfL https://packages.microsoft.com/keys/microsoft.asc | sudo gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
+          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/ubuntu/$(lsb_release -rs)/prod $(lsb_release -cs) main" \
+            | sudo tee /etc/apt/sources.list.d/mssql-release.list
+          sudo apt-get update
+          sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18 unixodbc
+      - run: pip install -e ".[dev,postgres,azuresql]"
+      - name: Select the database under test
+        run: |
+          if [ "${{ matrix.db }}" = "postgres" ]; then echo "TEST_DATABASE_URL=${PG_URL}" >> "$GITHUB_ENV"; else echo "TEST_DATABASE_URL=${MSSQL_URL}" >> "$GITHUB_ENV"; fi
+      - name: Create the SQL Server test database
+        if: matrix.db == 'mssql'
+        run: |
+          python - <<'PY'
+          import os, time
+          import pyodbc
+          cs = ("DRIVER={ODBC Driver 18 for SQL Server};SERVER=localhost,1433;UID=sa;PWD="
+                + os.environ["MSSQL_SA_PASSWORD"] + ";TrustServerCertificate=yes")
+          for attempt in range(60):
+              try:
+                  conn = pyodbc.connect(cs, autocommit=True, timeout=5)
+                  break
+              except pyodbc.Error:
+                  time.sleep(2)
+          else:
+              raise SystemExit("SQL Server did not become ready")
+          conn.execute("IF DB_ID('pch_test') IS NULL CREATE DATABASE pch_test")
+          print("database pch_test ready")
+          PY
+      - name: Portability tests
+        run: pytest -p no:warnings tests/test_db_portability.py tests/test_azure_sql.py
+      - name: CLI end-to-end (migrate, demo scan, check)
+        env:
+          APP_ENV: prod
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+        run: |
+          set -e
+          pch db current
+          if pch db check; then echo "fresh database must not be at head"; exit 1; fi
+          if pch scan --demo --data-dir "$RUNNER_TEMP/data"; then echo "prod scan must refuse a non-migrated database"; exit 1; fi
+          pch db upgrade
+          pch db check
+          pch seed-demo --repos 30 --data-dir "$RUNNER_TEMP/data"
+          pch scan --demo --history 1 --data-dir "$RUNNER_TEMP/data"
+          pch db check

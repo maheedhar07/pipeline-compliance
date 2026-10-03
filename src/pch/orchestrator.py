@@ -48,6 +48,7 @@ from pch.sources import Sources
 from pch.store import repository as store
 from pch.store.db import session_scope
 from pch.store.models import CollectionErrorRow, FindingRow, RepoResultRow
+from pch.timeutil import utcnow, utcnow_naive
 
 log = logging.getLogger("pch.scan")
 
@@ -58,9 +59,10 @@ class ScanConfig:
     policy: Policy
     db_url: str
     mode: str = "live"  # live | demo | cache
-    now: datetime = field(default_factory=datetime.utcnow)
+    now: datetime = field(default_factory=utcnow_naive)  # naive UTC (domain convention, see pch.timeutil)
     concurrency: int = 16
     run_days: int = 90
+    stale_after: timedelta = timedelta(hours=6)  # `running` scans older than this are orphans of a crashed process
 
 
 @dataclass
@@ -283,10 +285,26 @@ class Scanner:
 
     # ------------------------------------------------------------------ whole scan
     async def run(self, scan_id: str) -> ScanResult:
-        t0 = time.time()
+        """Run a scan. The scan row is created ``running`` first; results are then written in ONE transaction
+        together with ``status=complete``. Any failure (including cancellation) rolls that back and the scan row
+        is marked ``failed``, so a scan is never left ``running`` by an error."""
         cfg = self.cfg
         with session_scope(cfg.db_url) as s:
+            store.fail_orphaned_scans(s, cfg.stale_after, exclude=scan_id)
             store.create_scan(s, scan_id, cfg.mode, cfg.now)
+        try:
+            return await self._run(scan_id)
+        except BaseException as exc:
+            try:
+                with session_scope(cfg.db_url) as s:
+                    store.mark_failed(s, scan_id, f"{type(exc).__name__}: {exc}")
+            except Exception:  # noqa: BLE001 - keep the original error; orphan cleanup recovers the row
+                log.exception("could not mark scan %s as failed", scan_id)
+            raise
+
+    async def _run(self, scan_id: str) -> ScanResult:
+        t0 = time.time()
+        cfg = self.cfg
         projects = list(cfg.scope.projects)
         if not projects:
             try:
@@ -401,7 +419,7 @@ class Scanner:
             row = store.get_scan(s, scan_id)
             duration = time.time() - t0
             if row is not None:
-                row.finished_at = datetime.utcnow()
+                row.finished_at = utcnow()
                 row.status = "complete"
                 row.repos_total = len(results)
                 row.repos_failed = failed

@@ -16,6 +16,7 @@ dependencies = [
   "pydantic>=2.6,<3",
   "pydantic-settings>=2.2,<3",
   "sqlalchemy>=2.0,<3",
+  "alembic>=1.13,<2",
   "tenacity>=8.2,<10",
   "typer>=0.12,<1",
   "pyyaml>=6.0,<7",
@@ -23,6 +24,7 @@ dependencies = [
 
 [project.optional-dependencies]
 postgres = ["psycopg[binary]>=3.1,<4"]
+azuresql = ["pyodbc>=5,<6", "azure-identity>=1.15,<2"]
 dev = [
   "pytest>=8",
   "pytest-asyncio>=0.23",
@@ -41,6 +43,7 @@ pch = "pch.cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pch"]
+# Alembic migrations ship inside the package (src/pch/store/migrations, incl. versions/*.py and script.py.mako).
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -67,6 +70,7 @@ warn_unused_ignores = false
 plugins = ["pydantic.mypy"]
 
 [tool.ruff.lint.per-file-ignores]
+"src/pch/store/migrations/versions/*" = ["E", "I", "UP"]
 "src/pch/demo/generator.py" = ["E702"]
 "tests/*" = ["E501", "E731"]
 

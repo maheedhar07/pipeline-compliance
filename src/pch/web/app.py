@@ -18,7 +18,7 @@ from jinja2 import pass_context
 from pch import __version__
 from pch.settings import get_settings
 from pch.store import repository as store
-from pch.store.db import session_scope
+from pch.store.db import get_engine, session_scope
 from pch.web import queries as Q
 
 HERE = Path(__file__).parent
@@ -27,6 +27,8 @@ HERE = Path(__file__).parent
 def create_app(db_url: str | None = None) -> FastAPI:
     app = FastAPI(title="Pipeline Compliance Hub", version=__version__, docs_url="/api/docs", redoc_url=None)
     app.state.db_url = db_url or get_settings().database_url
+    # Verify (or, per policy, migrate) the schema at startup: raises SchemaNotReadyError with a clear message in prod.
+    get_engine(app.state.db_url)
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     templates = Jinja2Templates(directory=HERE / "templates")
     env = templates.env

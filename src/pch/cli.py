@@ -1,4 +1,4 @@
-"""Typer CLI: pch scan | serve | rules list | seed-demo | doctor."""
+"""Typer CLI: pch scan | serve | db | rules list | seed-demo | doctor."""
 
 from __future__ import annotations
 
@@ -68,6 +68,91 @@ def rules_docs(
     typer.echo(f"wrote {write}")
 
 
+# ----------------------------------------------------------------------------- database
+db_app = typer.Typer(help="Database migrations (Alembic)", no_args_is_help=True)
+app.add_typer(db_app, name="db")
+
+
+def _open_db(url: str):
+    """Engine with the schema policy applied; exits with a clear message when the DB is not usable."""
+    from pch.store.azure_sql import AzureSqlUnavailable
+    from pch.store.db import SchemaNotReadyError, get_engine
+
+    try:
+        return get_engine(url)
+    except SchemaNotReadyError as exc:
+        typer.echo(f"Database is not ready: {exc}", err=True)
+        raise typer.Exit(3) from None
+    except (AzureSqlUnavailable, ValueError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(3) from None
+
+
+def _raw_db(db: str | None):
+    from pch.settings import get_settings
+    from pch.store.azure_sql import AzureSqlUnavailable
+    from pch.store.db import get_raw_engine
+
+    try:
+        return get_raw_engine(db or get_settings().database_url)
+    except (AzureSqlUnavailable, ValueError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(3) from None
+
+
+@db_app.command("upgrade")
+def db_upgrade(
+    revision: str = typer.Option("head", "--revision", "-r", help="Target revision"),
+    db: str | None = typer.Option(None, "--db", help="Database URL (default DATABASE_URL)"),
+) -> None:
+    """Apply migrations up to --revision (default head). Creates the schema on an empty database."""
+    from pch.store import migrate
+
+    engine = _raw_db(db)
+    try:
+        migrate.upgrade(engine, revision)
+    except migrate.SchemaNotReadyError as exc:
+        typer.echo(f"Cannot upgrade: {exc}", err=True)
+        raise typer.Exit(3) from None
+    typer.echo(f"database is at {migrate.db_state(engine).current}")
+
+
+@db_app.command("current")
+def db_current(db: str | None = typer.Option(None, "--db")) -> None:
+    """Show the database revision and the revision this version of pch expects."""
+    from pch.store import migrate
+
+    st = migrate.db_state(_raw_db(db))
+    typer.echo(f"current: {st.current or '(none)'}")
+    typer.echo(f"head:    {st.head}")
+
+
+@db_app.command("check")
+def db_check(db: str | None = typer.Option(None, "--db")) -> None:
+    """Exit 1 unless the database is at the migration head (use as a deploy / readiness gate)."""
+    from pch.store import migrate
+
+    st = migrate.db_state(_raw_db(db))
+    if not st.at_head:
+        typer.echo(f"NOT at head: {migrate.not_ready_reason(st)}", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"ok: at head {st.head}")
+
+
+@db_app.command("stamp")
+def db_stamp(
+    revision: str = typer.Argument("head", help="Revision to record (normally head)"),
+    db: str | None = typer.Option(None, "--db"),
+) -> None:
+    """Record a revision WITHOUT running migrations. Use once to adopt a database created by an older
+    version (create_all) whose schema already equals the initial revision. Does not change any table."""
+    from pch.store import migrate
+
+    engine = _raw_db(db)
+    migrate.stamp(engine, revision)
+    typer.echo(f"stamped {revision}")
+
+
 # ----------------------------------------------------------------------------- demo / scan / serve
 DEMO_DIR = "demo"
 
@@ -130,16 +215,18 @@ def scan(
     """Collect, evaluate and store a compliance scan snapshot (read-only)."""
     import asyncio
     import sys
-    from datetime import datetime, timedelta
+    from datetime import timedelta
     from pathlib import Path
 
     from pch.orchestrator import ScanConfig, Scanner
     from pch.settings import get_settings, load_policy, load_scope
     from pch.sources import cache_sources, demo_sources, live_sources
+    from pch.timeutil import utcnow_naive
 
     settings = get_settings()
     db_url = db or (settings.database_url if data_dir == "data" else f"sqlite:///{data_dir}/pch.db")
     data_path = Path(data_dir)
+    stale = timedelta(minutes=settings.scan_lock_stale_minutes)
 
     def progress(done: int, total: int) -> None:
         typer.echo(f"  scanned {done}/{total} repos", err=True)
@@ -166,7 +253,7 @@ def scan(
                 scan_id = f"{now:%Y%m%d-%H%M%S}-demo"
                 record = (data_path / "raw" / scan_id) if cache else None
                 src = demo_sources(w, record_to=record)
-                cfg = ScanConfig(scope=scope, policy=policy, db_url=db_url, mode="demo", now=now)
+                cfg = ScanConfig(scope=scope, policy=policy, db_url=db_url, mode="demo", now=now, stale_after=stale)
                 typer.echo(f"Scanning demo estate {scan_id} ...", err=True)
                 try:
                     res = await Scanner(src, cfg, progress).run(scan_id)
@@ -175,7 +262,7 @@ def scan(
                 typer.echo(f"  {res.repos} repos, {res.findings} findings, {res.errors} collection errors, {res.duration_s}s, {res.status_counts}")
             return
         scope, policy = load_scope(scope_file), load_policy(policy_file)
-        now = datetime.utcnow()
+        now = utcnow_naive()
         if from_cache:
             scan_id, src = f"{now:%Y%m%d-%H%M%S}-cache", cache_sources(data_path / "raw" / from_cache, settings)
             mode = "cache"
@@ -183,7 +270,7 @@ def scan(
             scan_id = f"{now:%Y%m%d-%H%M%S}-live"
             src = live_sources(settings, record_to=(data_path / "raw" / scan_id) if cache is not False else None)
             mode = "live"
-        cfg = ScanConfig(scope=scope, policy=policy, db_url=db_url, mode=mode, now=now)
+        cfg = ScanConfig(scope=scope, policy=policy, db_url=db_url, mode=mode, now=now, stale_after=stale)
         try:
             res = await Scanner(src, cfg, progress).run(scan_id)
         finally:
@@ -194,9 +281,15 @@ def scan(
         typer.echo("ADO_ORG is not set. Copy .env.example to .env, or try `pch seed-demo && pch scan --demo`.", err=True)
         raise typer.Exit(2)
     from pch.settings import ConfigError
+    from pch.store.locks import ScanLockHeld, scan_lock
 
+    engine = _open_db(db_url)  # refuses to run when the schema is not at head (unless auto-migrate applies)
     try:
-        asyncio.run(go())
+        with scan_lock(engine, stale_after=stale):
+            asyncio.run(go())
+    except ScanLockHeld as exc:
+        typer.echo(f"Another scan is already running: {exc}. Not starting a second one.", err=True)
+        raise typer.Exit(4) from None
     except ConfigError as exc:
         typer.echo(f"Config error: {exc}", err=True)
         raise typer.Exit(2) from None
@@ -220,6 +313,7 @@ def serve(
     if db:
         os.environ["DATABASE_URL"] = db
         get_settings.cache_clear()
+    _open_db(db or s.database_url)  # fail fast with a clear message instead of a traceback inside the worker
     uvicorn.run("pch.web.app:create_app", factory=True, host=host or s.host, port=port or s.port, log_level="info")
 
 

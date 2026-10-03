@@ -49,6 +49,20 @@ class Settings(BaseSettings):
     data_dir: Path = Path("data")
     config_dir: Path = Path("config")
 
+    # --- database engine / migrations (server DBs only for pool settings)
+    # DB_AUTH=password: credentials are in DATABASE_URL. azure_ad: Azure SQL with an Entra access token
+    # (managed identity / DefaultAzureCredential); needs the `azuresql` extra and an mssql+pyodbc URL.
+    db_auth: Literal["password", "azure_ad"] = "password"
+    db_pool_size: int = Field(5, ge=1, le=100)
+    db_max_overflow: int = Field(10, ge=0, le=200)
+    db_pool_recycle: int = Field(1800, ge=-1)  # seconds; Azure SQL drops idle connections after ~30 min
+    db_pool_timeout: float = Field(30.0, gt=0, le=600)
+    # Apply pending migrations automatically at startup. Off by default; sqlite in dev/test always
+    # auto-migrates. In prod prefer `pch db upgrade` as an explicit deploy step.
+    db_auto_migrate: bool = False
+    # A scan lock (or a scan left `running`) older than this is considered abandoned.
+    scan_lock_stale_minutes: int = Field(360, ge=1)
+
     # --- Azure DevOps
     ado_org: str = ""
     ado_pat: SecretStr = SecretStr("")

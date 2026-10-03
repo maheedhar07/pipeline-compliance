@@ -1,4 +1,4 @@
-# Dashboard + Postgres.   docker compose up --build
+# Dashboard + Postgres.   docker compose up --build   (the `migrate` service runs `pch db upgrade` first)
 # Demo data (no credentials):  docker compose run --rm app sh -c "pch seed-demo && pch scan --demo"
 # Real scan (needs .env):      docker compose run --rm app pch scan
 services:
@@ -16,11 +16,24 @@ services:
       timeout: 3s
       retries: 10
 
-  app:
+  # One-shot: apply Alembic migrations, then exit. The app only starts after it succeeded.
+  migrate:
     build: .
+    command: ["pch", "db", "upgrade"]
     depends_on:
       db:
         condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+psycopg://pch:pch-local-dev-only@db:5432/pch
+
+  app:
+    build: .
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     env_file:
       - path: .env
         required: false

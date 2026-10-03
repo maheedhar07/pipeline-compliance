@@ -24,6 +24,36 @@ pch serve                      # http://127.0.0.1:8000
 
 Useful variants: `pch scan --demo --history 0` (single snapshot, about 3 s), `pch scan --demo --cache` (also write the redacted raw cache), `pch rules list`.
 
+## Database
+
+The same code runs on SQLite (default, dev/demo), PostgreSQL and Azure SQL / SQL Server; switching is a config change.
+
+| Target | `DATABASE_URL` | Extra |
+|---|---|---|
+| SQLite | `sqlite:///data/pch.db` | none |
+| PostgreSQL | `postgresql+psycopg://user:pw@host:5432/db` | `pip install '.[postgres]'` |
+| SQL Server / Azure SQL (password) | `mssql+pyodbc://user:pw@host:1433/db?driver=ODBC+Driver+18+for+SQL+Server` | `.[azuresql]` + Microsoft ODBC Driver 18 |
+| Azure SQL (Entra ID, no password) | `mssql+pyodbc://@srv.database.windows.net:1433/db?driver=ODBC+Driver+18+for+SQL+Server&Encrypt=yes` with `DB_AUTH=azure_ad` | `.[azuresql]` + ODBC Driver 18 |
+
+`DB_AUTH=azure_ad` fetches an access token with `azure-identity` `DefaultAzureCredential` (managed identity in App Service, `az login` locally), caches it and injects it into each new connection, refreshing it 5 minutes before expiry. The identity needs a database user (`CREATE USER [<app-name>] FROM EXTERNAL PROVIDER`) with `db_datareader`/`db_datawriter`, plus DDL rights (`db_ddladmin`) only for whoever runs `pch db upgrade`. If the extra is missing the app stops at startup with a clear message. Server databases use `pool_pre_ping`, and `DB_POOL_SIZE`, `DB_MAX_OVERFLOW`, `DB_POOL_TIMEOUT` and `DB_POOL_RECYCLE` (default 1800 s, below Azure SQL's ~30 min idle disconnect).
+
+The provided Docker image contains the SQLite and PostgreSQL drivers only; for Azure SQL build an image that also installs the Microsoft ODBC Driver 18 and `pip install '.[azuresql]'` (see `docs/DEPLOY_AZURE.md` once T7 lands).
+
+**Migrations (Alembic, shipped inside the package):**
+
+```bash
+pch db upgrade [--revision head]   # create / upgrade the schema (explicit deploy step)
+pch db current                     # database revision vs. the revision this build expects
+pch db check                       # exit 1 unless at head (CI / deploy gate)
+pch db stamp head                  # adopt a database created by an older version (see below)
+```
+
+All accept `--db <url>`. The schema is never created implicitly except for SQLite in `APP_ENV=dev|test`, where startup runs `upgrade head` itself. In `prod` (or any non-SQLite database) `pch serve` and `pch scan` **refuse to start** with a clear error if the database is not at head. Set `DB_AUTO_MIGRATE=true` to let them migrate on startup instead; trade-off: convenient for a single instance, but the app identity then needs DDL rights and two instances starting together can race. Prefer running `pch db upgrade` once per release (docker compose does this with a one-shot `migrate` service; on App Service run it as a release step).
+
+**Existing database created by an older version (`create_all`, no `alembic_version` table):** the app reports `database has tables but no alembic_version`. If it was created by the initial release, run `pch db stamp head` once; it records the revision without touching any table. Otherwise start from an empty database.
+
+**Scan lock and failures:** `pch scan` takes a DB lock (table `scan_locks`, identical on all dialects); a concurrent scan exits with code 4. A lock older than `SCAN_LOCK_STALE_MINUTES` (default 360) is taken over with a warning. Scan results are committed in one transaction together with `status=complete`; on any error the scan is marked `failed`, and `running` scans abandoned by a crashed process are marked `failed` on the next scan.
+
 ## Dependency lockfile
 
 `requirements.lock` pins every runtime dependency (plus the `postgres` extra) with hashes; the Dockerfile installs
@@ -57,7 +87,8 @@ The container image runs as a non-root user; the app port is bound to localhost 
    | `SERVICENOW_URL`, `SERVICENOW_USER`, `SERVICENOW_PASSWORD` | ServiceNow user with read access to `change_request` |
    | `APP_ENV` | `dev` (default), `test` or `prod`. In `prod` a missing `config/scope.yaml` is an error |
    | `CONCURRENCY`, `HTTP_TIMEOUT` | Parallel requests (1-64) and per-request timeout seconds (>0, <=300) |
-   | `DATABASE_URL` | `sqlite:///data/pch.db` (default) or `postgresql+psycopg://user:pw@host/db` |
+   | `DATABASE_URL` | `sqlite:///data/pch.db` (default), `postgresql+psycopg://user:pw@host/db` or an `mssql+pyodbc://` URL, see [Database](#database) |
+| `DB_AUTH`, `DB_POOL_*`, `DB_AUTO_MIGRATE`, `SCAN_LOCK_STALE_MINUTES` | Database auth mode, pool tuning, auto-migration and scan-lock timeout, see [Database](#database) |
 
    URLs must be `http(s)` (trailing slashes are stripped). Invalid values stop startup with a clear error. `.env.example` lists every variable.
 
@@ -80,7 +111,7 @@ ADO / Sonar / Aikido / ServiceNow (read-only HTTP, retry/backoff, 429 aware, 8 p
 canonical model (Pipeline > Stage > Job > Step, Approval, RepoFacts)    <- normalize/capabilities.yaml (task -> capability tags)
         |  target + environment-tier detection, repo scan, test-state classification
         v
-rule engine (53 rules, registry + @rule)  ->  findings  ->  scoring + waivers  ->  snapshot in SQLite/Postgres
+rule engine (53 rules, registry + @rule)  ->  findings  ->  scoring + waivers  ->  snapshot in SQLite/Postgres/Azure SQL
         v
 FastAPI + Jinja + HTMX + Chart.js dashboard   and   /api/v1 JSON API
 ```

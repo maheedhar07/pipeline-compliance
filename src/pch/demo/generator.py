@@ -16,6 +16,7 @@ from typing import Any
 
 from pch.demo import payloads as P
 from pch.demo.payloads import SD, WEB
+from pch.timeutil import utcnow_naive
 
 PROJECT_PLAN: dict[str, tuple[float, dict[str, int]]] = {
     "Payments": (0.92, {"functionapp": 14, "webapp": 14, "aks": 14, "sql": 4, "lib": 8, "iac": 2, "docs": 4}),
@@ -776,7 +777,7 @@ class WorldBuilder:
 
 
 def generate_world(seed: int = 42, repos: int = 280, quality_shift: float = 0.0, now: datetime | None = None) -> dict[str, Any]:
-    now = now or datetime.utcnow().replace(microsecond=0)
+    now = now or utcnow_naive().replace(microsecond=0)
     wb = WorldBuilder(seed, repos, quality_shift, now)
     used: set[str] = set()
     for idx, (project, kind) in enumerate(build_plan(repos)):
