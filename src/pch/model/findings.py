@@ -18,7 +18,7 @@ class Severity(StrEnum):
 
 
 class Status(StrEnum):
-    PASS = "PASS"
+    PASS = "PASS"  # nosec B105 - enum label, not a password
     FAIL = "FAIL"
     WARN = "WARN"
     NOT_APPLICABLE = "NOT_APPLICABLE"

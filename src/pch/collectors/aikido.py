@@ -16,7 +16,7 @@ from pch.collectors.http import HttpError, SourceClient
 from pch.model.repo import AikidoFacts, AikidoIssue
 
 # VERIFY: OAuth client-credentials token endpoint.
-TOKEN_PATH = "/api/oauth/token"
+TOKEN_PATH = "/api/oauth/token"  # nosec B105 - URL path, not a credential
 # VERIFY: repository listing endpoint.
 REPOS_PATH = "/api/public/v1/repositories/code"
 # VERIFY: open issue groups endpoint, filterable by repository / severity / first_detected_at.
@@ -54,7 +54,7 @@ def normalize_issue(raw: dict[str, Any]) -> tuple[str | None, AikidoIssue] | Non
 
 
 class AikidoClient:
-    def __init__(self, base_url: str, client_id: str = "", client_secret: str = "", *,
+    def __init__(self, base_url: str, client_id: str = "", client_secret: str = "", *,  # nosec B107 - empty default means 'not configured'; real values come from env
                  transport: httpx.AsyncBaseTransport | None = None, concurrency: int = 8,
                  backoff_base: float = 0.5, max_attempts: int = 4):
         self.base_url = base_url.rstrip("/")

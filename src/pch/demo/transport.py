@@ -177,7 +177,7 @@ class DemoTransport(httpx.AsyncBaseTransport):
     # ------------------------------------------------------------------ Aikido
     def aikido_route(self, req: httpx.Request, path: str) -> httpx.Response:
         if path.endswith("/oauth/token"):
-            return _json({"access_token": "demo-token-not-a-secret", "token_type": "Bearer", "expires_in": 3600})
+            return _json({"access_token": "demo-token-not-a-secret", "token_type": "Bearer", "expires_in": 3600})  # nosec B105 - fake token served by the demo transport
         if "Bearer" not in req.headers.get("authorization", ""):
             return _json({"message": "unauthorized"}, 401)
         page, per = int(req.url.params.get("page", 0)), int(req.url.params.get("per_page", 200))

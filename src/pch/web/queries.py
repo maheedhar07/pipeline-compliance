@@ -14,7 +14,7 @@ from pch.store import repository as store
 from pch.store.models import CollectionErrorRow, FindingRow, RepoResultRow, ScanRow
 
 STATUS_RANK = {"NON_COMPLIANT": 0, "AT_RISK": 1, "COMPLIANT": 2, "NOT_SCANNED": 3}
-FINDING_RANK = {"FAIL": 0, "WARN": 1, "UNKNOWN": 2, "WAIVED": 3, "PASS": 4, "NOT_APPLICABLE": 5}
+FINDING_RANK = {"FAIL": 0, "WARN": 1, "UNKNOWN": 2, "WAIVED": 3, "PASS": 4, "NOT_APPLICABLE": 5}  # nosec B105 - status rank map, not a password
 SEV_RANK = {s.value: i for i, s in enumerate(SEVERITY_ORDER)}
 PLATFORM_LABEL = {"ado_classic_build": "Classic build", "ado_classic_release": "Classic release", "ado_yaml": "YAML", "gha": "GitHub Actions"}
 TARGETS = ["functionapp", "webapp", "aks", "adf", "synapse", "sql", "iac"]

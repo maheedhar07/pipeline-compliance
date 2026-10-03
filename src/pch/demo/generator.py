@@ -41,7 +41,7 @@ SECRET_WORDS = ["dbPassword", "apiKey", "clientSecret", "storageConnectionString
 
 
 def _u(seed: int, idx: int, name: str) -> float:
-    return random.Random(f"{seed}:{idx}:{name}").random()
+    return random.Random(f"{seed}:{idx}:{name}").random()  # nosec B311 - deterministic demo data, not security-sensitive
 
 
 def clamp(x: float, lo: float = 0.02, hi: float = 1.0) -> float:
@@ -657,7 +657,7 @@ class WorldBuilder:
 
     # ---- run history + CRQs
     def runs(self, pr: dict[str, Any], s: RepoSpec, did: int, kind: str, prod_env: str | None = None) -> None:
-        rng = random.Random(f"{s.seed}:{s.idx}:runs:{did}")
+        rng = random.Random(f"{s.seed}:{s.idx}:runs:{did}")  # nosec B311 - deterministic demo data, not security-sensitive
         n = 0 if s.has("stale") else s.n["runs"]
         success = s.n["success"]
         builds, deployments = [], []

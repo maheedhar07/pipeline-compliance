@@ -24,6 +24,16 @@ pch serve                      # http://127.0.0.1:8000
 
 Useful variants: `pch scan --demo --history 0` (single snapshot, about 3 s), `pch scan --demo --cache` (also write the redacted raw cache), `pch rules list`.
 
+## Dependency lockfile
+
+`requirements.lock` pins every runtime dependency (plus the `postgres` extra) with hashes; the Dockerfile installs
+from it with `--require-hashes`. Regenerate after editing dependencies in `pyproject.toml`:
+
+```bash
+pip install pip-tools
+pip-compile --generate-hashes --extra postgres -o requirements.lock pyproject.toml   # add --upgrade to bump
+```
+
 ## Docker
 
 ```bash
