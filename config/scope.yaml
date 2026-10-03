@@ -1,15 +1,21 @@
-# Which Azure DevOps organization / projects / repos are in scope.
-organization: contoso
-projects: []            # empty = discover all projects in the organization
-exclude_repos: []       # e.g. ["Sandbox/scratch-repo"]
-# Name -> tier overrides applied BEFORE the name regex (stage or environment names).
+# What to scan. Unknown keys are rejected at load time. Validate with `pch doctor`.
+# In APP_ENV=prod this file is REQUIRED.
+
+# Azure DevOps organization name (the <org> in https://dev.azure.com/<org>). Replace the placeholder.
+organization: your-org
+# Projects to scan; empty = discover all projects in the organization.
+projects: []
+# Repos to skip, as "<project>/<repo>", e.g. ["Sandbox/scratch-repo"].
+exclude_repos: []
+# Stage/environment name -> tier (test/uat/prod ...), applied BEFORE the name-based regex.
 env_tiers: {}
-# Per-repo overrides (all optional):
+# Per-repo overrides (project and repo required, the rest optional):
 repos: []
 #  - project: Payments
 #    repo: payments-api
-#    sonar_key: contoso_payments-api
-#    aikido_repo: payments-api
-#    owner: team-payments@contoso.com
-#    servicenow_ci: payments-api
-#    coverage_threshold: 70
+#    sonar_key: myorg_payments-api      # SonarQube project key
+#    aikido_repo: payments-api          # repo name in Aikido
+#    owner: team-payments@example.com
+#    servicenow_ci: payments-api        # ServiceNow configuration item
+#    coverage_threshold: 70             # overrides policy.coverage_threshold
+#    env_tiers: {}                      # per-repo env_tiers override

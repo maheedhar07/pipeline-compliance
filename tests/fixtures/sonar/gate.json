@@ -1,6 +1,6 @@
 {
  "qualityGate": {
-  "name": "Company Way",
+  "name": "Org Quality Gate",
   "default": false
  }
 }

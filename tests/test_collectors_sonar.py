@@ -19,7 +19,7 @@ async def test_project_facts_full(fx):
     c = SonarClient(BASE, "tok", backoff_base=0)
     f = await c.project_facts("contoso_payments-api")
     await c.aclose()
-    assert f.onboarded and f.gate_status == "OK" and f.gate_name == "Company Way"
+    assert f.onboarded and f.gate_status == "OK" and f.gate_name == "Org Quality Gate"
     assert f.coverage == 81.2 and f.new_coverage == 88.0 and f.bugs == 3 and f.hotspots == 2 and f.duplication == 2.4
     assert f.last_analysis.year == 2026 and f.last_analysis.month == 9
     assert f.url.endswith("id=contoso_payments-api")

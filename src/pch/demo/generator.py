@@ -745,7 +745,7 @@ class WorldBuilder:
             "status": status, "coverage": cov, "bugs": int(_u(s.seed, s.idx, "bugs") * 20), "vulnerabilities": int(_u(s.seed, s.idx, "vuln") * 6 * (1.2 - s.q)),
             "hotspots": int(_u(s.seed, s.idx, "hot") * 9), "smells": int(_u(s.seed, s.idx, "smell") * 300), "dup": round(_u(s.seed, s.idx, "dup") * 12, 1),
             "date": (self.now - timedelta(days=age)).strftime("%Y-%m-%dT%H:%M:%S+0000"),
-            "gate": "Company Way" if s.has("sonar_company_gate") else "Sonar way", "error500": s.has("sonar_error_500"),
+            "gate": "Org Quality Gate" if s.has("sonar_company_gate") else "Sonar way", "error500": s.has("sonar_error_500"),
         }
 
     def aikido(self, s: RepoSpec) -> None:

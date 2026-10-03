@@ -42,3 +42,9 @@ Choices made where `docs/PLAN.md` was ambiguous or silent. Revisit them when rea
 - Server-rendered; Tailwind, HTMX and Chart.js come from CDNs. Offline use needs vendored copies.
 - No authentication in v1 and it binds to 127.0.0.1 by default. For a shared deployment put it behind Entra ID (Azure App Service Easy Auth).
 - There are no mutating HTTP routes at all (enforced by a test).
+
+## Configuration (T2)
+- **`APP_ENV`** (`dev|test|prod`, default `dev`) is the single profile switch; `settings.is_prod` etc. later milestones hang security policy on it. `get_settings()` stays cached; `reset_settings()` clears it. `host` stays `127.0.0.1` in every profile; the non-loopback bind policy is enforced in T5.
+- **YAML models are `extra="forbid"`**; all load failures raise `ConfigError` naming file and field path (input values are never echoed). Missing `scope.yaml`/`policy.yaml` use defaults in dev/test; in prod a missing `scope.yaml` is an error.
+- **No org-specific literals in code**: the Sonar gate default is `Sonar way`; the organisation's gate is set in `config/policy.yaml`. The synthetic demo uses a neutral `Org Quality Gate` name. Fixture/demo data still uses the fictional `contoso` org.
+- **`pch doctor`** (`pch/doctor.py`) never prints secret values (source credentials are `set`/`missing`; DB URL passwords are masked). `check_db_migrations` is the extension point for the T3 Alembic head check.

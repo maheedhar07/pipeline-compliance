@@ -4,6 +4,7 @@ from datetime import timedelta
 
 from pch.model.pipeline import Approval, DeploymentRecord, RunStats
 from pch.model.repo import ChangeRequest, Environment, RepoFacts
+from pch.settings import Policy
 from tests.builders import (
     NOW,
     AikidoFacts,
@@ -106,9 +107,11 @@ def test_qlt_003():
 
 
 def test_qlt_004():
-    assert one("QLT-004", ctx(sonar=SonarFacts(onboarded=True, gate_name="Company Way"))) == "PASS"
-    assert one("QLT-004", ctx(sonar=SonarFacts(onboarded=True, gate_name="Sonar way"))) == "FAIL"
-    assert one("QLT-004", ctx(sonar=SonarFacts(onboarded=True))) == "UNKNOWN"
+    org = Policy(sonar_quality_gate_name="Org Quality Gate")
+    assert one("QLT-004", ctx(sonar=SonarFacts(onboarded=True, gate_name="Org Quality Gate")), org) == "PASS"
+    assert one("QLT-004", ctx(sonar=SonarFacts(onboarded=True, gate_name="Sonar way")), org) == "FAIL"
+    assert one("QLT-004", ctx(sonar=SonarFacts(onboarded=True)), org) == "UNKNOWN"
+    assert one("QLT-004", ctx(sonar=SonarFacts(onboarded=True, gate_name="Sonar way")), Policy()) == "PASS"  # neutral default
 
 
 def test_qlt_005():

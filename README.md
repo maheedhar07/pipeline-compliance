@@ -55,7 +55,15 @@ The container image runs as a non-root user; the app port is bound to localhost 
    | `SONAR_URL`, `SONAR_TOKEN` | SonarQube base URL and a user token with *Browse* permission |
    | `AIKIDO_URL`, `AIKIDO_CLIENT_ID`, `AIKIDO_CLIENT_SECRET` | Aikido public API OAuth client credentials |
    | `SERVICENOW_URL`, `SERVICENOW_USER`, `SERVICENOW_PASSWORD` | ServiceNow user with read access to `change_request` |
+   | `APP_ENV` | `dev` (default), `test` or `prod`. In `prod` a missing `config/scope.yaml` is an error |
+   | `CONCURRENCY`, `HTTP_TIMEOUT` | Parallel requests (1-64) and per-request timeout seconds (>0, <=300) |
    | `DATABASE_URL` | `sqlite:///data/pch.db` (default) or `postgresql+psycopg://user:pw@host/db` |
+
+   URLs must be `http(s)` (trailing slashes are stripped). Invalid values stop startup with a clear error. `.env.example` lists every variable.
+
+   **`config/scope.yaml` and `config/policy.yaml`** ship as commented examples with placeholder values (`your-org`, `myorgacr.azurecr.io`); every field is documented inline. They are strictly validated: an unknown or mistyped key is an error such as `config/policy.yaml: waivers.0.expires: ...` (file plus field path). Set your organisation's Sonar quality gate via `sonar_quality_gate_name` (default `Sonar way`).
+
+   **Check your setup with `pch doctor`** (`--json` for machines). It checks that settings load, scope/policy validate, which sources are configured and whether each has its credentials (printed only as `set`/`missing`, never values), that the database answers `SELECT 1`, and that `DATA_DIR` is writable. Output is `OK`/`WARN`/`FAIL` per check; exit code 1 if any check fails.
 
 2. **ADO PAT scopes (all read-only):** Build (Read), Release (Read), Code (Read), Project and Team (Read), Service Connections (Read), Variable Groups (Read), Environment (Read), Task Groups (Read). Do not grant write, manage or execute scopes. The tool also refuses to send any non-GET request except the YAML `preview` call (`previewRun: true`).
 3. Edit `config/scope.yaml` (projects, per-repo overrides: `sonar_key`, `aikido_repo`, `owner`, `servicenow_ci`, `coverage_threshold`, environment-name to tier overrides) and `config/policy.yaml` (thresholds, Sonar gate name, Aikido SLAs, approved registries, marketplace allowlist, waivers).

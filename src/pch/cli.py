@@ -1,4 +1,4 @@
-"""Typer CLI: pch scan | serve | rules list | seed-demo."""
+"""Typer CLI: pch scan | serve | rules list | seed-demo | doctor."""
 
 from __future__ import annotations
 
@@ -102,12 +102,12 @@ def seed_demo(
         from datetime import date, timedelta
 
         waivers = [
-            {"rule": "SRC-004", "repo": f"{classic[0][0]}/{classic[0][1]}", "reason": "Classic pipeline until GitHub Actions migration (wave 3)", "owner": "platform-governance@contoso.com", "expires": (date.today() + timedelta(days=120)).isoformat()},
-            {"rule": "SUP-005", "repo": f"{classic[1][0]}/{classic[1][1]}", "reason": "SBOM tooling rollout in progress", "owner": "platform-governance@contoso.com", "expires": (date.today() - timedelta(days=15)).isoformat()},
-            {"rule": "QLT-001", "repo": f"{classic[2][0]}/{classic[2][1]}", "reason": "Legacy code base, Sonar onboarding scheduled", "owner": "platform-governance@contoso.com", "expires": (date.today() + timedelta(days=45)).isoformat()},
+            {"rule": "SRC-004", "repo": f"{classic[0][0]}/{classic[0][1]}", "reason": "Classic pipeline until GitHub Actions migration (wave 3)", "owner": "platform-governance@example.com", "expires": (date.today() + timedelta(days=120)).isoformat()},
+            {"rule": "SUP-005", "repo": f"{classic[1][0]}/{classic[1][1]}", "reason": "SBOM tooling rollout in progress", "owner": "platform-governance@example.com", "expires": (date.today() - timedelta(days=15)).isoformat()},
+            {"rule": "QLT-001", "repo": f"{classic[2][0]}/{classic[2][1]}", "reason": "Legacy code base, Sonar onboarding scheduled", "owner": "platform-governance@example.com", "expires": (date.today() + timedelta(days=45)).isoformat()},
         ]
     policy = {
-        "coverage_threshold": 80, "sonar_staleness_days": 14, "sonar_quality_gate_name": "Company Way", "prod_retention_days": 365,
+        "coverage_threshold": 80, "sonar_staleness_days": 14, "sonar_quality_gate_name": "Org Quality Gate", "prod_retention_days": 365,
         "marketplace_task_allowlist": ["SonarQubePrepare", "SonarQubeAnalyze", "SonarQubePublish", "ServiceNow-DevOps-Change", "Synapse workspace deployment", "TerraformTaskV4"],
         "approved_registries": ["contosoacr.azurecr.io"], "waivers": waivers,
     }
@@ -193,7 +193,13 @@ def scan(
     if not demo and not from_cache and not settings.ado_org:
         typer.echo("ADO_ORG is not set. Copy .env.example to .env, or try `pch seed-demo && pch scan --demo`.", err=True)
         raise typer.Exit(2)
-    asyncio.run(go())
+    from pch.settings import ConfigError
+
+    try:
+        asyncio.run(go())
+    except ConfigError as exc:
+        typer.echo(f"Config error: {exc}", err=True)
+        raise typer.Exit(2) from None
     sys.stdout.flush()
 
 
@@ -215,3 +221,26 @@ def serve(
         os.environ["DATABASE_URL"] = db
         get_settings.cache_clear()
     uvicorn.run("pch.web.app:create_app", factory=True, host=host or s.host, port=port or s.port, log_level="info")
+
+
+@app.command()
+def doctor(
+    json_out: bool = typer.Option(False, "--json", help="Emit JSON"),
+    scope_file: str | None = typer.Option(None, "--scope", help="Default: <CONFIG_DIR>/scope.yaml"),
+    policy_file: str | None = typer.Option(None, "--policy", help="Default: <CONFIG_DIR>/policy.yaml"),
+) -> None:
+    """Check settings, config files, source credentials (set/missing only), database and data dir. Exit 1 on any FAIL."""
+    import json
+    from pathlib import Path
+
+    from pch.doctor import FAIL, run_checks, to_dict
+
+    checks = run_checks(Path(scope_file) if scope_file else None, Path(policy_file) if policy_file else None)
+    if json_out:
+        typer.echo(json.dumps(to_dict(checks), indent=2))
+    else:
+        w = max(len(c.name) for c in checks)
+        for c in checks:
+            typer.echo(f"{c.status:<5} {c.name:<{w}}  {c.detail}")
+    if any(c.status == FAIL for c in checks):
+        raise typer.Exit(1)

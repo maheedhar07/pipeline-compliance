@@ -1,12 +1,24 @@
+# Compliance policy. Every key is optional (defaults shown); unknown keys are rejected at load time.
+# Validate with `pch doctor`. Replace the org-specific values below with your own.
+
+# Minimum line coverage (%) a repo must report (rule QLT-*). Per-repo override: scope.yaml repos[].coverage_threshold.
 coverage_threshold: 80
+# A Sonar analysis older than this many days counts as stale.
 sonar_staleness_days: 14
-sonar_quality_gate_name: "Company Way"
+# Name of the SonarQube quality gate your organisation mandates (rule QLT-004). "Sonar way" is the built-in default;
+# set this to your org's custom gate, e.g. "Acme Way".
+sonar_quality_gate_name: "Sonar way"
+# Minimum approvers on branch policy / release approvals.
 min_reviewers: 2
+# Max age in days of open Aikido findings, by severity.
 aikido_sla_days: {critical: 7, high: 30, medium: 90, low: 180}
+# Minimum days of build/release retention for production pipelines.
 prod_retention_days: 365
+# A pipeline with no run for this many days is stale.
 stale_pipeline_days: 90
+# Minimum share (0..1) of recent runs that must succeed.
 min_success_rate: 0.8
-# Marketplace (non-Microsoft) task allowlist: task names (without @version)
+# Marketplace (non-Microsoft) task allowlist: task names (without @version).
 marketplace_task_allowlist:
   - SonarQubePrepare
   - SonarQubeAnalyze
@@ -15,9 +27,15 @@ marketplace_task_allowlist:
   - SqlAzureDacpacDeployment
   - Synapse workspace deployment
   - replacetokens
+# Container registries images may be pulled from. Replace with your registry hostnames.
 approved_registries:
-  - contosoacr.azurecr.io
+  - myorgacr.azurecr.io
+# Branch names/globs that count as release branches.
 approved_branches: ["main", "master", "release/*", "releases/*"]
-# waivers: turn a FAIL into WAIVED until `expires`
+# Environment tiers (test/uat/prod ...) that must have a smoke-check step.
+smoke_check_required_tiers: ["test", "uat", "prod"]
+# Overall score (0..100) at or above which a repo is "compliant".
+compliant_score_threshold: 80
+# Waivers turn a FAIL into WAIVED until `expires` (ISO date). repo is "<project>/<repo>".
 waivers: []
-#  - {rule: SRC-004, repo: "Payments/payments-api", reason: "Classic until GHA migration", owner: "jane@contoso.com", expires: 2027-03-31}
+#  - {rule: SRC-004, repo: "Payments/payments-api", reason: "Classic until GHA migration", owner: "jane@example.com", expires: 2027-03-31}
