@@ -436,3 +436,27 @@ def test_cli_scan_refuses_when_not_at_head_in_prod(raw_url, tmp_path, monkeypatc
         assert r.exit_code != 0
     finally:
         reset_settings()
+
+
+@pytest.mark.skipif(bool(REMOTE), reason="sqlite-only regression")
+def test_cli_scan_uses_database_url_even_with_custom_data_dir(tmp_path, monkeypatch):
+    """Regression: --data-dir must not silently switch the scan to a different sqlite DB."""
+    from pch.settings import reset_settings
+
+    dburl = f"sqlite:///{tmp_path}/real.db"
+    data = tmp_path / "elsewhere"
+    monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setenv("DATABASE_URL", dburl)
+    reset_settings()
+    reset_engines()
+    try:
+        assert runner.invoke(app, ["db", "upgrade"]).exit_code == 0
+        assert runner.invoke(app, ["seed-demo", "--repos", "12", "--data-dir", str(data)]).exit_code == 0
+        r = runner.invoke(app, ["scan", "--demo", "--history", "0", "--data-dir", str(data)])
+        assert r.exit_code == 0, r.output
+        with session_scope(dburl) as s:
+            assert store.latest_scan(s) is not None
+        assert not (data / "pch.db").exists()
+    finally:
+        reset_settings()
+        reset_engines()

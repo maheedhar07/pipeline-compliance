@@ -10,7 +10,7 @@ from pch.cli import app
 from pch.settings import ConfigError, Policy, Settings, get_settings, load_policy, load_scope, reset_settings
 
 REPO = Path(__file__).resolve().parent.parent
-SECRETS = {"ADO_PAT": "pat-S3CRET-1", "SONAR_TOKEN": "sonar-S3CRET-2", "AIKIDO_CLIENT_SECRET": "aik-S3CRET-3", "SERVICENOW_PASSWORD": "snow-S3CRET-4"}
+SECRETS = {k: f"fake-{k.lower().replace('_', '-')}-value" for k in ("ADO_PAT", "SONAR_TOKEN", "AIKIDO_CLIENT_SECRET", "SERVICENOW_PASSWORD")}  # obviously fake, low entropy
 ALL_ENV = ["APP_ENV", "DATABASE_URL", "DATA_DIR", "CONFIG_DIR", "ADO_ORG", "SONAR_URL", "AIKIDO_CLIENT_ID", "SERVICENOW_URL", "SERVICENOW_USER", "CONCURRENCY", "HTTP_TIMEOUT", "PORT", *SECRETS]
 
 

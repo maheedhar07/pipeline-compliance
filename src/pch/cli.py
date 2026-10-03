@@ -224,7 +224,17 @@ def scan(
     from pch.timeutil import utcnow_naive
 
     settings = get_settings()
-    db_url = db or (settings.database_url if data_dir == "data" else f"sqlite:///{data_dir}/pch.db")
+    # An explicitly configured DATABASE_URL always wins. Only when it is still the built-in default does a
+    # non-default --data-dir relocate the sqlite file next to the data.
+    from pch.settings import Settings
+
+    default_url = Settings.model_fields["database_url"].default
+    if db:
+        db_url = db
+    elif data_dir != "data" and settings.database_url == default_url:
+        db_url = f"sqlite:///{data_dir}/pch.db"
+    else:
+        db_url = settings.database_url
     data_path = Path(data_dir)
     stale = timedelta(minutes=settings.scan_lock_stale_minutes)
 
