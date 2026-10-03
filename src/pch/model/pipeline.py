@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any, Literal
 
@@ -42,6 +43,21 @@ class Step(BaseModel):
     inline_script: str | None = None
     marketplace: bool = False
     deprecated: bool = False
+
+    @property
+    def always_false(self) -> bool:
+        return bool(self.condition and _ALWAYS_FALSE.match(self.condition))
+
+    @property
+    def effective(self) -> bool:
+        """The step really runs and its failure fails the build."""
+        return self.enabled and not self.continue_on_error and not self.always_false
+
+
+_ALWAYS_FALSE = re.compile(
+    r"^\s*(false|ne\(\s*true\s*,\s*true\s*\)|eq\(\s*(true\s*,\s*false|false\s*,\s*true|0\s*,\s*1|1\s*,\s*0|1\s*,\s*2|2\s*,\s*1)\s*\))\s*$",
+    re.I,
+)
 
 
 class Approval(BaseModel):

@@ -1,0 +1,38 @@
+{
+ "component": {
+  "key": "contoso_payments-api",
+  "measures": [
+   {
+    "metric": "coverage",
+    "value": "81.2"
+   },
+   {
+    "metric": "bugs",
+    "value": "3"
+   },
+   {
+    "metric": "vulnerabilities",
+    "value": "0"
+   },
+   {
+    "metric": "security_hotspots",
+    "value": "2"
+   },
+   {
+    "metric": "code_smells",
+    "value": "41"
+   },
+   {
+    "metric": "duplicated_lines_density",
+    "value": "2.4"
+   },
+   {
+    "metric": "new_coverage",
+    "period": {
+     "index": 1,
+     "value": "88.0"
+    }
+   }
+  ]
+ }
+}

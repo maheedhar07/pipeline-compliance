@@ -1,0 +1,6 @@
+{
+ "qualityGate": {
+  "name": "Company Way",
+  "default": false
+ }
+}

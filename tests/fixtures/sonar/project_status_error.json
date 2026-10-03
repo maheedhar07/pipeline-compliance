@@ -1,0 +1,11 @@
+{
+ "projectStatus": {
+  "status": "ERROR",
+  "conditions": [
+   {
+    "status": "ERROR",
+    "metricKey": "new_coverage"
+   }
+  ]
+ }
+}

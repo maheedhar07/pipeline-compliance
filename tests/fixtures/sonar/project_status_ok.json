@@ -1,0 +1,12 @@
+{
+ "projectStatus": {
+  "status": "OK",
+  "conditions": [
+   {
+    "status": "OK",
+    "metricKey": "new_coverage",
+    "actualValue": "85.2"
+   }
+  ]
+ }
+}
