@@ -40,3 +40,152 @@ def rules_list(
     for r in rules:
         typer.echo(f"{r.id:<13}{r.severity.value:<10}{r.scope:<10}{r.title}")
     typer.echo(f"\n{len(rules)} rules")
+
+
+# ----------------------------------------------------------------------------- demo / scan / serve
+DEMO_DIR = "demo"
+
+
+def _demo_paths(data_dir: str):
+    from pathlib import Path
+
+    d = Path(data_dir) / DEMO_DIR
+    return d, d / "world.json.gz", d / "scope.yaml", d / "policy.yaml"
+
+
+@app.command("seed-demo")
+def seed_demo(
+    repos: int = typer.Option(280, help="Number of synthetic repositories"),
+    seed: int = typer.Option(42, help="Random seed (deterministic)"),
+    data_dir: str = typer.Option("data", help="Data directory"),
+) -> None:
+    """Generate synthetic RAW API payloads for ~280 repos (no credentials, no network)."""
+    import yaml
+
+    from pch.demo.generator import generate_world
+    from pch.demo.transport import save_world
+
+    d, world_f, scope_f, policy_f = _demo_paths(data_dir)
+    world = generate_world(seed=seed, repos=repos)
+    save_world(world, world_f)
+    scope = {"organization": world["meta"]["org"], "projects": world["meta"]["projects"], "repos": world["scope_repos"], "env_tiers": {}, "exclude_repos": []}
+    scope_f.write_text(yaml.safe_dump(scope, sort_keys=False))
+    classic = [(p, v["repository"]["name"]) for p, pr in world["ado"].items() for v in pr["build_defs"].values() if (v.get("process") or {}).get("type") == 1][:6]
+    waivers = []
+    if len(classic) >= 3:
+        from datetime import date, timedelta
+
+        waivers = [
+            {"rule": "SRC-004", "repo": f"{classic[0][0]}/{classic[0][1]}", "reason": "Classic pipeline until GitHub Actions migration (wave 3)", "owner": "platform-governance@contoso.com", "expires": (date.today() + timedelta(days=120)).isoformat()},
+            {"rule": "SUP-005", "repo": f"{classic[1][0]}/{classic[1][1]}", "reason": "SBOM tooling rollout in progress", "owner": "platform-governance@contoso.com", "expires": (date.today() - timedelta(days=15)).isoformat()},
+            {"rule": "QLT-001", "repo": f"{classic[2][0]}/{classic[2][1]}", "reason": "Legacy code base, Sonar onboarding scheduled", "owner": "platform-governance@contoso.com", "expires": (date.today() + timedelta(days=45)).isoformat()},
+        ]
+    policy = {
+        "coverage_threshold": 80, "sonar_staleness_days": 14, "sonar_quality_gate_name": "Company Way", "prod_retention_days": 365,
+        "marketplace_task_allowlist": ["SonarQubePrepare", "SonarQubeAnalyze", "SonarQubePublish", "ServiceNow-DevOps-Change", "Synapse workspace deployment", "TerraformTaskV4"],
+        "approved_registries": ["contosoacr.azurecr.io"], "waivers": waivers,
+    }
+    policy_f.write_text(yaml.safe_dump(policy, sort_keys=False))
+    typer.echo(f"Seeded {repos} repos in {len(world['ado'])} projects -> {world_f}")
+    typer.echo("Next: pch scan --demo && pch serve")
+
+
+@app.command()
+def scan(
+    demo: bool = typer.Option(False, "--demo", help="Scan the synthetic demo estate (no credentials)"),
+    from_cache: str | None = typer.Option(None, "--from-cache", help="Replay the cached raw responses of a previous scan id"),
+    cache: bool | None = typer.Option(None, "--cache/--no-cache", help="Cache redacted raw responses under data/raw/<scan_id> (default: on for live, off for demo)"),
+    history: int = typer.Option(3, help="Demo only: also create N older snapshots so trends have data"),
+    data_dir: str = typer.Option("data", help="Data directory"),
+    db: str | None = typer.Option(None, "--db", help="Database URL (default DATABASE_URL / sqlite:///data/pch.db)"),
+    scope_file: str = typer.Option("config/scope.yaml", "--scope"),
+    policy_file: str = typer.Option("config/policy.yaml", "--policy"),
+) -> None:
+    """Collect, evaluate and store a compliance scan snapshot (read-only)."""
+    import asyncio
+    import sys
+    from datetime import datetime, timedelta
+    from pathlib import Path
+
+    from pch.orchestrator import ScanConfig, Scanner
+    from pch.settings import get_settings, load_policy, load_scope
+    from pch.sources import cache_sources, demo_sources, live_sources
+
+    settings = get_settings()
+    db_url = db or (settings.database_url if data_dir == "data" else f"sqlite:///{data_dir}/pch.db")
+    data_path = Path(data_dir)
+
+    def progress(done: int, total: int) -> None:
+        typer.echo(f"  scanned {done}/{total} repos", err=True)
+
+    async def go() -> None:
+        if demo:
+            from pch.demo.generator import generate_world
+            from pch.demo.transport import load_world, parse_world_time
+
+            d, world_f, scope_f, policy_f = _demo_paths(data_dir)
+            if not world_f.exists():
+                typer.echo("No demo data found, run `pch seed-demo` first.", err=True)
+                raise typer.Exit(1)
+            scope, policy = load_scope(scope_f), load_policy(policy_f if policy_f.exists() else policy_file)
+            world = load_world(world_f)
+            meta = world["meta"]
+            now0 = parse_world_time(world)
+            snapshots = []
+            for k in range(history, 0, -1):  # older, lower-quality snapshots (for the trend chart)
+                w = generate_world(meta["seed"], meta["repos"], meta["quality_shift"] - 0.05 * k, now0 - timedelta(days=14 * k))
+                snapshots.append((w, now0 - timedelta(days=14 * k)))
+            snapshots.append((world, now0))
+            for w, now in snapshots:
+                scan_id = f"{now:%Y%m%d-%H%M%S}-demo"
+                record = (data_path / "raw" / scan_id) if cache else None
+                src = demo_sources(w, record_to=record)
+                cfg = ScanConfig(scope=scope, policy=policy, db_url=db_url, mode="demo", now=now)
+                typer.echo(f"Scanning demo estate {scan_id} ...", err=True)
+                try:
+                    res = await Scanner(src, cfg, progress).run(scan_id)
+                finally:
+                    await src.aclose()
+                typer.echo(f"  {res.repos} repos, {res.findings} findings, {res.errors} collection errors, {res.duration_s}s, {res.status_counts}")
+            return
+        scope, policy = load_scope(scope_file), load_policy(policy_file)
+        now = datetime.utcnow()
+        if from_cache:
+            scan_id, src = f"{now:%Y%m%d-%H%M%S}-cache", cache_sources(data_path / "raw" / from_cache, settings)
+            mode = "cache"
+        else:
+            scan_id = f"{now:%Y%m%d-%H%M%S}-live"
+            src = live_sources(settings, record_to=(data_path / "raw" / scan_id) if cache is not False else None)
+            mode = "live"
+        cfg = ScanConfig(scope=scope, policy=policy, db_url=db_url, mode=mode, now=now)
+        try:
+            res = await Scanner(src, cfg, progress).run(scan_id)
+        finally:
+            await src.aclose()
+        typer.echo(f"{res.repos} repos, {res.findings} findings, {res.errors} collection errors, {res.duration_s}s, {res.status_counts}")
+
+    if not demo and not from_cache and not settings.ado_org:
+        typer.echo("ADO_ORG is not set. Copy .env.example to .env, or try `pch seed-demo && pch scan --demo`.", err=True)
+        raise typer.Exit(2)
+    asyncio.run(go())
+    sys.stdout.flush()
+
+
+@app.command()
+def serve(
+    host: str = typer.Option(None, help="Bind address (default 127.0.0.1)"),
+    port: int = typer.Option(None, help="Port (default 8000)"),
+    db: str | None = typer.Option(None, "--db"),
+) -> None:
+    """Start the dashboard (report-only, no auth, binds to localhost by default)."""
+    import os
+
+    import uvicorn
+
+    from pch.settings import get_settings
+
+    s = get_settings()
+    if db:
+        os.environ["DATABASE_URL"] = db
+        get_settings.cache_clear()
+    uvicorn.run("pch.web.app:create_app", factory=True, host=host or s.host, port=port or s.port, log_level="info")

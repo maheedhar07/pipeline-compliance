@@ -262,10 +262,12 @@ def test_sec_001():
 def test_sec_002():
     prod = stage("Prod", [step("AzureWebApp@1")], tier="prod", env="p")
     kv = VariableGroup(id="1", name="kv", key_vault_linked=True)
-    plain = VariableGroup(id="2", name="plain")
+    plain = VariableGroup(id="2", name="plain-prod", has_secrets=True)
+    benign = VariableGroup(id="3", name="common")
     mk = lambda g: pipe([prod], variable_groups=[VariableGroupRef(id=g.id, name=g.name)])  # noqa: E731
     assert one("SEC-002", ctx([mk(kv)], groups=[kv])) == "PASS"
     assert one("SEC-002", ctx([mk(plain)], groups=[plain])) == "FAIL"
+    assert one("SEC-002", ctx([mk(benign)], groups=[benign])) == "PASS"  # non-secret config group
     assert one("SEC-002", ctx([mk(kv)])) == "UNKNOWN"
     assert statuses("SEC-002", ctx([pipe([prod])])) == []
 

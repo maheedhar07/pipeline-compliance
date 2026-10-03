@@ -32,7 +32,7 @@ def sec_001(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
 
 
 @rule(
-    "SEC-002", "Variable groups used for production are Key Vault-linked", "high", "pipeline",
+    "SEC-002", "Variable groups holding production secrets are Key Vault-linked", "high", "pipeline",
     "Key Vault-linked groups keep secrets out of Azure DevOps and give central rotation and audit.",
     {"any": "Link the production variable group to Azure Key Vault (Library > variable group > 'Link secrets from an Azure key vault')."},
     tiers={"prod"},
@@ -47,7 +47,7 @@ def sec_002(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
         vg = lookup(ctx.variable_groups, g.id or "") or lookup(ctx.variable_groups, g.name)
         if vg is None:
             unknown.append(g.name)
-        elif not vg.key_vault_linked:
+        elif not vg.key_vault_linked and (vg.has_secrets or "prod" in vg.name.lower()):
             plain.append(g.name)
     if plain:
         return RuleResult.failed("not Key Vault-linked: " + ", ".join(plain), groups=plain)

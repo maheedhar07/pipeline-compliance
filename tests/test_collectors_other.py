@@ -135,7 +135,7 @@ async def test_variable_groups(fx):
     vg = await collect_variable_groups(c, "P")
     await c.aclose()
     assert not vg["payments-common"].key_vault_linked and vg["6"].key_vault_linked
-    assert "value" not in vg["5"].model_dump()
+    assert "value" not in vg["5"].model_dump() and vg["6"].has_secrets and not vg["5"].has_secrets
 
 
 # ------------------------------------------------------------- environments

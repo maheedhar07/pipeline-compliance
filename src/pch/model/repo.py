@@ -91,6 +91,7 @@ class VariableGroup(BaseModel):
     id: str
     name: str
     key_vault_linked: bool = False
+    has_secrets: bool = False  # any variable is marked secret (values are never read)
 
 
 class Environment(BaseModel):
