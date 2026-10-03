@@ -1,0 +1,15 @@
+# Which Azure DevOps organization / projects / repos are in scope.
+organization: contoso
+projects: []            # empty = discover all projects in the organization
+exclude_repos: []       # e.g. ["Sandbox/scratch-repo"]
+# Name -> tier overrides applied BEFORE the name regex (stage or environment names).
+env_tiers: {}
+# Per-repo overrides (all optional):
+repos: []
+#  - project: Payments
+#    repo: payments-api
+#    sonar_key: contoso_payments-api
+#    aikido_repo: payments-api
+#    owner: team-payments@contoso.com
+#    servicenow_ci: payments-api
+#    coverage_threshold: 70
