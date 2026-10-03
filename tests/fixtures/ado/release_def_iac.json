@@ -1,0 +1,134 @@
+{
+ "id": 36,
+ "name": "iac-CD",
+ "path": "\\",
+ "artifacts": [
+  {
+   "alias": "_build",
+   "type": "Build",
+   "isPrimary": true,
+   "definitionReference": {
+    "definition": {
+     "id": "12",
+     "name": "build-12"
+    },
+    "project": {
+     "name": "Payments"
+    }
+   }
+  }
+ ],
+ "triggers": [
+  {
+   "triggerType": "artifactSource",
+   "artifactAlias": "_build",
+   "triggerConditions": [
+    {
+     "sourceBranch": "main",
+     "tags": [],
+     "useBuildDefinitionBranch": false
+    }
+   ]
+  }
+ ],
+ "environments": [
+  {
+   "id": 1,
+   "name": "Dev",
+   "rank": 1,
+   "conditions": [
+    {
+     "name": "ReleaseStarted",
+     "conditionType": 1,
+     "value": ""
+    }
+   ],
+   "preDeployApprovals": {
+    "approvals": [
+     {
+      "rank": 1,
+      "isAutomated": true,
+      "isNotificationOn": false
+     }
+    ],
+    "approvalOptions": {
+     "requiredApproverCount": null,
+     "releaseCreatorCanBeApprover": true
+    }
+   },
+   "postDeployApprovals": {
+    "approvals": [
+     {
+      "rank": 1,
+      "isAutomated": true
+     }
+    ]
+   },
+   "preDeploymentGates": {
+    "gates": [],
+    "gatesOptions": {
+     "isEnabled": false,
+     "timeout": 1440
+    }
+   },
+   "postDeploymentGates": {
+    "gates": [],
+    "gatesOptions": {
+     "isEnabled": false,
+     "timeout": 1440
+    }
+   },
+   "deployPhases": [
+    {
+     "name": "Agent job",
+     "phaseType": 1,
+     "workflowTasks": [
+      {
+       "taskId": "2fc9fced-8c26-555a-82cb-bc1da4b77b20",
+       "version": "3.*",
+       "name": "Validate",
+       "enabled": true,
+       "continueOnError": false,
+       "alwaysRun": false,
+       "inputs": {
+        "azureResourceManagerConnection": "conn-dev",
+        "deploymentMode": "Validation",
+        "csmFile": "main.json"
+       }
+      },
+      {
+       "taskId": "2fc9fced-8c26-555a-82cb-bc1da4b77b20",
+       "version": "3.*",
+       "name": "Deploy",
+       "enabled": true,
+       "continueOnError": false,
+       "alwaysRun": false,
+       "inputs": {
+        "azureResourceManagerConnection": "conn-dev",
+        "deploymentMode": "Incremental",
+        "csmFile": "main.json"
+       }
+      }
+     ]
+    }
+   ],
+   "retentionPolicy": {
+    "daysToKeep": 30,
+    "releasesToKeep": 3,
+    "retainBuild": true
+   },
+   "variables": {}
+  }
+ ],
+ "variables": {},
+ "variableGroups": [],
+ "modifiedBy": {
+  "displayName": "Jane Doe",
+  "uniqueName": "jane.doe@contoso.com"
+ },
+ "_links": {
+  "web": {
+   "href": "https://dev.azure.com/contoso/Payments/_release?definitionId=36"
+  }
+ }
+}

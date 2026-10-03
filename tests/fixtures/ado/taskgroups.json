@@ -1,0 +1,44 @@
+{
+ "count": 1,
+ "value": [
+  {
+   "id": "e9ce56db-091c-5969-b8e3-36f2a4c4694a",
+   "name": "Sonar Standard",
+   "tasks": [
+    {
+     "environment": {},
+     "enabled": true,
+     "continueOnError": false,
+     "alwaysRun": false,
+     "displayName": "Prepare",
+     "timeoutInMinutes": 0,
+     "condition": "succeeded()",
+     "task": {
+      "id": "ca6d76a9-24d5-5b9a-be18-19ef0a47e5bc",
+      "versionSpec": "5.*",
+      "definitionType": "task"
+     },
+     "inputs": {
+      "SonarQube": "sonar-conn",
+      "projectKey": "p"
+     }
+    },
+    {
+     "environment": {},
+     "enabled": true,
+     "continueOnError": false,
+     "alwaysRun": false,
+     "displayName": "Analyze",
+     "timeoutInMinutes": 0,
+     "condition": "succeeded()",
+     "task": {
+      "id": "c95cfac5-da77-5582-bc47-b5e7e51acccc",
+      "versionSpec": "5.*",
+      "definitionType": "task"
+     },
+     "inputs": {}
+    }
+   ]
+  }
+ ]
+}

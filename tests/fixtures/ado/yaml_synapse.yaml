@@ -1,0 +1,11 @@
+stages:
+  - stage: Dev
+    jobs:
+      - deployment: d
+        environment: syn-dev
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: Synapse workspace deployment@2
+                  inputs: {azureSubscription: c, TargetWorkspaceName: syn-dev, operation: validateDeploy}

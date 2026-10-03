@@ -1,0 +1,319 @@
+{
+ "count": 28,
+ "value": [
+  {
+   "id": "ca6d76a9-24d5-5b9a-be18-19ef0a47e5bc",
+   "name": "SonarQubePrepare",
+   "friendlyName": "SonarQubePrepare",
+   "author": "SonarSource",
+   "version": {
+    "major": 5,
+    "minor": 0,
+    "patch": 0
+   },
+   "contributionIdentifier": "SonarSource.sonarqube"
+  },
+  {
+   "id": "c95cfac5-da77-5582-bc47-b5e7e51acccc",
+   "name": "SonarQubeAnalyze",
+   "friendlyName": "SonarQubeAnalyze",
+   "author": "SonarSource",
+   "version": {
+    "major": 5,
+    "minor": 0,
+    "patch": 0
+   },
+   "contributionIdentifier": "SonarSource.sonarqube"
+  },
+  {
+   "id": "31dc6072-7521-5d1d-888f-0701b32fa6aa",
+   "name": "SonarQubePublish",
+   "friendlyName": "SonarQubePublish",
+   "author": "SonarSource",
+   "version": {
+    "major": 5,
+    "minor": 0,
+    "patch": 0
+   },
+   "contributionIdentifier": "SonarSource.sonarqube"
+  },
+  {
+   "id": "c192fbd1-5f54-51b7-b3e3-af3e93b11be1",
+   "name": "DotNetCoreCLI",
+   "friendlyName": "DotNetCoreCLI",
+   "author": "Microsoft Corporation",
+   "version": {
+    "major": 2,
+    "minor": 0,
+    "patch": 0
+   }
+  },
+  {
+   "id": "5c280ed2-b5b9-5b2b-9a12-f640e22070aa",
+   "name": "VSTest",
+   "friendlyName": "VSTest",
+   "author": "Microsoft Corporation",
+   "version": {
+    "major": 2,
+    "minor": 0,
+    "patch": 0
+   }
+  },
+  {
+   "id": "d92e0f16-b129-56a1-8713-5456c5755fc8",
+   "name": "PublishTestResults",
+   "friendlyName": "PublishTestResults",
+   "author": "Microsoft Corporation",
+   "version": {
+    "major": 2,
+    "minor": 0,
+    "patch": 0
+   }
+  },
+  {
+   "id": "2617d73a-a268-5d7f-a8cd-5596f0419c51",
+   "name": "PublishCodeCoverageResults",
+   "friendlyName": "PublishCodeCoverageResults",
+   "author": "Microsoft Corporation",
+   "version": {
+    "major": 1,
+    "minor": 0,
+    "patch": 0
+   }
+  },
+  {
+   "id": "5be038e7-69e3-5407-9624-ccaec3685446",
+   "name": "PublishBuildArtifacts",
+   "friendlyName": "PublishBuildArtifacts",
+   "author": "Microsoft Corporation",
+   "version": {
+    "major": 1,
+    "minor": 0,
+    "patch": 0
+   }
+  },
+  {
+   "id": "f11b4ad7-d6e1-5c51-b904-c40f61313a0b",
+   "name": "PublishPipelineArtifact",
+   "friendlyName": "PublishPipelineArtifact",
+   "author": "Microsoft Corporation",
+   "version": {
+    "major": 1,
+    "minor": 0,
+    "patch": 0
+   }
+  },
+  {
+   "id": "22497862-499a-584e-9e2c-03566ceeaeb0",
+   "name": "DownloadPipelineArtifact",
+   "friendlyName": "DownloadPipelineArtifact",
+   "author": "Microsoft Corporation",
+   "version": {
+    "major": 2,
+    "minor": 0,
+    "patch": 0
+   }
+  },
+  {
+   "id": "bf05b349-5e57-5c77-8adb-e9e574ecb20e",
+   "name": "AzureFunctionApp",
+   "friendlyName": "AzureFunctionApp",
+   "author": "Microsoft Corporation",
+   "version": {
+    "major": 1,
+    "minor": 0,
+    "patch": 0
+   }
+  },
+  {
+   "id": "bf05b349-5e57-5c77-8adb-e9e574ecb20e",
+   "name": "AzureFunctionApp",
+   "friendlyName": "AzureFunctionApp",
+   "author": "Microsoft Corporation",
+   "version": {
+    "major": 2,
+    "minor": 0,
+    "patch": 0
+   }
+  },
+  {
+   "id": "994e52e2-3ca8-59f2-8dd2-548afe91b4f0",
+   "name": "AzureWebApp",
+   "friendlyName": "AzureWebApp",
+   "author": "Microsoft Corporation",
+   "version": {
+    "major": 1,
+    "minor": 0,
+    "patch": 0
+   }
+  },
+  {
+   "id": "03ac2792-ad44-5c03-b156-9a5d70c18143",
+   "name": "AzureRmWebAppDeployment",
+   "friendlyName": "AzureRmWebAppDeployment",
+   "author": "Microsoft Corporation",
+   "version": {
+    "major": 4,
+    "minor": 0,
+    "patch": 0
+   }
+  },
+  {
+   "id": "c9b7dcff-c44e-5ffe-a060-37ac20aa3700",
+   "name": "AzureAppServiceManage",
+   "friendlyName": "AzureAppServiceManage",
+   "author": "Microsoft Corporation",
+   "version": {
+    "major": 0,
+    "minor": 0,
+    "patch": 0
+   }
+  },
+  {
+   "id": "5387ab97-2b3b-5ff6-926b-d8fed7008a42",
+   "name": "KubernetesManifest",
+   "friendlyName": "KubernetesManifest",
+   "author": "Microsoft Corporation",
+   "version": {
+    "major": 1,
+    "minor": 0,
+    "patch": 0
+   }
+  },
+  {
+   "id": "45ab224c-5482-53b0-beb1-283f11fc1178",
+   "name": "HelmDeploy",
+   "friendlyName": "HelmDeploy",
+   "author": "Microsoft Corporation",
+   "version": {
+    "major": 0,
+    "minor": 0,
+    "patch": 0
+   }
+  },
+  {
+   "id": "2fc9fced-8c26-555a-82cb-bc1da4b77b20",
+   "name": "AzureResourceManagerTemplateDeployment",
+   "friendlyName": "AzureResourceManagerTemplateDeployment",
+   "author": "Microsoft Corporation",
+   "version": {
+    "major": 3,
+    "minor": 0,
+    "patch": 0
+   }
+  },
+  {
+   "id": "a553e20e-586e-50ca-be55-df25ff623f93",
+   "name": "AzureCLI",
+   "friendlyName": "AzureCLI",
+   "author": "Microsoft Corporation",
+   "version": {
+    "major": 2,
+    "minor": 0,
+    "patch": 0
+   }
+  },
+  {
+   "id": "8a2a2ca1-b005-5985-83ce-ad980b559e1e",
+   "name": "AzurePowerShell",
+   "friendlyName": "AzurePowerShell",
+   "author": "Microsoft Corporation",
+   "version": {
+    "major": 5,
+    "minor": 0,
+    "patch": 0
+   }
+  },
+  {
+   "id": "944dd819-7fe7-5820-8b70-843cad26a7f0",
+   "name": "Synapse workspace deployment",
+   "friendlyName": "Synapse workspace deployment",
+   "author": "Microsoft DevLabs",
+   "version": {
+    "major": 2,
+    "minor": 0,
+    "patch": 0
+   },
+   "contributionIdentifier": "microsoft-devlabs.synapsecicd"
+  },
+  {
+   "id": "dbed6992-9ba9-587e-96d1-1d117afec2d7",
+   "name": "SqlAzureDacpacDeployment",
+   "friendlyName": "SqlAzureDacpacDeployment",
+   "author": "Microsoft Corporation",
+   "version": {
+    "major": 1,
+    "minor": 0,
+    "patch": 0
+   }
+  },
+  {
+   "id": "3577cadb-0547-5113-bfc0-fa2813b5105c",
+   "name": "ServiceNow-DevOps-Change",
+   "friendlyName": "ServiceNow-DevOps-Change",
+   "author": "ServiceNow",
+   "version": {
+    "major": 1,
+    "minor": 0,
+    "patch": 0
+   },
+   "contributionIdentifier": "ServiceNow.devops"
+  },
+  {
+   "id": "f14a6611-30e0-5c15-be74-6ac1599ea938",
+   "name": "Docker",
+   "friendlyName": "Docker",
+   "author": "Microsoft Corporation",
+   "version": {
+    "major": 2,
+    "minor": 0,
+    "patch": 0
+   }
+  },
+  {
+   "id": "402a5aec-63be-595c-820f-6b07cdca037f",
+   "name": "Npm",
+   "friendlyName": "Npm",
+   "author": "Microsoft Corporation",
+   "version": {
+    "major": 1,
+    "minor": 0,
+    "patch": 0
+   }
+  },
+  {
+   "id": "dda751f6-e9a3-5951-8f0f-3b26d2a5aa1d",
+   "name": "InvokeRESTAPI",
+   "friendlyName": "InvokeRESTAPI",
+   "author": "Microsoft Corporation",
+   "version": {
+    "major": 1,
+    "minor": 0,
+    "patch": 0
+   }
+  },
+  {
+   "id": "e4c60a0d-0e8b-5e07-b54c-34fd8e4923b6",
+   "name": "replacetokens",
+   "friendlyName": "replacetokens",
+   "author": "Guillaume Rouchon",
+   "version": {
+    "major": 5,
+    "minor": 0,
+    "patch": 0
+   },
+   "contributionIdentifier": "qetza.replacetokens"
+  },
+  {
+   "id": "0e16e161-3465-5dda-9dc8-e323b8850ab6",
+   "name": "AzureResourceGroupDeployment",
+   "friendlyName": "AzureResourceGroupDeployment",
+   "author": "Microsoft Corporation",
+   "version": {
+    "major": 2,
+    "minor": 0,
+    "patch": 0
+   }
+  }
+ ]
+}

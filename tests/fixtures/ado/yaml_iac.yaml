@@ -1,0 +1,11 @@
+stages:
+  - stage: Dev
+    jobs:
+      - deployment: d
+        environment: iac-dev
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - script: az deployment group what-if -g rg -f main.bicep
+                - script: az deployment group create -g rg -f main.bicep

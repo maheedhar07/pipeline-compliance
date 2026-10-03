@@ -1,0 +1,11 @@
+stages:
+  - stage: Prod
+    jobs:
+      - deployment: d
+        environment: sql-prod
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: SqlAzureDacpacDeployment@1
+                  inputs: {azureSubscription: c, DacpacFile: out/db.dacpac, AdditionalArguments: "/p:BlockOnPossibleDataLoss=false"}

@@ -1,0 +1,20 @@
+# Deprecated / superseded Azure Pipelines tasks. DATA: adjust to your estate.
+# A step is flagged when its task name matches and its major version is below `below_major`.
+deprecated:
+  - {task: AzureResourceGroupDeployment, below_major: 99, replacement: AzureResourceManagerTemplateDeployment@3}
+  - {task: AzureFunctionApp, below_major: 2, replacement: "AzureFunctionApp@2"}
+  - {task: AzureCLI, below_major: 2, replacement: "AzureCLI@2"}
+  - {task: AzurePowerShell, below_major: 5, replacement: "AzurePowerShell@5"}
+  - {task: AzureRmWebAppDeployment, below_major: 4, replacement: "AzureRmWebAppDeployment@4"}
+  - {task: DotNetCoreCLI, below_major: 2, replacement: "DotNetCoreCLI@2"}
+  - {task: Docker, below_major: 2, replacement: "Docker@2"}
+  - {task: VSTest, below_major: 2, replacement: "VSTest@2"}
+  - {task: Npm, below_major: 1, replacement: "Npm@1"}
+  - {task: Kubernetes, below_major: 1, replacement: "KubernetesManifest@1"}
+  - {task: KubernetesManifest, below_major: 1, replacement: "KubernetesManifest@1"}
+  - {task: SonarQubePrepare, below_major: 5, replacement: "SonarQubePrepare@5"}
+  - {task: SonarQubeAnalyze, below_major: 5, replacement: "SonarQubeAnalyze@5"}
+  - {task: SonarQubePublish, below_major: 5, replacement: "SonarQubePublish@5"}
+  - {task: Maven, below_major: 3, replacement: "Maven@3"}
+  - {task: ArchiveFiles, below_major: 2, replacement: "ArchiveFiles@2"}
+  - {task: NodeTool, below_major: 0, replacement: "NodeTool@0"}

@@ -1,0 +1,49 @@
+trigger:
+  branches:
+    include: [main]
+variables:
+  - group: payments-common
+  - name: dbPassword
+    value: abcdefg123
+  - name: Config
+    value: Release
+stages:
+  - stage: Build
+    jobs:
+      - job: build
+        pool: {vmImage: ubuntu-latest}
+        steps:
+          - task: SonarQubePrepare@5
+            inputs: {SonarQube: sonar, projectKey: k}
+          - task: DotNetCoreCLI@2
+            displayName: Test
+            inputs: {command: test}
+            continueOnError: true
+          - task: SonarQubeAnalyze@5
+          - task: SonarQubePublish@5
+          - task: PublishPipelineArtifact@1
+            inputs: {targetPath: out, artifact: drop}
+  - stage: Dev
+    dependsOn: Build
+    jobs:
+      - deployment: deploy_dev
+        environment: orders-dev
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: AzureFunctionApp@2
+                  inputs: {azureSubscription: conn-dev, appType: functionAppLinux, appName: orders-dev, package: out/*.zip}
+  - stage: Prod
+    dependsOn: Dev
+    jobs:
+      - deployment: deploy_prod
+        environment: orders-prod
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: AzureFunctionApp@2
+                  inputs: {azureSubscription: conn-prod, appType: functionAppLinux, appName: orders-prod, deployToSlotOrASE: true, slotName: staging}
+                - script: curl -f https://orders-prod/health
+                  displayName: Smoke test

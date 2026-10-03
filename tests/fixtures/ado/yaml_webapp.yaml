@@ -1,0 +1,4 @@
+steps:
+  - script: dotnet test
+  - task: AzureWebApp@1
+    inputs: {azureSubscription: c, appName: web}

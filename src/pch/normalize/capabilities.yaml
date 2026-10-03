@@ -1,0 +1,142 @@
+# Task / script -> capability tags. DATA, not code: edit here to teach the tool about new tasks.
+#
+# tasks:  "<TaskName>@<major|*>" -> list of caps, or a spec / list of specs:
+#   {when: {inputs.<name>: value, inputs.<name>~: regex}, caps: [..], else: [..]}
+#   {when_any: [{..}, {..}], caps: [..], else: [..]}      # OR of several conditions
+# `inputs.x: value` is a case-insensitive equality check, `inputs.x~: regex` is a regex search.
+# defaults: per-task default input values applied before `when` evaluation (Azure DevOps task defaults).
+# scripts: regexes applied to inline scripts; matches are tagged heuristic (inferred).
+# step_names: regexes applied to the step display name; matches are tagged heuristic.
+
+defaults:
+  DotNetCoreCLI: {command: build}
+  Docker: {command: buildAndPush}
+  Maven: {goals: package}
+  KubernetesManifest: {action: deploy}
+  Kubernetes: {command: apply}
+
+tasks:
+  # --- code quality / security
+  "SonarQubePrepare@*":        [sast:sonar, sonar:prepare]
+  "SonarCloudPrepare@*":       [sast:sonar, sonar:prepare]
+  "SonarQubeAnalyze@*":        [sonar:analyze]
+  "SonarCloudAnalyze@*":       [sonar:analyze]
+  "SonarQubePublish@*":        [sonar:publish]
+  "SonarCloudPublish@*":       [sonar:publish]
+  "sonar-buildbreaker@*":      [sonar:gate-breaker]
+  "SonarQubeBuildBreaker@*":   [sonar:gate-breaker]
+  "AdvancedSecurity-*":        [sast:ghas]
+  "AikidoScan@*":              [security-scan:aikido]
+  # --- build / test
+  "DotNetCoreCLI@*":
+    - {when: {inputs.command: test}, caps: [unit-test]}
+    - {when: {"inputs.command~": "^(build|publish)$"}, caps: [build]}
+  "VSTest@*":                  [unit-test]
+  "VSBuild@*":                 [build]
+  "MSBuild@*":                 [build]
+  "Maven@*":
+    - {when: {"inputs.goals~": "test|verify|install|package"}, caps: [unit-test]}
+    - {when: {"inputs.goals~": "package|install|compile|verify"}, caps: [build]}
+  "Gradle@*":
+    - {when: {"inputs.tasks~": "test|check"}, caps: [unit-test]}
+    - {when: {"inputs.tasks~": "build|assemble"}, caps: [build]}
+  "Npm@*":
+    - {when: {"inputs.customCommand~": "(^|\\s)(test|t)(\\s|$)|run test"}, caps: [unit-test]}
+    - {when: {"inputs.customCommand~": "run build|build"}, caps: [build]}
+  "PublishTestResults@*":      [test-results-publish]
+  "PublishCodeCoverageResults@*": [coverage-publish]
+  "PublishBuildArtifacts@*":   [artifact:publish]
+  "PublishPipelineArtifact@*": [artifact:publish]
+  "DownloadPipelineArtifact@*": [artifact:download]
+  "DownloadBuildArtifacts@*":  [artifact:download]
+  "Docker@*":
+    - {when: {"inputs.command~": "buildAndPush|push"}, caps: [container:push]}
+    - {when: {"inputs.command~": "build|buildAndPush"}, caps: [build, container:build]}
+  "ManifestPublish@*":         [artifact:publish]
+  # --- deploy targets
+  "AzureFunctionApp@*":        [deploy:functionapp]
+  "AzureWebApp@*":             [deploy:webapp]
+  "AzureWebAppContainer@*":    [deploy:webapp, container:deploy]
+  "AzureRmWebAppDeployment@*":
+    - when_any:
+        - {"inputs.appType~": "(?i)function"}
+        - {"inputs.WebAppKind~": "(?i)function"}
+      caps: [deploy:functionapp]
+      else: [deploy:webapp]
+  "AzureAppServiceManage@*":
+    - {when: {"inputs.Action~": "(?i)swap"}, caps: [slot-swap]}
+  "KubernetesManifest@*":
+    - {when: {"inputs.action~": "(?i)^(deploy|promote|reject|patch|scale|delete)$"}, caps: [deploy:aks]}
+    - {when: {"inputs.action~": "(?i)^(deploy|promote)$"}, caps: [rollout-status]}
+  "HelmDeploy@*":
+    - {when: {"inputs.command~": "(?i)^(upgrade|install)$"}, caps: [deploy:aks]}
+    - {when: {"inputs.command~": "(?i)^(lint|package)$"}, caps: [lint:k8s]}
+  "Kubernetes@*":
+    - {when: {"inputs.command~": "(?i)^(apply|create|set|delete)$"}, caps: [deploy:aks]}
+  "AzureResourceManagerTemplateDeployment@*":
+    - {when: {"inputs.deploymentMode~": "(?i)^validation$"}, caps: [whatif], else: [deploy:iac]}
+  "AzureResourceGroupDeployment@*": [deploy:iac]
+  "AzureCLI@*":                [azcli]
+  "AzurePowerShell@*":         [azps]
+  "Synapse workspace deployment@*": [deploy:synapse]
+  "Synapse workspace deployment (validate)@*": [validate:synapse]
+  "SqlAzureDacpacDeployment@*": [deploy:sql]
+  "SqlDacpacDeploymentOnMachineGroup@*": [deploy:sql]
+  "TerraformTaskV4@*":
+    - {when: {"inputs.command~": "(?i)^(apply|destroy)$"}, caps: [deploy:iac]}
+    - {when: {inputs.command: plan}, caps: [plan]}
+    - {when: {inputs.command: validate}, caps: [validate:iac]}
+  "TerraformTaskV3@*":
+    - {when: {"inputs.command~": "(?i)^(apply|destroy)$"}, caps: [deploy:iac]}
+    - {when: {inputs.command: plan}, caps: [plan]}
+  "TerraformCLI@*":
+    - {when: {"inputs.command~": "(?i)^(apply|destroy)$"}, caps: [deploy:iac]}
+    - {when: {inputs.command: plan}, caps: [plan]}
+  # --- gates / change management
+  "ServiceNow-DevOps-*":       [gate:servicenow]
+  "ServiceNow*":               [gate:servicenow]
+  "InvokeRESTAPI@*":
+    - {when: {"inputs.serviceConnection~": "(?i)servicenow|snow"}, caps: [gate:servicenow]}
+    - {when: {"inputs.urlSuffix~": "(?i)health|status|ping|smoke"}, caps: [smoke-test]}
+  "AzureMonitor@*":            [gate:monitor]
+  "AzureFunction@*":           [gate:azure-function]
+  # --- supply chain
+  "ManifestGenerator@*":       [sbom]
+  "sbom-tool@*":               [sbom]
+  "ComponentGovernanceComponentDetection@*": [component-governance]
+
+scripts:
+  - {pattern: '(?i)\bdotnet\s+test\b', caps: [unit-test]}
+  - {pattern: '(?i)\b(pytest|py\.test)\b', caps: [unit-test]}
+  - {pattern: '(?i)\b(npm|yarn|pnpm)\s+(run\s+)?test\b|\bnpm\s+t\b|\bjest\b|\bvitest\b', caps: [unit-test]}
+  - {pattern: '(?i)\bmvn\b.*\b(test|verify)\b|\bgradle(w)?\b.*\btest\b', caps: [unit-test]}
+  - {pattern: '(?i)\bgo\s+test\b', caps: [unit-test]}
+  - {pattern: '(?i)\bdotnet\s+(build|publish)\b|\bmsbuild\b|\bnpm\s+run\s+build\b|\bmvn\b.*\b(package|install)\b|\bgradle(w)?\b.*\bbuild\b', caps: [build]}
+  - {pattern: '(?i)\bdocker\s+build\b', caps: [build, container:build]}
+  - {pattern: '(?i)\bdocker\s+push\b', caps: [container:push]}
+  - {pattern: '(?i)\bkubectl\s+(apply|create|replace|patch)\b', caps: [deploy:aks]}
+  - {pattern: '(?i)\bhelm\s+(upgrade|install)\b', caps: [deploy:aks]}
+  - {pattern: '(?i)\bkubectl\s+rollout\s+status\b', caps: [rollout-status]}
+  - {pattern: '(?i)\bkubeconform\b|\bkubeval\b|\bhelm\s+(lint|template)\b|--dry-run|--validate=true', caps: [lint:k8s]}
+  - {pattern: '(?i)\baz\s+functionapp\s+(deployment|deploy)\b|\bfunc\s+azure\s+functionapp\s+publish\b', caps: [deploy:functionapp]}
+  - {pattern: '(?i)\baz\s+webapp\s+(deploy|deployment|up)\b', caps: [deploy:webapp]}
+  - {pattern: '(?i)\baz\s+(webapp|functionapp)\s+deployment\s+slot\s+swap\b|\bSwitch-AzWebAppSlot\b', caps: [slot-swap]}
+  - {pattern: '(?i)\b--slot\b|\b-Slot\b', caps: [slot-deploy]}
+  - {pattern: '(?i)\baz\s+deployment\s+(group|sub|mg|tenant)\s+create\b|\bNew-AzResourceGroupDeployment\b|\bNew-AzSubscriptionDeployment\b', caps: [deploy:iac]}
+  - {pattern: '(?i)\baz\s+deployment\s+(group|sub|mg|tenant)\s+what-if\b|--what-if\b|-WhatIf\b|\bbicep\b.*\bwhat-if\b|\baz\s+deployment\s+.*\bvalidate\b', caps: [whatif]}
+  - {pattern: '(?i)\bterraform\s+plan\b', caps: [plan]}
+  - {pattern: '(?i)\bterraform\s+apply\b', caps: [deploy:iac]}
+  - {pattern: '(?i)(Stop|Start)-Az(DataFactoryV2|Synapse)Trigger|az\s+(datafactory|synapse)\s+trigger\s+(stop|start)|PrePostDeploymentScript', caps: [trigger-toggle]}
+  - {pattern: '(?i)azure-data-factory-utilities', caps: [adf:npm-utils]}
+  - {pattern: '(?i)npm\s+run\s+build\s+validate\b', caps: [validate:adf]}
+  - {pattern: '(?i)npm\s+run\s+build\s+export\b', caps: [adf:export]}
+  - {pattern: '(?i)adf_publish', caps: [adf:publish-branch]}
+  - {pattern: '(?i)\b(curl|wget)\b.*(health|status|ping|ready|smoke)|Invoke-(WebRequest|RestMethod).*(health|status|ping|ready|smoke)', caps: [smoke-test]}
+  - {pattern: '(?i)\b(syft|cyclonedx|sbom-tool|anchore)\b|\bsbom\b', caps: [sbom]}
+  - {pattern: '(?i)sqlpackage.*(DeployReport|/Action:Script)|/Action:DeployReport', caps: [dacpac-report]}
+  - {pattern: '(?i)\bSynapse\b.*\b(validate)\b', caps: [validate:synapse]}
+
+step_names:
+  - {pattern: '(?i)smoke|health[ _-]?check|post[ _-]?deploy(ment)?[ _-]?(test|verif|check)|sanity[ _-]?test', caps: [smoke-test]}
+  - {pattern: '(?i)\bvalidate\b.*\b(adf|data ?factory)\b|\b(adf|data ?factory)\b.*\bvalidate\b', caps: [validate:adf]}
+  - {pattern: '(?i)\bsbom\b', caps: [sbom]}

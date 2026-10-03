@@ -1,0 +1,30 @@
+{
+ "id": 21,
+ "name": "orders-func-yaml",
+ "type": "build",
+ "project": {
+  "name": "Payments"
+ },
+ "repository": {
+  "id": "repo-2",
+  "name": "orders-func",
+  "type": "TfsGit"
+ },
+ "process": {
+  "type": 2,
+  "yamlFilename": "azure-pipelines.yml"
+ },
+ "retentionRules": [
+  {
+   "daysToKeep": 400
+  }
+ ],
+ "authoredBy": {
+  "uniqueName": "bob@contoso.com"
+ },
+ "_links": {
+  "web": {
+   "href": "https://dev.azure.com/contoso/Payments/_build?definitionId=21"
+  }
+ }
+}

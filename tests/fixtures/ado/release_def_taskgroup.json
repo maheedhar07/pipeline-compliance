@@ -1,0 +1,115 @@
+{
+ "id": 37,
+ "name": "tg-CD",
+ "path": "\\",
+ "artifacts": [
+  {
+   "alias": "_build",
+   "type": "Build",
+   "isPrimary": true,
+   "definitionReference": {
+    "definition": {
+     "id": "12",
+     "name": "build-12"
+    },
+    "project": {
+     "name": "Payments"
+    }
+   }
+  }
+ ],
+ "triggers": [
+  {
+   "triggerType": "artifactSource",
+   "artifactAlias": "_build",
+   "triggerConditions": [
+    {
+     "sourceBranch": "main",
+     "tags": [],
+     "useBuildDefinitionBranch": false
+    }
+   ]
+  }
+ ],
+ "environments": [
+  {
+   "id": 1,
+   "name": "Dev",
+   "rank": 1,
+   "conditions": [
+    {
+     "name": "ReleaseStarted",
+     "conditionType": 1,
+     "value": ""
+    }
+   ],
+   "preDeployApprovals": {
+    "approvals": [
+     {
+      "rank": 1,
+      "isAutomated": true,
+      "isNotificationOn": false
+     }
+    ],
+    "approvalOptions": {
+     "requiredApproverCount": null,
+     "releaseCreatorCanBeApprover": true
+    }
+   },
+   "postDeployApprovals": {
+    "approvals": [
+     {
+      "rank": 1,
+      "isAutomated": true
+     }
+    ]
+   },
+   "preDeploymentGates": {
+    "gates": [],
+    "gatesOptions": {
+     "isEnabled": false,
+     "timeout": 1440
+    }
+   },
+   "postDeploymentGates": {
+    "gates": [],
+    "gatesOptions": {
+     "isEnabled": false,
+     "timeout": 1440
+    }
+   },
+   "deployPhases": [
+    {
+     "name": "Agent job",
+     "phaseType": 2,
+     "workflowTasks": [
+      {
+       "taskId": "e9ce56db-091c-5969-b8e3-36f2a4c4694a",
+       "version": "1.*",
+       "name": "Sonar Standard",
+       "enabled": true,
+       "inputs": {}
+      }
+     ]
+    }
+   ],
+   "retentionPolicy": {
+    "daysToKeep": 30,
+    "releasesToKeep": 3,
+    "retainBuild": true
+   },
+   "variables": {}
+  }
+ ],
+ "variables": {},
+ "variableGroups": [],
+ "modifiedBy": {
+  "displayName": "Jane Doe",
+  "uniqueName": "jane.doe@contoso.com"
+ },
+ "_links": {
+  "web": {
+   "href": "https://dev.azure.com/contoso/Payments/_release?definitionId=37"
+  }
+ }
+}

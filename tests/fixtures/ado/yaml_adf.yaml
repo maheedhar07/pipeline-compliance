@@ -1,0 +1,22 @@
+stages:
+  - stage: Build
+    jobs:
+      - job: b
+        steps:
+          - script: npm install && npm run build validate $(Build.Repository.LocalPath) /subscriptions/x/resourceGroups/rg/providers/Microsoft.DataFactory/factories/f
+            displayName: Validate ADF
+          - script: npm run build export $(Build.Repository.LocalPath) /subscriptions/x/resourceGroups/rg/providers/Microsoft.DataFactory/factories/f ArmTemplate
+            displayName: Export ARM
+  - stage: Prod
+    dependsOn: Build
+    jobs:
+      - deployment: d
+        environment: adf-prod
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: AzurePowerShell@5
+                  inputs: {azureSubscription: c, ScriptType: InlineScript, Inline: "Stop-AzDataFactoryV2Trigger -Name x"}
+                - task: AzureResourceManagerTemplateDeployment@3
+                  inputs: {azureResourceManagerConnection: c, csmFile: ArmTemplate/ARMTemplateForFactory.json, overrideParameters: "-factoryName adf-prod"}

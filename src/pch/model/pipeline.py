@@ -38,6 +38,7 @@ class Step(BaseModel):
     continue_on_error: bool = False
     condition: str | None = None
     capabilities: set[str] = Field(default_factory=set)
+    heuristic_caps: set[str] = Field(default_factory=set)  # caps inferred from scripts/names
     inline_script: str | None = None
     marketplace: bool = False
     deprecated: bool = False
