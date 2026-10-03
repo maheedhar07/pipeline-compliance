@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% from "_macros.html" import status_badge, sev_badge %}
+{% block title %}Findings · Pipeline Compliance Hub{% endblock %}
+{% block content %}
+<div class="mb-3 flex items-baseline gap-3"><h1 class="text-lg font-semibold">Findings</h1><span class="text-xs text-slate-500">{{ data.total }} match · showing {{ data['items'] | length }}</span>
+  <a class="ml-auto text-xs text-indigo-600 hover:underline dark:text-indigo-300" href="/api/v1/findings?{{ qs(base) }}">JSON</a></div>
+<form method="get" class="mb-3 flex flex-wrap items-end gap-2 rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
+  <input type="hidden" name="scan" value="{{ scan_param }}">
+  {% macro sel(name, label, opts, cur) %}<label class="flex flex-col gap-0.5 text-[11px] font-medium text-slate-500">{{ label }}<select name="{{ name }}" onchange="this.form.submit()" class="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs font-normal text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"><option value="">All</option>{% for o in opts %}<option value="{{ o }}" {{ 'selected' if cur == o }}>{{ o }}</option>{% endfor %}</select></label>{% endmacro %}
+  {{ sel('project','Project', options.projects, filt.project) }}
+  {{ sel('category','Category', ['SRC','QLT','TST','SUP','SEC','DEP','TGT','HYG'], filt.category) }}
+  {{ sel('severity','Severity', ['critical','high','medium','low','info'], filt.severity) }}
+  {{ sel('status','Status', ['FAIL','WARN','UNKNOWN','WAIVED','PASS'], filt.status) }}
+  <label class="flex flex-col gap-0.5 text-[11px] font-medium text-slate-500">Rule<input name="rule" value="{{ filt.rule or '' }}" placeholder="DEP-003" class="w-24 rounded border border-slate-300 bg-white px-1.5 py-1 text-xs font-normal text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"></label>
+  <button class="rounded bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-700">Filter</button>
+  <a href="{{ u('/findings') }}" class="text-xs text-slate-500 hover:underline">reset</a>
+</form>
+<div class="overflow-x-auto rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
+<table class="w-full">
+  <thead class="border-b border-slate-200 text-left text-[11px] uppercase text-slate-500 dark:border-slate-700"><tr><th class="px-2 py-1.5">Sev.</th><th>Status</th><th>Rule</th><th>Repo</th><th>Pipeline / stage</th><th>Message</th></tr></thead>
+  <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+  {% for f in data['items'] %}
+  <tr class="align-top hover:bg-slate-50 dark:hover:bg-slate-700/40"><td class="px-2 py-1">{{ sev_badge(f.severity) }}</td><td class="py-1">{{ status_badge(f.status) }}</td>
+    <td class="py-1 pr-2 text-xs"><a class="font-mono font-semibold text-indigo-700 hover:underline dark:text-indigo-300" href="{{ u('/rules/' ~ f.rule_id) }}">{{ f.rule_id }}</a><div class="text-slate-500">{{ f.title }}</div></td>
+    <td class="py-1 pr-2"><a class="text-indigo-700 hover:underline dark:text-indigo-300" href="{{ u('/repos/' ~ f.repo_key) }}">{{ f.repo_key }}</a></td>
+    <td class="py-1 pr-2 text-xs">{{ f.pipeline_name or '–' }}{% if f.stage %} / {{ f.stage }}{% endif %}</td><td class="py-1 pr-2 text-xs">{{ f.message }}</td></tr>
+  {% else %}<tr><td colspan="6" class="px-3 py-8 text-center text-slate-500">No findings match.</td></tr>{% endfor %}
+  </tbody>
+</table></div>
+{% if data.total > offset + data.limit %}<a class="mt-2 inline-block text-xs text-indigo-600 hover:underline" href="/findings?{{ qs(base, offset=offset + data.limit) }}">Next {{ data.limit }}</a>{% endif %}
+{% endblock %}

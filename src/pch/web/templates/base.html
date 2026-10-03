@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Pipeline Compliance Hub{% endblock %}</title>
+<script>
+  // apply the stored theme before paint
+  (function(){try{var t=localStorage.getItem('pch-theme');var d=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches;if(t==='dark'||(!t&&d))document.documentElement.classList.add('dark');}catch(e){}})();
+</script>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>tailwind && (tailwind.config = { darkMode: 'class' });</script>
+<script src="https://unpkg.com/htmx.org@1.9.12"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="bg-slate-50 text-sm text-slate-900 dark:bg-slate-900 dark:text-slate-100">
+{% from "_macros.html" import status_badge %}
+<header class="sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur dark:border-slate-700 dark:bg-slate-900/95">
+  <div class="mx-auto flex max-w-[1400px] flex-wrap items-center gap-x-5 gap-y-1 px-4 py-2">
+    <a href="/" class="font-semibold text-indigo-700 dark:text-indigo-300">Pipeline Compliance Hub</a>
+    <nav class="flex flex-wrap gap-x-4 gap-y-1 text-[13px]">
+      {% set items = [('overview','/','Overview'),('repos','/repos','Repos'),('findings','/findings','Findings'),('rules','/rules','Rules'),('testing','/testing','Testing'),('targets','/targets','Deploy targets'),('migration','/migration','Migration'),('scans','/scans','Scans')] %}
+      {% for key, href, label in items %}
+      <a href="{{ href }}{{ '?scan=' ~ scan_param if scan_param else '' }}" class="{{ 'font-semibold text-indigo-700 dark:text-indigo-300 underline underline-offset-4' if nav == key else 'text-slate-600 hover:text-indigo-700 dark:text-slate-300 dark:hover:text-indigo-300' }}">{{ label }}</a>
+      {% endfor %}
+    </nav>
+    <div class="ml-auto flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
+      {% if scan %}
+      <form method="get" class="flex items-center gap-1">
+        <label for="scan-select" class="sr-only">Scan</label>
+        <select id="scan-select" name="scan" onchange="this.form.submit()" class="rounded border border-slate-300 bg-white px-1 py-0.5 text-xs dark:border-slate-600 dark:bg-slate-800">
+          {% for sc in scans %}<option value="{{ sc.id }}" {{ 'selected' if sc.id == scan.id }}>{{ sc.started_at.strftime('%Y-%m-%d') }} · {{ sc.mode }}{{ ' (latest)' if loop.first }}</option>{% endfor %}
+        </select>
+      </form>
+      {% endif %}
+      <a href="/api/docs" class="hover:underline">API</a>
+      <button type="button" onclick="pchToggleTheme()" class="rounded border border-slate-300 px-2 py-0.5 hover:bg-slate-100 dark:border-slate-600 dark:hover:bg-slate-800" aria-label="Toggle dark mode">Theme</button>
+    </div>
+  </div>
+</header>
+<main class="mx-auto max-w-[1400px] px-4 py-4">
+{% block content %}{% endblock %}
+</main>
+<footer class="mx-auto max-w-[1400px] px-4 pb-6 text-xs text-slate-500 dark:text-slate-400">Report-only: this dashboard reads your estate, it never changes it. v{{ version }}{% if scan %} · scan {{ scan.id }} · {{ scan.repos_total }} repos · {{ scan.findings_total }} findings{% endif %}</footer>
+<script src="/static/app.js"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

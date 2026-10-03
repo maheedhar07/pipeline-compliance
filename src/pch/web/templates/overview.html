@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% from "_macros.html" import kpi, heat_class %}
+{% block title %}Overview · Pipeline Compliance Hub{% endblock %}
+{% block content %}
+{% set k = data.kpis %}
+<div class="mb-3 flex flex-wrap items-baseline gap-3">
+  <h1 class="text-lg font-semibold">Compliance overview</h1>
+  <span class="text-xs text-slate-500 dark:text-slate-400">{{ k.repos }} repositories in scope · scan {{ scan.id }} ({{ scan.mode }}) · {{ scan.started_at.strftime('%Y-%m-%d %H:%M') }}{% if scan.duration_s %} · {{ scan.duration_s }}s{% endif %}</span>
+</div>
+<section class="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6" aria-label="Key figures">
+  {{ kpi('Repos scanned', k.repos, u('/repos'), 'avg score ' ~ k.avg_score) }}
+  {{ kpi('Compliant', k.compliant_pct ~ '%', u('/repos', status='COMPLIANT'), k.compliant ~ ' repos') }}
+  {{ kpi('Critical findings', k.critical_findings, u('/findings', severity='critical', status='FAIL'), 'open critical failures') }}
+  {{ kpi('Repos with no tests', k.no_tests, u('/repos', test_state='NO_TESTS'), 'application repos') }}
+  {{ kpi('Classic repos', k.classic_repos, u('/repos', platform='classic'), k.classic_pipelines ~ ' classic pipelines') }}
+  {{ kpi('Not scanned', data.not_scanned, u('/scans'), 'collection failures') }}
+</section>
+
+<section class="mt-4 grid gap-3 lg:grid-cols-3">
+  <div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
+    <h2 class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Status distribution</h2>
+    <div class="mx-auto h-56 max-w-[16rem]"><canvas id="donut" aria-label="Status donut chart" role="img"></canvas></div>
+    <ul class="mt-2 flex justify-center gap-4 text-xs">
+      {% for st, label in [('COMPLIANT','Compliant'),('AT_RISK','At risk'),('NON_COMPLIANT','Non-compliant')] %}
+      <li><a class="hover:underline" href="{{ u('/repos', status=st) }}"><span class="tnum font-semibold">{{ data.status_counts[st] }}</span> {{ label }}</a></li>
+      {% endfor %}
+    </ul>
+  </div>
+  <div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
+    <h2 class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Trend across scans</h2>
+    <div class="h-60"><canvas id="trend" aria-label="Compliance trend" role="img"></canvas></div>
+    <p class="mt-1 text-center text-xs text-slate-500">{{ data.trend | length }} scan(s). <a class="underline" href="{{ u('/scans') }}">Scan history</a></p>
+  </div>
+  <div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
+    <h2 class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Top 10 failing rules (repos)</h2>
+    <div class="h-64"><canvas id="toprules" aria-label="Top failing rules" role="img"></canvas></div>
+  </div>
+</section>
+
+<section class="mt-4 rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
+  <h2 class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Heatmap: category pass rate by project <span class="font-normal normal-case">(click a cell to see its failures)</span></h2>
+  <div class="overflow-x-auto">
+    <table class="w-full border-separate border-spacing-1 text-xs">
+      <thead><tr><th class="text-left font-medium">Category</th>{% for p in data.projects %}<th class="heat-cell font-medium"><a class="hover:underline" href="{{ u('/repos', project=p) }}">{{ p }}</a></th>{% endfor %}</tr></thead>
+      <tbody>
+      {% for row in data.heatmap %}
+      <tr><th class="whitespace-nowrap pr-2 text-left font-medium"><a class="hover:underline" href="{{ u('/findings', category=row.category, status='FAIL') }}">{{ row.name }}</a></th>
+        {% for c in row.cells %}
+        <td class="heat-cell rounded text-center {{ heat_class(c.rate) }}">
+          <a class="block px-2 py-1.5 tnum" href="{{ u('/findings', project=c.project, category=c.category, status='FAIL') }}" title="{{ c.fails }} failing findings">{{ '%.0f' | format(c.rate) ~ '%' if c.rate is not none else 'n/a' }}</a>
+        </td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+const D = {{ data | tojson_safe | safe }};
+const SCAN = {{ scan_param | tojson_safe | safe }};
+const go = (u) => { window.location = u + (SCAN ? (u.includes('?') ? '&' : '?') + 'scan=' + SCAN : ''); };
+pchChart('donut', (c) => ({
+  type: 'doughnut',
+  data: { labels: ['Compliant','At risk','Non-compliant'], datasets: [{ data: [D.status_counts.COMPLIANT, D.status_counts.AT_RISK, D.status_counts.NON_COMPLIANT], backgroundColor: [c.ok, c.warn, c.bad], borderWidth: 0 }] },
+  options: { maintainAspectRatio: false, cutout: '62%', plugins: { legend: { display: false } },
+    onClick: (e, els) => { if (els.length) go('/repos?status=' + ['COMPLIANT','AT_RISK','NON_COMPLIANT'][els[0].index]); } }
+}));
+pchChart('trend', (c) => ({
+  type: 'line',
+  data: { labels: D.trend.map(t => t.date), datasets: [
+    { label: 'Compliant %', data: D.trend.map(t => t.compliant_pct), borderColor: c.ok, backgroundColor: c.ok, tension: .25, pointRadius: 4 },
+    { label: 'Non-compliant %', data: D.trend.map(t => t.non_compliant_pct), borderColor: c.bad, backgroundColor: c.bad, tension: .25, pointRadius: 4 },
+    { label: 'Avg score', data: D.trend.map(t => t.avg_score), borderColor: c.info, backgroundColor: c.info, borderDash: [4,3], tension: .25, pointRadius: 3 } ] },
+  options: { maintainAspectRatio: false, scales: { y: { min: 0, max: 100, grid: { color: c.grid } }, x: { grid: { display: false } } }, plugins: { legend: { position: 'bottom', labels: { boxWidth: 10 } } },
+    onClick: (e, els) => { if (els.length) go('/scans?selected=' + D.trend[els[0].index].scan_id); } }
+}));
+pchChart('toprules', (c) => ({
+  type: 'bar',
+  data: { labels: D.top_rules.map(r => r.id), datasets: [{ label: 'Failing repos', data: D.top_rules.map(r => r.fail), backgroundColor: c.bad, borderRadius: 2 }] },
+  options: { indexAxis: 'y', maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { afterLabel: (i) => D.top_rules[i.dataIndex].title } } },
+    scales: { x: { grid: { color: c.grid } }, y: { grid: { display: false } } },
+    onClick: (e, els) => { if (els.length) go('/rules/' + D.top_rules[els[0].index].id); } }
+}));
+</script>
+{% endblock %}

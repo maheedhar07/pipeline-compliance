@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% from "_macros.html" import bar, sev_badge %}
+{% block title %}Deployment targets · Pipeline Compliance Hub{% endblock %}
+{% block content %}
+<div class="mb-3 flex items-baseline gap-3"><h1 class="text-lg font-semibold">Deployment targets</h1><span class="text-xs text-slate-500">Targets are inferred from tasks and scripts (scripts are heuristic). Rule pass rates are per repo.</span>
+  <a class="ml-auto text-xs text-indigo-600 hover:underline dark:text-indigo-300" href="/api/v1/targets">JSON</a></div>
+<div class="mb-4 rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800"><div class="h-56"><canvas id="tg" role="img" aria-label="Repos by deployment target"></canvas></div></div>
+<div class="grid gap-3 lg:grid-cols-2">
+{% for t in data.targets %}
+  <section class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
+    <div class="flex flex-wrap items-baseline gap-3"><h2 class="text-base font-semibold">{{ t.label }}</h2>
+      <a class="text-xs text-indigo-600 hover:underline dark:text-indigo-300" href="{{ u('/repos', target=t.target) }}">{{ t.repos }} repos</a>
+      <span class="text-xs text-slate-500">{{ t.pipelines }} pipelines · avg score {{ t.avg_score if t.avg_score is not none else 'n/a' }} · {{ t.non_compliant }} non-compliant</span></div>
+    {% if t.rules %}
+    <table class="mt-2 w-full text-xs"><tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+    {% for r in t.rules %}<tr><td class="py-1 font-mono font-semibold"><a class="text-indigo-700 hover:underline dark:text-indigo-300" href="{{ u('/rules/' ~ r.id) }}">{{ r.id }}</a></td><td class="pr-2">{{ r.title }}</td><td>{{ sev_badge(r.severity) }}</td><td class="tnum px-2 text-right">{{ r.fail }} fail</td><td>{{ bar(r.pass_rate) }}</td></tr>{% endfor %}
+    </tbody></table>{% endif %}
+    {% if t.top_failures %}<p class="mt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Most common other failures</p>
+    <ul class="text-xs">{% for f in t.top_failures %}<li><a class="font-mono text-indigo-700 hover:underline dark:text-indigo-300" href="{{ u('/rules/' ~ f.id) }}">{{ f.id }}</a> {{ f.title }} <span class="tnum text-slate-500">({{ f.repos }} repos)</span></li>{% endfor %}</ul>{% endif %}
+  </section>
+{% endfor %}
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const D = {{ data | tojson_safe | safe }};
+const SCAN = {{ scan_param | tojson_safe | safe }};
+pchChart('tg', (c) => ({ type: 'bar', data: { labels: D.targets.map(t => t.label), datasets: [{ label: 'Repos', data: D.targets.map(t => t.repos), backgroundColor: c.info, borderRadius: 2 }, { label: 'Non-compliant', data: D.targets.map(t => t.non_compliant), backgroundColor: c.bad, borderRadius: 2 }] },
+  options: { maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { boxWidth: 10 } } }, scales: { y: { grid: { color: c.grid }, ticks: { precision: 0 } }, x: { grid: { display: false } } },
+    onClick: (e, els) => { if (els.length) window.location = '/repos?target=' + D.targets[els[0].index].target + (SCAN ? '&scan=' + SCAN : ''); } } }));
+</script>
+{% endblock %}

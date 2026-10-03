@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% from "_macros.html" import sev_badge, bar %}
+{% block title %}Rules · Pipeline Compliance Hub{% endblock %}
+{% block content %}
+<div class="mb-3 flex items-baseline gap-3"><h1 class="text-lg font-semibold">Rule catalog</h1><span class="text-xs text-slate-500">{{ stats | length }} deterministic rules · pass rate counts WARN as half credit · click a failure count to drill down</span>
+  <a class="ml-auto text-xs text-indigo-600 hover:underline dark:text-indigo-300" href="/api/v1/rules">JSON</a></div>
+{% set ns = namespace(cat='') %}
+<div class="overflow-x-auto rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
+<table class="w-full">
+  <thead class="border-b border-slate-200 dark:border-slate-700"><tr class="text-left text-[11px] uppercase tracking-wide text-slate-500">
+    <th class="px-2 py-1.5">Rule</th><th>Title</th><th>Severity</th><th>Scope</th><th class="text-right">Applicable</th><th class="text-right">Pass</th><th class="text-right">Fail</th><th class="text-right">Warn</th><th class="text-right">Unknown</th><th class="px-2">Pass rate</th></tr></thead>
+  <tbody>
+  {% for r in stats %}
+    {% if r.category != ns.cat %}{% set ns.cat = r.category %}
+    <tr class="bg-slate-100 dark:bg-slate-700/60"><td colspan="10" class="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide">{{ r.category }} · {{ r.category_name }}</td></tr>{% endif %}
+    <tr class="border-b border-slate-100 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-700/40">
+      <td class="px-2 py-1 font-mono text-xs font-semibold"><a class="text-indigo-700 hover:underline dark:text-indigo-300" href="{{ u('/rules/' ~ r.id) }}">{{ r.id }}</a></td>
+      <td class="py-1 pr-2">{{ r.title }}</td><td>{{ sev_badge(r.severity) }}</td><td class="text-xs text-slate-500">{{ r.scope }}</td>
+      <td class="tnum text-right">{{ r.applicable }}</td><td class="tnum text-right">{{ r.pass }}</td>
+      <td class="tnum text-right">{% if r.fail %}<a class="font-semibold text-red-600 hover:underline dark:text-red-400" href="{{ u('/rules/' ~ r.id) }}">{{ r.fail }}</a>{% else %}0{% endif %}</td>
+      <td class="tnum text-right">{{ r.warn }}</td><td class="tnum text-right text-slate-500">{{ r.unknown }}</td><td class="px-2">{{ bar(r.pass_rate) }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% endblock %}

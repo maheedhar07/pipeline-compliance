@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% from "_macros.html" import status_badge, sev_badge, test_badge, bar %}
+{% block title %}{{ d.repo.repo }} · Pipeline Compliance Hub{% endblock %}
+{% block content %}
+{% set r = d.repo %}
+<nav class="mb-2 text-xs text-slate-500"><a class="hover:underline" href="{{ u('/repos') }}">Repos</a> / <a class="hover:underline" href="{{ u('/repos', project=r.project) }}">{{ r.project }}</a> / {{ r.repo }}</nav>
+<div class="mb-4 flex flex-wrap items-center gap-3">
+  <h1 class="text-lg font-semibold">{{ r.repo }}</h1>
+  {{ status_badge(r.status) }}
+  <span class="tnum text-lg font-semibold">{{ '%.0f' | format(r.score) if r.score is not none else 'n/a' }}<span class="text-xs font-normal text-slate-500"> / 100</span></span>
+  {% if r.unknowns %}<span class="text-xs text-slate-500">{{ r.unknowns }} rule(s) unknown</span>{% endif %}
+  <div class="ml-auto flex gap-3 text-xs">
+    {% if r.url %}<a class="text-indigo-600 hover:underline dark:text-indigo-300" href="{{ r.url }}" target="_blank" rel="noopener">Open in Azure DevOps</a>{% endif %}
+    {% if d.sonar and d.sonar.url %}<a class="text-indigo-600 hover:underline dark:text-indigo-300" href="{{ d.sonar.url }}" target="_blank" rel="noopener">SonarQube</a>{% endif %}
+    {% if d.aikido and d.aikido.onboarded %}<a class="text-indigo-600 hover:underline dark:text-indigo-300" href="{{ d.aikido.url or '#' }}" target="_blank" rel="noopener">Aikido</a>{% endif %}
+    <a class="text-indigo-600 hover:underline dark:text-indigo-300" href="/api/v1/repos/{{ r.project }}/{{ r.repo }}">JSON</a>
+  </div>
+</div>
+
+<section class="grid gap-3 md:grid-cols-3">
+  <div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
+    <h2 class="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Test state</h2>
+    <div class="flex items-center gap-2">{{ test_badge(r.test_state) }}{% if r.coverage is not none %}<span class="tnum text-xs">coverage {{ r.coverage | pct }}</span>{% endif %}</div>
+    <p class="mt-2 text-xs text-slate-600 dark:text-slate-300">{{ r.reason }}</p>
+    {% if d.facts.test_signals %}<details class="mt-1 text-xs"><summary class="text-slate-500">Detection signals</summary><ul class="ml-4 list-disc">{% for s in d.facts.test_signals %}<li>{{ s }}</li>{% endfor %}</ul></details>{% endif %}
+    <p class="mt-2 text-xs text-slate-500">Repo kind: <b>{{ d.facts.kind }}</b>{% if d.facts.languages %} · {{ d.facts.languages | join(', ') }}{% endif %}</p>
+  </div>
+  <div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
+    <h2 class="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">External tools</h2>
+    <dl class="grid grid-cols-2 gap-y-1 text-xs">
+      <dt class="text-slate-500">Sonar gate</dt><dd>{{ d.sonar.gate_status if d.sonar and d.sonar.onboarded else 'not onboarded' }}{% if d.sonar and d.sonar.gate_name %} ({{ d.sonar.gate_name }}){% endif %}</dd>
+      <dt class="text-slate-500">Last analysis</dt><dd>{{ d.sonar.last_analysis[:10] if d.sonar and d.sonar.last_analysis else '–' }}</dd>
+      <dt class="text-slate-500">Aikido</dt><dd>{% if d.aikido and d.aikido.onboarded %}{{ d.aikido.open.critical }} crit / {{ d.aikido.open.high }} high / {{ d.aikido.open.medium }} med{% elif d.aikido %}not onboarded{% else %}n/a{% endif %}</dd>
+      <dt class="text-slate-500">Reviewers policy</dt><dd>{% if d.policies and d.policies.available %}min {{ d.policies.min_reviewers or 0 }}{{ ', build validation' if d.policies.build_validation }}{% else %}unknown{% endif %}</dd>
+    </dl>
+  </div>
+  <div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
+    <h2 class="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">GitHub Actions readiness</h2>
+    <div class="tnum text-xl font-semibold">{{ r.migration_score if r.migration_score is not none else 'n/a' }}<span class="text-xs font-normal text-slate-500"> / 100</span></div>
+    {% if r.migration_blockers %}<ul class="mt-1 list-disc space-y-0.5 pl-4 text-xs text-slate-600 dark:text-slate-300">{% for b in r.migration_blockers[:5] %}<li>{{ b }}</li>{% endfor %}</ul>{% else %}<p class="text-xs text-slate-500">No migration blockers.</p>{% endif %}
+  </div>
+</section>
+
+<section class="mt-4">
+  <h2 class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Pipelines ({{ d.pipelines | length }})</h2>
+  {% if not d.pipelines %}<p class="rounded border border-dashed border-slate-300 p-3 text-xs text-slate-500 dark:border-slate-600">No pipeline definitions were found for this repository.</p>{% endif %}
+  <div class="grid gap-3 lg:grid-cols-2">
+  {% for p in d.pipelines %}
+    <div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
+      <div class="flex flex-wrap items-center gap-2">
+        <a class="font-medium text-indigo-700 hover:underline dark:text-indigo-300" href="{{ p.url }}" target="_blank" rel="noopener">{{ p.name }}</a>
+        <span class="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] dark:bg-slate-700">{{ p.platform | replace('ado_','') | replace('_',' ') }}</span>
+        {% if not p.definition_in_source_control %}<span class="text-[11px] text-amber-600 dark:text-amber-400">not in source control</span>{% endif %}
+        {% if p.run_stats_90d and p.run_stats_90d.total %}<span class="tnum ml-auto text-xs text-slate-500">{{ p.run_stats_90d.succeeded }}/{{ p.run_stats_90d.total }} runs ok (90d)</span>{% endif %}
+      </div>
+      <table class="mt-2 w-full text-xs">
+        <thead><tr class="text-left text-[10px] uppercase text-slate-500"><th class="py-0.5">Stage</th><th>Tier</th><th>Targets</th><th>Approvals / gates</th></tr></thead>
+        <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+        {% for st in p.stages %}
+        <tr><td class="py-0.5">{{ st.name }}{% if st.env_name and st.env_name != st.name %} <span class="text-slate-400">({{ st.env_name }})</span>{% endif %}</td>
+            <td>{{ st.env_tier }}</td>
+            <td>{{ st.deploy_targets | join(', ') or '–' }}</td>
+            <td>{% for a in st.pre_approvals %}<span class="mr-1 rounded bg-green-100 px-1 dark:bg-green-900/40">approval</span>{% endfor %}{% for g in st.gates %}<span class="mr-1 rounded bg-sky-100 px-1 dark:bg-sky-900/40">{{ g.kind | replace('_',' ') }}</span>{% endfor %}{% if not st.pre_approvals and not st.gates %}–{% endif %}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endfor %}
+  </div>
+</section>
+
+<section class="mt-5">
+  <div class="mb-2 flex items-center gap-3">
+    <h2 class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Findings by category</h2>
+    <label class="ml-auto flex items-center gap-1 text-xs"><input id="show-pass" type="checkbox" class="rounded"> show passing and not applicable</label>
+  </div>
+  {% for c in d.categories %}
+  <div class="mb-3 rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
+    <div class="flex items-center gap-3 border-b border-slate-200 px-3 py-2 dark:border-slate-700">
+      <h3 class="font-semibold">{{ c.name }}</h3>
+      {{ bar(c.rate) }}
+      <span class="text-xs text-slate-500">{% for st in ['FAIL','WARN','UNKNOWN','WAIVED','PASS'] %}{% if c.counts.get(st) %}{{ c.counts[st] }} {{ st | lower }}  {% endif %}{% endfor %}</span>
+    </div>
+    <ul class="divide-y divide-slate-100 dark:divide-slate-700">
+    {% for f in c.findings %}
+      <li class="finding px-3 py-2 {{ 'passing hidden' if f.status in ['PASS','NOT_APPLICABLE'] }}">
+        <div class="flex flex-wrap items-center gap-2">
+          {{ status_badge(f.status) }} {{ sev_badge(f.severity) }}
+          <a class="font-mono text-xs font-semibold text-indigo-700 hover:underline dark:text-indigo-300" href="{{ u('/rules/' ~ f.rule_id) }}">{{ f.rule_id }}</a>
+          <span class="font-medium">{{ f.title }}</span>
+          {% if f.pipeline_name %}<span class="text-xs text-slate-500">· {{ f.pipeline_name }}{% if f.stage %} / {{ f.stage }}{% endif %}</span>{% endif %}
+          {% if f.waiver %}<span class="rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-200" title="{{ f.waiver.reason }} (owner {{ f.waiver.owner }})">{{ 'WAIVER EXPIRED ' if f.waiver.expired else 'WAIVED until ' }}{{ f.waiver.expires or '' }}</span>{% endif %}
+          {% if f.link %}<a class="ml-auto text-xs text-indigo-600 hover:underline dark:text-indigo-300" href="{{ f.link }}" target="_blank" rel="noopener">open</a>{% endif %}
+        </div>
+        <p class="mt-1 text-xs text-slate-700 dark:text-slate-300">{{ f.message }}</p>
+        {% if f.status in ['FAIL','WARN'] and f.remediation %}<p class="mt-1 rounded bg-amber-50 px-2 py-1 text-xs text-amber-900 dark:bg-amber-900/20 dark:text-amber-100"><b>Fix:</b> {{ f.remediation }}</p>{% endif %}
+        {% if f.evidence %}<details class="mt-1 text-xs"><summary class="text-slate-500">Evidence</summary><pre class="evidence mt-1 rounded bg-slate-100 p-2 dark:bg-slate-900">{{ f.evidence | tojson(indent=1) }}</pre></details>{% endif %}
+      </li>
+    {% endfor %}
+    </ul>
+  </div>
+  {% endfor %}
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+document.getElementById('show-pass').addEventListener('change', function () {
+  document.querySelectorAll('li.passing').forEach(li => li.classList.toggle('hidden', !this.checked));
+});
+</script>
+{% endblock %}

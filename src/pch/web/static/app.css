@@ -1,0 +1,9 @@
+:root { --c-ok:#15803d; --c-warn:#b45309; --c-bad:#b91c1c; --c-info:#475569; --grid:#e2e8f0; --ink:#0f172a; }
+html.dark { --c-ok:#4ade80; --c-warn:#fbbf24; --c-bad:#f87171; --c-info:#94a3b8; --grid:#334155; --ink:#e2e8f0; }
+body { font-feature-settings: "tnum" 1; }
+.tnum { font-variant-numeric: tabular-nums; }
+.heat-cell { min-width: 64px; }
+th a { text-decoration: none; }
+details > summary { cursor: pointer; }
+.evidence { max-height: 14rem; overflow:auto; }
+.htmx-request { opacity: .6; transition: opacity .2s; }

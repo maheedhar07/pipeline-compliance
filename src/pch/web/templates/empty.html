@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="mx-auto mt-16 max-w-xl rounded-lg border border-slate-200 bg-white p-6 text-center dark:border-slate-700 dark:bg-slate-800">
+  <h1 class="text-lg font-semibold">No scans yet</h1>
+  <p class="mt-2 text-slate-600 dark:text-slate-300">The database has no completed scan. Generate the demo estate and scan it:</p>
+  <pre class="mt-3 rounded bg-slate-100 p-3 text-left text-xs dark:bg-slate-900">pch seed-demo --repos 280
+pch scan --demo</pre>
+  <p class="mt-2 text-xs text-slate-500">or configure credentials in <code>.env</code> and run <code>pch scan</code>.</p>
+</div>
+{% endblock %}
