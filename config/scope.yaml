@@ -1,6 +1,10 @@
 # What to scan. Unknown keys are rejected at load time. Validate with `pch doctor`.
 # In APP_ENV=prod this file is REQUIRED.
 
+# Where the code lives: github (default), github_enterprise, azure_repos, other_git. Azure Repos is OFF unless listed: its API is
+# not called and pipelines/releases sourced from a host that is not listed are out of scope (one info line per project).
+code_hosts: [github]
+
 # Azure DevOps organization name (the <org> in https://dev.azure.com/<org>). Replace the placeholder.
 organization: your-org
 # Projects to scan; empty = discover all projects in the organization.

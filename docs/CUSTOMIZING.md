@@ -237,10 +237,12 @@ Return `passed`, `failed`, `warn`, `na` or `unknown` (unknown = data was not col
 Tests: every rule needs at least one PASS and one FAIL case in `tests/test_rules.py` (helpers `ctx`, `pipe`, `stage`, `step`, `one`, `statuses` in `tests/builders.py`).
 Regenerate the catalog: `pch rules docs --write docs/RULES.md` (`tests/test_docs.py` fails when it is stale; `--check` verifies without writing). Verify: `pch rules list`, `pytest tests/test_rules.py tests/test_docs.py`.
 
+**Where every standard lives:** [STANDARDS.md](STANDARDS.md) (file, key, default, which rules use it, how to verify). Disable, re-rate or tune a rule with `rules:` in `config/policy.yaml` before writing code; declare a tunable value on a new rule with `@rule(..., params={...})` and read it with `rule_params(policy, id)`.
+
 **Policy thresholds and waivers**: `config/policy.yaml` (strict model `Policy` in `settings.py`: coverage, Sonar gate name, reviewers, Aikido SLAs, registries, branches, `compliant_score_threshold`, waivers).
 A waiver is `{rule, repo, reason, owner, expires}`, repo is `Project/repo`, a bare repo name or `*`; it turns FAIL/WARN into WAIVED until `expires`. Per-repo overrides, projects and tiers: `config/scope.yaml`.
 A new policy key needs a field on `Policy`, a default, a test in `tests/test_config_doctor.py` and a comment in `config/policy.yaml`. Verify with `pch doctor` (unknown keys are errors).
-Scoring weights and status thresholds are code (`engine/scoring.py`, `docs/DECISIONS.md` "Scoring and status"); changing them changes every historical comparison.
+Scoring weights are policy (`scoring:` in `policy.yaml`, defaults = the built-in 10/5/3/1/0); status rules are code (`engine/scoring.py`, `docs/DECISIONS.md` "Scoring and status"). Changing weights changes comparisons with earlier scans.
 
 **Data files** (no code change, tests in `tests/test_normalize_capabilities.py`):
 `src/pch/normalize/capabilities.yaml` (task or inline-script patterns to capability tags such as `unit-test`, `deploy:aks`; syntax is documented at the top of the file),
