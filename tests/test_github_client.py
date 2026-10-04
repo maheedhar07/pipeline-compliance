@@ -183,9 +183,9 @@ def test_normalize_pem_accepts_one_line_env_values():
 
 
 def test_app_jwt_is_rs256_with_short_expiry():
+    priv, pub = _pem()  # skips without the github-app extra
     import jwt
 
-    priv, pub = _pem()
     auth = GitHubAppAuth("1234", "42", priv, clock=lambda: 2_000_000_000.0)
     token = auth.jwt()
     assert jwt.get_unverified_header(token)["alg"] == "RS256"

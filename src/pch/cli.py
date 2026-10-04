@@ -503,6 +503,7 @@ def doctor(
     json_out: bool = typer.Option(False, "--json", help="Emit JSON"),
     scope_file: str | None = typer.Option(None, "--scope", help="Default: <CONFIG_DIR>/scope.yaml"),
     policy_file: str | None = typer.Option(None, "--policy", help="Default: <CONFIG_DIR>/policy.yaml"),
+    online: bool = typer.Option(False, "--online", help="Also probe GitHub read-only (GET /rate_limit and one probe per permission). Default: offline."),
 ) -> None:
     """Check settings, config files, source credentials (set/missing only), database and data dir. Exit 1 on any FAIL."""
     import json
@@ -510,7 +511,7 @@ def doctor(
 
     from pch.doctor import FAIL, run_checks, to_dict
 
-    checks = run_checks(Path(scope_file) if scope_file else None, Path(policy_file) if policy_file else None)
+    checks = run_checks(Path(scope_file) if scope_file else None, Path(policy_file) if policy_file else None, online=online)
     if json_out:
         typer.echo(json.dumps(to_dict(checks), indent=2))
     else:

@@ -189,7 +189,7 @@ Verify: `pch doctor` (`artifact_store` does a write/read/delete probe), `pch sca
 Example: a new system "Acme". Read-only by construction; follow `collectors/sonar.py`.
 
 1. **Client** `src/pch/collectors/acme.py`: build every HTTP call on `SourceClient` (`collectors/http.py`). Never create an `httpx.Client` yourself: `SourceClient` wraps the transport in `ReadOnlyTransport`
-   (GET/HEAD/OPTIONS only, plus the two documented POST exceptions in `transport.ALLOWED_POSTS`), applies retry/backoff, concurrency and the response size cap. A test fails if any other module builds an `httpx.AsyncClient`
+   (GET/HEAD/OPTIONS only, plus the documented POST exceptions: the ADO preview and Aikido token paths in `transport.ALLOWED_POSTS`, and the GitHub App token exchange that a GitHub client registers per instance for its own host and exact path), applies retry/backoff, concurrency and the response size cap. A test fails if any other module builds an `httpx.AsyncClient`
    (`test_every_httpx_client_is_built_through_the_read_only_wrapper`). A new mutating endpoint must not be added to `ALLOWED_POSTS` for this template: it is report-only.
    Put API details you are unsure about in one function with a `# VERIFY:` comment. Return plain pydantic facts, add the model to `model/repo.py` and a field to `RepoContext`.
 2. **Settings and secrets**: URL and non-secret fields as `Settings` fields (URL validation list in `settings.py` `_urls`, https enforced in prod), the credential as `SecretStr`, an entry in `Settings.source_requirements` and in
@@ -204,15 +204,18 @@ Example: a new system "Acme". Read-only by construction; follow `collectors/sona
 
 Verify: `pytest -q`, `pch seed-demo && pch scan --demo`, `pch doctor`.
 
-### Plug in a GitHub reader
+### GitHub reader
 
-Repo-level checks for GitHub-hosted repos are UNKNOWN today (ADR-13) because nothing reads GitHub. A reader fills the gap without touching the rules:
+The reader is built (G2, ADR-16): `collectors/github/` = `client.py` (auth, paging, rate limits), `discovery.py` (organisation listing and filters), `protection.py` (rulesets + classic protection merged into one `BranchProtection`), `reader.py` (one repo: metadata, tree, CODEOWNERS, protection). It is enabled by a credential and changes nothing else:
 
-1. Implement the read-only contract in `collectors/github/` (`GitHubAdapter`; all HTTP through `SourceClient`, a new `Settings` source following recipe 5 above, a `github.com`/Enterprise base URL, token via the secret provider).
-2. In `Scanner.scan_repo` (`orchestrator.py`), where `unavailable_facts(ref.provider)` is used for `ref.external`, call the reader instead: build a populated `RepoFacts` with `facts_source="github"` (tree to `analyze_repo(paths, contents)`, CODEOWNERS) and map branch protection / rulesets to `BranchPolicies(available=True, min_reviewers=..., reset_on_push=..., build_validation=..., ...)`. Keep `facts_source="unavailable"` / `available=False` when the call fails (and record a collection error), so a flaky reader yields UNKNOWN, never FAIL.
-3. SRC-001..003/006 and TST-001..003/006 then evaluate normally: they only switch to UNKNOWN on `facts_source == "unavailable"` or `policies.available == False`. `classify_test_state` stops using the "pipeline proves tests" shortcut as soon as facts are available.
-4. The same reader can enumerate the GitHub organisation to add repos that no ADO pipeline references (extend `collect_project` / `discover`).
-5. Tests: respx fixtures for the GitHub API; reuse `tests/test_external_repos.py` (replace the `unavailable_facts` context with reader output) and keep `test_demo_github_estate_is_scanned_through_real_collectors` green after pointing the demo transport at a fake `api.github.com` host.
+1. **Credential, read-only.** Fine-grained personal access token (`GITHUB_TOKEN`, `GITHUB_AUTH=pat`) or a GitHub App installation (`GITHUB_AUTH=app` + `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, `GITHUB_APP_PRIVATE_KEY`; needs the `github-app` extra). Repository permissions **Metadata: read, Contents: read, Administration: read**; the last one is only needed for classic branch protection (without it that part is UNKNOWN, never FAIL). For G3 later, also Actions, Environments and Deployments: read (not required now). **The credential must be read-only**: this code only sends GETs (plus the App token exchange, below) and a transport guard enforces it, but a write-capable token would still be a needless blast radius if it leaked, and GitHub gives a fine-grained token no way to report its own permissions. Scope it to the organisation(s) and, if you can, the repos you scan. Secrets are resolved through the secret provider (`SECRETS_PROVIDER`), registered for log redaction and never persisted.
+2. **GitHub Enterprise Server.** `GITHUB_API_URL=https://<host>/api/v3`; list `github_enterprise` (instead of `github`) in `scope.yaml` `code_hosts`. One GitHub host per scan. https is required in prod. Pagination links to any other host or outside the API path are refused.
+3. **App mode.** `pip install '.[github-app]'` (PyJWT with `cryptography`; without it `GITHUB_AUTH=app` stops with a message naming the extra). The App signs a 9 minute RS256 JWT, exchanges it for an installation token (`POST /app/installations/{id}/access_tokens`, the one POST this client may send: allowed only for the exact URL on the configured API host, and only for that client) and caches the token until 5 minutes before it expires. A one-line PEM with literal `\n` is accepted. The extra is **not** in the default lockfiles; to lock it for your image add `--extra github-app` to the `pip-compile` command of the lockfile you build from (recipe 9) and re-run `pip-audit`.
+4. **What is read, per repo** (all GET): `/repos/{o}/{r}` (only when the org listing did not already return it), `/git/trees/{branch}?recursive=1`, `/contents/{path}` (CODEOWNERS; a few manifest files only when file names do not already show tests), `/rules/branches/{branch}` plus `/rulesets/{id}` for bypass actors, `/branches/{branch}/protection`. Organisation: `GET /orgs/{org}/repos?type=all`.
+5. **Failure model.** A call that fails becomes a precise reason (`GitHub: classic branch protection denied (HTTP 403) (token needs: administration=read)`), one collection error, and an UNKNOWN rule result, never a FAIL and never an empty fact. A truncated tree makes test and repo-kind detection partial (UNKNOWN unless tests were seen). Rate limits: `Retry-After` and `X-RateLimit-*` are honoured; a wait of up to two minutes is slept, a longer one fails that item only.
+6. **Discovery** (`scope.yaml` `github:`): `orgs`, `include`, `exclude`, `topics_any`, `include_archived`, `include_forks`. Repos = org listing (filtered) + repos ADO pipelines reference + `repos:` entries. Key format `<project-or-org>/<org>/<repo>`: ADO project for repos a pipeline references, the GitHub organisation (or the `repos:` entry's `project`) for the rest; waivers, `exclude_repos` and overrides use that key.
+7. **Change the mapping.** Rules read the normalised `ctx.protection` (`BranchProtection`) and `ctx.facts`, never the raw API: add a field in `protection.merge_protection` and a rule in `engine/rules/src_control.py`. Add a test per branch (PASS, FAIL, UNKNOWN) in `tests/test_github_rules.py` and a respx fixture in `tests/fixtures/github/`.
+8. **Verify on first contact:** the `# VERIFY:` notes in `collectors/github/protection.py` (response field names) and `pch doctor --online` (quota and one probe per permission).
 
 ---
 
@@ -312,8 +315,10 @@ pip-compile --generate-hashes --extra postgres --extra azuresql --extra azure-ke
   -o requirements-azure.lock pyproject.toml
 ```
 
+The `github-app` extra (PyJWT + cryptography, GitHub App auth) is in neither lockfile by default. If you use `GITHUB_AUTH=app`, add `--extra github-app` to the `pip-compile` command of the lockfile your image uses (and to the CI `all-extras` install, where it already is) and re-run `pip-audit` on it.
+
 Compile on the same Python minor as the image (3.11). Then run `pip-audit --require-hashes --disable-pip -r requirements.lock` (and the azure lock), the full test suite with all extras
-(`pip install -e ".[dev,postgres,azuresql,azure-keyvault,azure-blob,azure-monitor]"`), and build the image: `docker build --build-arg PCH_LOCKFILE=requirements-azure.lock -t pch:azure .`.
+(`pip install -e ".[dev,postgres,azuresql,azure-keyvault,azure-blob,azure-monitor,github-app]"`), and build the image: `docker build --build-arg PCH_LOCKFILE=requirements-azure.lock -t pch:azure .`.
 
 **Dependabot** (`.github/dependabot.yml`) opens weekly grouped PRs for pip (`pyproject.toml` ranges only: regenerate both lockfiles in the PR before merging), GitHub Actions and Docker. For actions, keep the full commit SHA and update the `# vX.Y.Z` comment.
 **Base image digest**: the Dockerfile pins `python:3.11-slim@sha256:...` in both stages. To bump, resolve the new multi-arch index digest (`docker buildx imagetools inspect python:3.11-slim`) and replace it in both `FROM` lines; Dependabot's docker ecosystem proposes the same.

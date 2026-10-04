@@ -141,7 +141,7 @@ line of a rule lists its knobs with their defaults. See [STANDARDS.md](STANDARDS
 - Severity: **low**
 - Evaluated per: **repo**
 - Applies to: all
-- Why it matters: Pipeline definitions are privileged code; changes need review from the owning team.
+- Why it matters: Pipeline definitions are privileged code; changes need review from the owning team. Azure Repos: CODEOWNERS or a Required reviewers policy; GitHub: the CODEOWNERS file.
 - Remediation:
   - All platforms: Add a CODEOWNERS file covering azure-pipelines*.yml, or a Required reviewers policy with path filter /azure-pipelines*.yml.
 

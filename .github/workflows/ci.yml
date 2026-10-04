@@ -49,7 +49,7 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install -e ".[dev,postgres,azuresql,azure-keyvault,azure-blob,azure-monitor]"
+      - run: pip install -e ".[dev,postgres,azuresql,azure-keyvault,azure-blob,azure-monitor,github-app]"
       - run: ruff check .
       - run: mypy src
       - run: pytest -p no:warnings -rs

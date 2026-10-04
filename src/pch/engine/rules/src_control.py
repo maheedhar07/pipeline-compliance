@@ -162,7 +162,7 @@ def src_005(ctx, policy: Policy, t) -> RuleResult:
 
 @rule(
     "SRC-006", "CODEOWNERS or required-reviewer policy covers pipeline files", "low", "repo",
-    "Pipeline definitions are privileged code; changes need review from the owning team.",
+    "Pipeline definitions are privileged code; changes need review from the owning team. Azure Repos: CODEOWNERS or a Required reviewers policy; GitHub: the CODEOWNERS file.",
     {"any": "Add a CODEOWNERS file covering azure-pipelines*.yml, or a Required reviewers policy with path filter /azure-pipelines*.yml."},
 )
 def src_006(ctx: RepoContext, policy: Policy) -> RuleResult:
@@ -179,15 +179,16 @@ def src_006(ctx: RepoContext, policy: Policy) -> RuleResult:
     return RuleResult.failed("no CODEOWNERS and no required-reviewer policy for pipeline files", paths=pats)
 
 
-def _github_only(ctx: RepoContext) -> RuleResult | None:
-    """NOT_APPLICABLE for Azure Repos; UNKNOWN (with the reason) for an external repo whose protection was not read."""
-    if ctx.protection is None:
+def _github_only(ctx: RepoContext) -> tuple[BranchProtection | None, RuleResult | None]:
+    """(protection, early result): NOT_APPLICABLE for Azure Repos; UNKNOWN (with the reason) for an external repo whose protection was not read."""
+    pr = ctx.protection
+    if pr is None:
         if not ctx.repo.external:
-            return RuleResult.na("GitHub branch protection rule (Azure Repos policies are not mapped)")
-        return RuleResult.unknown(ctx.policies.unavailable_reason or "GitHub branch protection was not read")
-    if not ctx.protection.available:
-        return RuleResult.unknown(ctx.protection.unavailable_reason or "GitHub branch protection could not be read")
-    return None
+            return None, RuleResult.na("GitHub branch protection rule (Azure Repos policies are not mapped)")
+        return None, RuleResult.unknown(ctx.policies.unavailable_reason or "GitHub branch protection was not read")
+    if not pr.available:
+        return None, RuleResult.unknown(pr.unavailable_reason or "GitHub branch protection could not be read")
+    return pr, None
 
 
 @rule(
@@ -197,10 +198,9 @@ def _github_only(ctx: RepoContext) -> RuleResult | None:
     params={"require_linear_history": False, "require_signed_commits": False},
 )
 def src_007(ctx: RepoContext, policy: Policy) -> RuleResult:
-    if (early := _github_only(ctx)) is not None:
-        return early
-    pr = ctx.protection
-    assert pr is not None
+    pr, early = _github_only(ctx)
+    if pr is None:
+        return early or RuleResult.unknown("GitHub branch protection could not be read")
     prm = rule_params(policy, "SRC-007")
     problems = []
     if not pr.block_force_pushes:
@@ -220,10 +220,9 @@ def src_007(ctx: RepoContext, policy: Policy) -> RuleResult:
     {"any": "GitHub: enable 'Do not allow bypassing the above settings' (classic) or remove bypass actors from the ruleset (or limit them to break-glass roles and waive this rule)."},
 )
 def src_008(ctx: RepoContext, policy: Policy) -> RuleResult:
-    if (early := _github_only(ctx)) is not None:
-        return early
-    pr = ctx.protection
-    assert pr is not None
+    pr, early = _github_only(ctx)
+    if pr is None:
+        return early or RuleResult.unknown("GitHub branch protection could not be read")
     if not pr.protected:
         return RuleResult.na("the default branch has no protection (see SRC-001)")
     ev = {"enforce_admins": pr.enforce_admins, "bypass_actors": pr.bypass_actors, "sources": pr.sources}

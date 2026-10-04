@@ -93,6 +93,8 @@ def check_sources(s: Settings) -> list[Check]:
         return [Check("sources", WARN, "no live source configured (demo mode only)")]
     out = []
     for src, fields in configured.items():
+        if src == "github":
+            continue  # reported by check_github
         fields = {k: ok for k, ok in fields.items() if k not in SOURCE_SECRETS[src]}
         missing = [k for k, ok in fields.items() if not ok]
         detail = ", ".join(f"{k}={'set' if ok else 'missing'}" for k, ok in fields.items())
@@ -113,6 +115,8 @@ def check_secrets(s: Settings) -> list[Check]:
         return [Check("secrets_provider", OK, provider.name)]
     out = [Check("secrets_provider", OK, provider.name)]
     for src in configured:
+        if src == "github":
+            continue  # reported by check_github
         parts, bad = [], False
         for name in SOURCE_SECRETS[src]:
             try:
@@ -125,6 +129,123 @@ def check_secrets(s: Settings) -> list[Check]:
             bad = bad or not ok
         out.append(Check(f"secret:{src}", FAIL if bad else OK, ", ".join(parts)))
     return out
+
+
+def _jwt_ready() -> bool:
+    try:
+        import jwt
+
+        return bool(getattr(jwt.algorithms, "has_crypto", False))
+    except ImportError:
+        return False
+
+
+def check_github(s: Settings, scope: Scope | None = None) -> Check:
+    """Offline: auth mode, which credentials are set/missing (never values) and, for App mode, whether the extra is installed."""
+    from pch.providers import ProviderError, get_secret_provider, source_secret_names
+
+    try:
+        provider = get_secret_provider(s)
+    except ProviderError:
+        return Check("github", WARN, "skipped: the secrets provider is not usable (see secrets_provider)")
+    parts: list[str] = [f"auth={s.github_auth}", f"api={s.github_api_url}"]
+    missing = False
+    try:
+        secrets_ok = {n: bool(provider.get(n)) for n in source_secret_names(s, "github")}
+    except ProviderError as exc:
+        return Check("github", FAIL, f"{', '.join(parts)}; {exc}")
+    if s.github_auth == "app":
+        ids = {"GITHUB_APP_ID": bool(s.github_app_id), "GITHUB_APP_INSTALLATION_ID": bool(s.github_app_installation_id)}
+        configured = any(ids.values()) or any(secrets_ok.values())
+    else:
+        ids = {}
+        configured = any(secrets_ok.values())
+    orgs = scope.github.orgs if scope else []
+    if not configured:
+        note = f"; scope.yaml github.orgs {orgs} will NOT be discovered" if orgs else ""
+        return Check("github", WARN if orgs else OK, f"not configured ({', '.join(parts)}): GitHub reader disabled, GitHub-only checks are UNKNOWN{note}")
+    for name, ok in {**ids, **secrets_ok}.items():
+        parts.append(f"{name}={'set' if ok else 'missing'}")
+        missing = missing or not ok
+    if s.github_auth == "app":
+        if _jwt_ready():
+            parts.append("github-app extra=installed")
+        else:
+            parts.append("github-app extra=MISSING (pip install 'pipeline-compliance[github-app]')")
+            missing = True
+    elif s.github_app_id:
+        parts.append("note: GITHUB_APP_* set but GITHUB_AUTH=pat")
+    parts.append("orgs=" + (", ".join(orgs) if orgs else "none in scope.yaml (only repos referenced by ADO pipelines)"))
+    return Check("github", FAIL if missing else OK, ", ".join(parts))
+
+
+async def _github_online(s: Settings, scope: Scope | None) -> list[Check]:
+    import httpx
+
+    from pch.collectors.github.client import RateLimited
+    from pch.collectors.github.reader import reason_for
+    from pch.collectors.http import HttpError
+    from pch.providers import get_secret_provider
+    from pch.sources import _github_client
+
+    client = _github_client(s, httpx.AsyncHTTPTransport(retries=1), {"backoff_base": 0.5, "max_attempts": 2, "timeout": s.http_timeout}, get_secret_provider(s))
+    if client is None:
+        return [Check("github_online", WARN, "skipped: GitHub reader is not configured")]
+    out: list[Check] = []
+    try:
+        try:
+            core = await client.rate_limit()
+            from datetime import datetime
+
+            reset = datetime.fromtimestamp(int(core["reset"])).strftime("%H:%M:%S") if core.get("reset") else "?"
+            low = isinstance(core.get("remaining"), int) and core["remaining"] < 200
+            out.append(Check("github_online", WARN if low else OK, f"rate limit: {core.get('remaining')}/{core.get('limit')} requests left, resets {reset}"))
+        except HttpError as exc:
+            hint = "the token/App was rejected (expired, revoked or wrong GITHUB_API_URL)" if exc.status == 401 else f"HTTP {exc.status}"
+            return [Check("github_online", FAIL, f"GET /rate_limit failed: {hint}")]
+        except RateLimited as exc:
+            return [Check("github_online", WARN, str(exc))]
+        orgs = scope.github.orgs if scope else []
+        if not orgs:
+            return out + [Check("github_permissions", OK, "no organisation in scope.yaml to probe (only /rate_limit was called)")]
+        probes = []
+        try:
+            first = await client.get_json(f"/orgs/{orgs[0]}/repos", {"type": "all", "per_page": 1})
+        except Exception as exc:  # noqa: BLE001
+            return out + [Check("github_permissions", WARN, reason_for(exc, f"organisation {orgs[0]} listing", "Metadata: read"))]
+        if not first:
+            return out + [Check("github_permissions", WARN, f"organisation {orgs[0]} lists no repositories visible to this credential")]
+        full, branch = first[0]["full_name"], first[0].get("default_branch") or "main"
+        for label, path, need in (("rules/branches", f"/repos/{full}/rules/branches/{branch}", "Metadata: read"),
+                                  ("file tree", f"/repos/{full}/git/trees/{branch}", "Contents: read"),
+                                  ("classic branch protection", f"/repos/{full}/branches/{branch}/protection", "Administration: read")):
+            try:
+                await client.get_json(path)
+                probes.append(f"{label}=ok")
+            except HttpError as exc:
+                if exc.status == 404 and label == "classic branch protection":
+                    probes.append(f"{label}=ok (none set)")
+                elif exc.status in (404, 409) and label == "file tree":
+                    probes.append(f"{label}=ok (empty)" if exc.status == 409 else f"{label}=MISSING")
+                else:
+                    probes.append(f"{label}=MISSING ({reason_for(exc, label, need).split(': ', 1)[-1]})")
+            except Exception as exc:  # noqa: BLE001
+                probes.append(f"{label}=? ({type(exc).__name__})")
+        bad = [p for p in probes if "MISSING" in p or "=?" in p]
+        out.append(Check("github_permissions", WARN if bad else OK, f"probed {full}: " + "; ".join(probes) + ("; unreadable parts are UNKNOWN in rules, never FAIL" if bad else "")))
+    finally:
+        await client.aclose()
+    return out
+
+
+def check_github_online(s: Settings, scope: Scope | None = None) -> list[Check]:
+    """``pch doctor --online``: GET /rate_limit (quota) and, when scope.yaml names an organisation, one read-only probe per permission."""
+    import asyncio
+
+    try:
+        return asyncio.run(_github_online(s, scope))
+    except Exception as exc:  # noqa: BLE001 - never echo SDK messages
+        return [Check("github_online", FAIL, f"probe failed ({type(exc).__name__})")]
 
 
 def check_artifact_store(s: Settings) -> Check:
@@ -262,7 +383,14 @@ def check_data_dir(s: Settings) -> Check:
     return Check("data_dir", OK, str(d))
 
 
-def run_checks(scope_path: Path | None = None, policy_path: Path | None = None) -> list[Check]:
+def _scope_or_none(s: Settings, scope_path: Path | None) -> Scope | None:
+    try:
+        return load_scope(scope_path or s.config_dir / "scope.yaml", required=False)
+    except ConfigError:
+        return None  # reported by check_config_files
+
+
+def run_checks(scope_path: Path | None = None, policy_path: Path | None = None, online: bool = False) -> list[Check]:
     s, first = check_settings()
     checks = [first]
     if s is None:
@@ -271,6 +399,10 @@ def run_checks(scope_path: Path | None = None, policy_path: Path | None = None) 
     checks += check_config_files(s, scope_path, policy_path)
     checks += check_sources(s)
     checks += check_secrets(s)
+    scope = _scope_or_none(s, scope_path)
+    checks.append(check_github(s, scope))
+    if online:
+        checks += check_github_online(s, scope)
     checks.append(check_database(s))
     mig = check_db_migrations(s)
     if mig is not None:

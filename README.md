@@ -163,7 +163,7 @@ The core is cloud-neutral. Exactly two seams (package `pch.providers`) let a dep
 | Secrets (`SecretProvider`) | `SECRETS_PROVIDER` | `env` (default), `file`, `azure_keyvault` | `.[azure-keyvault]` for Key Vault |
 | Raw scan cache (`ArtifactStore`) | `ARTIFACT_STORE` | `local` (default, `DATA_DIR/raw`), `azure_blob` | `.[azure-blob]` for Blob |
 
-**Secrets.** Only the credentials of the configured sources are resolved (`ADO_PAT`, `SONAR_TOKEN`, `AIKIDO_CLIENT_SECRET`, `SERVICENOW_PASSWORD`), when the live clients are built. Providers are explicit and never mixed: with `file` or `azure_keyvault` the credential env vars are ignored, so a stale variable can not silently win. A missing secret stops the scan with an error that names it (`secret ADO_PAT was not found via SECRETS_PROVIDER=file`), never its value. Replaying a cache (`--from-cache`) needs no credentials.
+**Secrets.** Only the credentials of the configured sources are resolved (`ADO_PAT`, `GITHUB_TOKEN` or `GITHUB_APP_PRIVATE_KEY`, `SONAR_TOKEN`, `AIKIDO_CLIENT_SECRET`, `SERVICENOW_PASSWORD`), when the live clients are built. Providers are explicit and never mixed: with `file` or `azure_keyvault` the credential env vars are ignored, so a stale variable can not silently win. A missing secret stops the scan with an error that names it (`secret ADO_PAT was not found via SECRETS_PROVIDER=file`), never its value. Replaying a cache (`--from-cache`) needs no credentials.
 
 * `env`: the Settings values. On Azure App Service the recommended path is to set app settings as Key Vault references (`@Microsoft.KeyVault(SecretUri=...)`); App Service resolves them with the app's managed identity and they arrive as ordinary env vars, so the default provider already works and the app needs no Azure code.
 * `file`: `<SECRETS_DIR>/<NAME>` per secret (Kubernetes secret volume, Secrets Store CSI driver). One trailing newline is stripped, names containing separators or `..` and files resolving outside the directory are rejected, world-readable files log a warning.
@@ -183,6 +183,8 @@ from it with `--require-hashes`. Regenerate after editing dependencies in `pypro
 pip install pip-tools
 pip-compile --generate-hashes --extra postgres -o requirements.lock pyproject.toml   # add --upgrade to bump
 ```
+
+The `github-app` extra (GitHub App auth) is in neither lockfile; add `--extra github-app` to the `pip-compile` command below if you use `GITHUB_AUTH=app` ([docs/CUSTOMIZING.md](docs/CUSTOMIZING.md#9-dependency-updates)).
 
 `requirements-azure.lock` is the same plus every Azure extra, for the organisation's Azure image (regenerate both together; CI audits both and installs the Azure one with hashes):
 
@@ -237,7 +239,21 @@ Scoring: `score = 100 * sum(weight x credit) / sum(weight x applicable)` with cr
 
 Test states per repo: `TESTS_OK`, `TESTS_LOW_COVERAGE`, `TESTS_NO_COVERAGE`, `TESTS_NOT_RUN`, `NO_TESTS`, `UNKNOWN`, `NOT_APPLICABLE` (ADF / Synapse / IaC / docs repos get the validation rule TST-006 instead).
 
-**Code on GitHub, pipelines in Azure DevOps.** GitHub is the default code host (`code_hosts: [github]` in `config/scope.yaml`; Azure Repos stays available as an opt-in for template reuse, but its API is not called and pipelines sourced from it are out of scope unless `azure_repos` is listed). Repos are discovered per ADO project from the repositories that build definitions and classic release artifacts point at, plus any `org/repo` named in `scope.yaml` `repos:`, so GitHub-hosted repos appear everywhere (named `org/repo`). The provider badge and the "Code hosted on" filter only show when more than one code host is in the scan. Pipeline, release, environment, Sonar, Aikido and ServiceNow rules evaluate normally. Checks that need data only GitHub has (branch protection, CODEOWNERS, repository contents for test detection) are **UNKNOWN with a reason, never FAIL**, until a read-only GitHub reader is plugged in (see [docs/CUSTOMIZING.md](docs/CUSTOMIZING.md#plug-in-a-github-reader) and ADR-13 in [docs/DECISIONS.md](docs/DECISIONS.md)). A GitHub repo that is neither named in `scope.yaml` nor referenced by an ADO pipeline is invisible until GitHub discovery exists (phase G2). The demo estate is ~70% GitHub-hosted.
+**Code on GitHub, pipelines in Azure DevOps.** GitHub is the default code host (`code_hosts: [github]` in `config/scope.yaml`; Azure Repos stays available as an opt-in for template reuse, but its API is not called and pipelines sourced from it are out of scope unless `azure_repos` is listed). Repos are discovered per ADO project from the repositories that build definitions and classic release artifacts point at, plus any `org/repo` named in `scope.yaml` `repos:`, so GitHub-hosted repos appear everywhere (named `org/repo`). The provider badge and the "Code hosted on" filter only show when more than one code host is in the scan. Pipeline, release, environment, Sonar, Aikido and ServiceNow rules evaluate normally. Checks that need data only GitHub has (branch protection, CODEOWNERS, repository contents for test detection) are read by the **read-only GitHub reader** when `GITHUB_TOKEN` (or a GitHub App) is configured, see below; without it they are **UNKNOWN with a reason, never FAIL**, and a GitHub repo that is neither named in `scope.yaml` nor referenced by an ADO pipeline is invisible (ADR-13). The demo estate is ~70% GitHub-hosted; the demo runs with the GitHub reader disabled (it has no GitHub API to read), so its GitHub-only checks show UNKNOWN. The GitHub reader is covered by respx-fixture tests.
+
+**GitHub reader (read-only, G2).** Set `GITHUB_TOKEN` (fine-grained PAT, default) or `GITHUB_AUTH=app` with an App installation (`pip install '.[github-app]'`); `GITHUB_API_URL` for GitHub Enterprise Server (`https://<host>/api/v3`). Name the organisations in `config/scope.yaml`:
+
+```yaml
+github:
+  orgs: [acme]               # GET /orgs/acme/repos?type=all
+  include: ["*"]             # globs on repo or org/repo (case-insensitive)
+  exclude: ["sandbox-*"]
+  topics_any: []             # keep repos with at least one of these topics (empty = no filter)
+  include_archived: false
+  include_forks: false
+```
+
+Repos = the filtered org listing, plus repos ADO pipelines reference, plus `repos:` entries. Repos with no ADO pipeline are grouped under their GitHub organisation, so their key is `<org>/<org>/<repo>` (ADO-referenced repos stay `<ADO project>/<org>/<repo>`; waivers, `exclude_repos` and overrides use that key). Per repo it reads metadata, the file tree (tests, Dockerfiles, IaC; no clone), CODEOWNERS (its `*` owner becomes the repo owner unless `scope.yaml` sets one) and the **effective default-branch rules** (rulesets and classic protection merged), which feed SRC-001..003, SRC-007..009 and TST-001..003/006. **The token must be read-only** (a write-capable token is a needless blast radius; the code only sends GETs and a guard enforces it) with repository permissions **Metadata: read, Contents: read, Administration: read**; Administration is only for classic branch protection, without it that part is UNKNOWN. Later (G3) Actions, Environments and Deployments: read. Anything the token cannot read becomes UNKNOWN with the missing permission named. `pch doctor` checks the configuration offline; `pch doctor --online` also calls `GET /rate_limit` and probes one repo per permission. Details: [docs/CUSTOMIZING.md](docs/CUSTOMIZING.md#github-reader), ADR-16.
 
 ## Lineage
 
@@ -329,7 +345,7 @@ Collectors are tested against fixtures in `tests/fixtures/` (no live credentials
 
 ## Security notes
 
-* Read-only by construction: a transport-level guard rejects non-GET requests (except the documented YAML preview POST and the Aikido OAuth token exchange); a test asserts a full scan sends nothing else, and that the web app exposes no mutating route.
+* Read-only by construction: a transport-level guard rejects non-GET requests (except the documented YAML preview POST, the Aikido OAuth token exchange and, in GitHub App mode, the installation token exchange pinned to the configured GitHub API host and exact path); a test asserts a full scan sends nothing else, and that the web app exposes no mutating route.
 * Secret values are never persisted: raw cache files are redacted before writing, variables are classified in memory (only names and reasons are stored), and stored pipeline JSON omits script bodies and secret-like inputs.
 * Web security (T5) is described in the next section; every control fails closed and is covered by `tests/test_web_security.py`.
 

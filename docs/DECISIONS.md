@@ -27,7 +27,7 @@ Choices made where `docs/PLAN.md` was ambiguous or silent. Revisit them when rea
 ## Collection
 - **Release to repo linking** follows the primary Build artifact (`artifacts[].definitionReference.definition.id`) to the build definition's repository. Releases that cannot be linked are skipped with a collection error.
 - **YAML expansion** uses `POST .../pipelines/{id}/preview` (previewRun=true). If it is refused, the raw `azure-pipelines.yml` is read through the Items API instead (templates are then not expanded) and an info collection error is recorded.
-- **Read-only guard.** All HTTP goes through `ReadOnlyTransport`. Besides GET, only the YAML preview POST and the Aikido OAuth client-credentials token POST (a documented token exchange, not a mutation) are allowed.
+- **Read-only guard.** All HTTP goes through `ReadOnlyTransport`. Besides GET, only the YAML preview POST and the Aikido OAuth client-credentials token POST (a documented token exchange, not a mutation) are allowed; ADR-16 adds the GitHub App installation token exchange, pinned to one host and exact path.
 - **Sonar project key resolution:** `scope.yaml` override, else `<ADO project>_<repo>`, else `<repo>`.
 - **Aikido** and some **ServiceNow / environment-check** details are unverified against live systems; they are isolated and marked `# VERIFY:` in code.
 - **Secret handling:** variable values are inspected in memory only. The raw cache is redacted (secret variables, secret-named fields, suspected secret values) and the database stores pipeline definitions without script bodies or secret-looking inputs.
@@ -180,29 +180,26 @@ Format: context, decision, consequences, how to reverse.
 - **Test state.** New `TestState.UNKNOWN`. For an external repo: if a pipeline effectively runs tests that proves tests exist and the usual semantics apply (`TESTS_OK` / `TESTS_LOW_COVERAGE` / `TESTS_NO_COVERAGE`, coverage from Sonar); otherwise `UNKNOWN`. It is never `NO_TESTS` or `TESTS_NOT_RUN` because that needs the file tree. ADF / Synapse / IaC repos are recognised from what their pipelines deploy (all deploy targets of one such kind) so they stay `NOT_APPLICABLE` and TST-006 applies.
 - **YAML expansion** through `pipelines/{id}/preview` still works (ADO fetches the file through the service connection); the Items-API fallback is skipped for external repos and produces an info collection error.
 - **Sonar / Aikido matching** for `org/repo`: Sonar keys also try `Project_repo`, `repo` and `org_repo`; Aikido tries `org/repo` then `repo`. `scope.yaml` overrides and `exclude_repos` match the full name case-insensitively (`Project/org/repo`); a waiver `repo` matches `Project/org/repo` or `org/repo` (a bare short name does not).
-- **Known limit.** A GitHub repo that no ADO pipeline or release references is invisible to Azure DevOps and therefore not scanned until a GitHub reader enumerates the organisation (the demo shows ~5% of its estate as such repos, absent from the report).
+- **Known limit (only while no GitHub reader is configured, see ADR-16).** A GitHub repo that no ADO pipeline or release references is invisible to Azure DevOps and therefore not scanned unless it is named in `scope.yaml`; with `GITHUB_TOKEN` (or a GitHub App) and `scope.yaml` `github.orgs` the organisation listing finds it (the demo shows ~5% of its estate as such repos, absent from the report, because the demo runs without a reader).
 - **Reverse.** Drop the `RepoEntry` discovery of external repos in `orchestrator._run` (Azure Repos behaviour is unchanged).
 
-Rule behaviour for externally hosted (GitHub) repos:
+Rule behaviour for externally hosted (GitHub) repos, without a reader and with the GitHub reader of ADR-16:
 
-| Rule | Behaviour for a GitHub-hosted repo |
-|---|---|
-| SRC-001, SRC-002, SRC-003 | **UNKNOWN** (reason above): ADO branch policies do not apply, GitHub branch protection needs the reader |
-| SRC-004 | Normal (pipeline definition in ADO / source control) |
-| SRC-005 | Normal (release artifact branch filters, environment branch-control checks) |
-| SRC-006 | **UNKNOWN** when an ADO YAML pipeline exists (CODEOWNERS lives in the repo); NOT_APPLICABLE when there is no YAML pipeline in ADO (a YAML file in GitHub that no ADO pipeline uses is not assessed) |
-| TST-001, TST-002 | PASS when a pipeline effectively runs tests (proof); otherwise **UNKNOWN**; never FAIL |
-| TST-003 | Normal when a pipeline runs tests (a missing coverage report is a real FAIL, from pipeline/Sonar data); **UNKNOWN** otherwise |
-| TST-004, TST-005 | Normal (pipeline / stage definitions) |
-| TST-006 | Normal when the repo is recognised as ADF / Synapse / IaC from its pipelines' deploy targets; NOT_APPLICABLE when pipelines deploy application targets; **UNKNOWN** when neither is known |
-| QLT-001..005, QLT-008 | Normal (pipeline + Sonar data). NOT_APPLICABLE for ADF/Synapse/IaC repos works through the inferred kind above |
-| QLT-006, QLT-007 | Normal (Aikido); "docs-only" repos cannot be recognised without contents, so they are evaluated |
-| SEC-001..005 | Normal (pipeline variables, variable groups, service connections) |
-| DEP-001..006 | Normal (stages, approvals, ServiceNow) |
-| SUP-001..005 | Normal (pipeline steps) |
-| TGT-* | Normal (deploy steps); ADF/Synapse refinement from repo contents is not applied |
-| HYG-001..003 | Normal (run history, owner) |
-| Migration readiness (MIG) | Normal (pipeline-based) |
+| Rule | Without the reader | With the reader (ADR-16) |
+|---|---|---|
+| SRC-001, SRC-002, SRC-003 | **UNKNOWN** (reason above): ADO branch policies do not apply, GitHub branch protection needs the reader | PASS / FAIL from the merged rulesets + classic protection; UNKNOWN only for what the token cannot read |
+| SRC-004 | Normal (pipeline definition in ADO / source control) | Same |
+| SRC-005 | Normal (release artifact branch filters, environment branch-control checks) | Same |
+| SRC-006 | **UNKNOWN** when an ADO YAML pipeline exists (CODEOWNERS lives in the repo); NOT_APPLICABLE when there is no YAML pipeline in ADO | PASS / FAIL on the CODEOWNERS file read from GitHub |
+| SRC-007, SRC-008, SRC-009 (new) | **UNKNOWN** | PASS / FAIL / UNKNOWN (force-push and deletion block, administrator bypass, CODEOWNERS present); NOT_APPLICABLE for Azure Repos repos (SRC-009 only for repos not read from GitHub) |
+| TST-001, TST-002 | PASS when a pipeline effectively runs tests (proof); otherwise **UNKNOWN**; never FAIL | From the file tree: NO_TESTS is a real FAIL; a truncated tree is UNKNOWN unless tests were seen |
+| TST-003 | Normal when a pipeline runs tests; **UNKNOWN** otherwise | Normal (coverage from pipeline / Sonar) once tests are known |
+| TST-004, TST-005 | Normal (pipeline / stage definitions) | Same |
+| TST-006 | Normal when the repo is recognised as ADF / Synapse / IaC from its pipelines' deploy targets; NOT_APPLICABLE when pipelines deploy application targets; **UNKNOWN** when neither is known | Repo kind comes from the tree (a truncated tree falls back to the left column) |
+| QLT-001..005, QLT-008 | Normal (pipeline + Sonar data) | Same |
+| QLT-006, QLT-007 | Normal (Aikido); "docs-only" repos cannot be recognised without contents, so they are evaluated | Docs-only repos are recognised from the tree |
+| SEC-001..005, DEP-001..006, SUP-001..005, HYG-001..003, Migration readiness (MIG) | Normal (pipeline, variable group, service connection, stage, ServiceNow, run-history data) | Same |
+| TGT-* | Normal (deploy steps); ADF/Synapse refinement from repo contents is not applied | The refinement now uses the tree |
 
 - **G1 note (GitHub-only default).** The Azure Repos path is kept for template reuse but is **off by default**: `scope.yaml` `code_hosts` defaults to `[github]`. Without `azure_repos` in it the scan does not call `_apis/git/repositories`, creates no Azure Repos repo rows, and build definitions / releases sourced from an unlisted host are out of scope (counted in one info collection error per project, never one per item, and never reported as orphans). `discover(..., code_hosts, known_github)` also turns `org/repo` names listed in `scope.yaml` `repos:` into repos, so "repos with no pipelines" means GitHub repos known from config or ADO references with no pipeline; a GitHub repo named nowhere stays invisible until G2 adds GitHub discovery (the ADR-13 limit above). The provider badge and "Code hosted on" filters show only when the scan holds more than one host (`scans.summary.providers`). No schema change.
 
@@ -231,4 +228,16 @@ Rule behaviour for externally hosted (GitHub) repos:
 - **Decision (hosts).** See the G1 note of ADR-13.
 - **Consequences.** Policy changes take effect with the next scan, not retroactively. Category weights are a new multiplier (default 1). Stage-name tier heuristics (`normalize/target_detect.py`) are still code; `scope.yaml` `env_tiers` is their override.
 - **Reverse.** Remove the `rules`/`scoring` fields from `Policy` (the runner reads defaults), and the `reasons` key is simply ignored.
+
+### ADR-16 Read-only GitHub reader: organisation discovery, branch rules, file tree, CODEOWNERS (G2)
+- **Context.** All code is on GitHub; Azure DevOps only knows it through pipelines. ADR-13 left every GitHub-only check UNKNOWN and repos without an ADO pipeline invisible.
+- **Decision (client).** `collectors/github/client.py` builds on `SourceClient`/`ReadOnlyTransport` (no second httpx client). Auth is `GITHUB_AUTH=pat` (fine-grained PAT, must be read-only) or `app` (GitHub App installation: RS256 JWT through the optional extra `github-app`, import-guarded with a `ProviderUnavailable` naming the extra; installation token cached until 5 minutes before expiry). Secrets come from the secret provider and are registered for redaction; the token response is redacted in the raw cache. Pagination follows `Link: rel=next` only when it stays on the configured API host, scheme and path (SSRF guard). Rate limits: `Retry-After` (403 and 429) and `X-RateLimit-Remaining/Reset` are honoured; a wait of up to 120 s is slept, a longer one raises `RateLimited` and fails that repo's part only (UNKNOWN with the reason). `X-Accepted-GitHub-Permissions` is surfaced in reasons.
+- **Decision (the one POST).** The App token exchange (`POST <GITHUB_API_URL>/app/installations/<id>/access_tokens`) is a token exchange, not a mutation, the same precedent as the Aikido OAuth POST. Unlike the older `ALLOWED_POSTS` regexes it is **bound to the host and the exact path** and is a per-client allowance (`SourceClient(allowed_posts=...)` -> `ReadOnlyTransport`), so no other client and no other GitHub URL can POST (tests: other installation id, other path, other host, other scheme, PAT mode, ADO client, PUT/PATCH/DELETE).
+- **Decision (what is read).** Per repo, default branch: metadata, `git/trees/{branch}?recursive=1` (a `truncated` tree makes test/kind detection partial), CODEOWNERS (`.github/`, root, `docs/`, through the contents API, only the existing one when the tree is complete), `rules/branches/{branch}` (rulesets) plus `rulesets/{id}` for bypass actors, and `branches/{branch}/protection` (classic; 404 = none, 403 = UNKNOWN). They are merged into one `BranchProtection`: a control counts when any source enforces it, numbers take the maximum. A source that could not be read is recorded in `incomplete`; a control not seen while a source is incomplete is **UNKNOWN, never FAIL**. Owner = the default (`*`) CODEOWNERS rule unless `scope.yaml` sets one.
+- **Decision (rules).** SRC-001 approvals >= `policy.min_reviewers` and "approvals reset on push" = dismiss stale reviews or require approval of the last push (`allow_creator_vote` has no GitHub equivalent: authors cannot approve their own PR); SRC-002 required status checks (optionally all of `required_checks`); SRC-003 conversation resolution (GitHub has no work-item link policy, stated in the rule text). New: SRC-007 force pushes and deletion blocked (params `require_linear_history`, `require_signed_commits`), SRC-008 protection also binds administrators / no bypass actors, SRC-009 CODEOWNERS present (param `require_code_owner_review`). Defaults high / medium / low; re-rate or disable in `policy.yaml`.
+- **Decision (discovery).** `scope.yaml` `github:` (`orgs`, `include`, `exclude`, `topics_any`, `include_archived`, `include_forks`; strict). Repos = filtered org listing + repos referenced by ADO pipelines + `repos:` entries. A repo that no ADO project already holds is grouped by its GitHub organisation (or by the `repos:` entry's `project`): key `<org>/<org>/<repo>`; repos referenced by ADO pipelines keep `<ADO project>/<org>/<repo>`. No schema change: the project column simply holds the organisation; protection is stored in `repo_results.external["protection"]`.
+- **Decision (demo).** The demo runs with the reader disabled: it has no GitHub API to serve and inventing trees would be mock data; its GitHub-only checks stay UNKNOWN. The reader is verified by respx fixtures.
+- **Known limits.** One GitHub host per scan (GitHub.com or one GHES); organisation rulesets' bypass actors need organisation-level read access and are otherwise "cannot tell" for SRC-008; only the default branch is assessed; no ETag caching. `# VERIFY:` the field names in `collectors/github/protection.py` against your GitHub.
+- **Consequences.** More calls per repo (about 4 to 6, plus a few content files only when file names do not show tests): mind the 5,000/hour limit of a PAT (a GitHub App gets more); the scan waits out short rate limits. Credentials with more than read access are not detected, only discouraged.
+- **Reverse.** Unset `GITHUB_TOKEN` / the App id: the reader is not built and every GitHub-only check returns to UNKNOWN (ADR-13).
 

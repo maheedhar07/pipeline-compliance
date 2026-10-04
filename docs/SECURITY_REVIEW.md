@@ -93,5 +93,6 @@ Confirm on a real App Service before go-live (the `# VERIFY:` comments in the co
 * No URL query, credential or row value in Application Insights `exceptions` / `dependencies` / `requests`.
 
 **Source systems** (`collectors/aikido.py:18,20,22,39,44`, `collectors/transport.py:21,22`, `ado/service_conn.py:16`, `ado/runs.py:116`, `ado/environments.py:47`)
+* GitHub (G2, ADR-16): response field names of rulesets and classic branch protection (`collectors/github/protection.py`, `# VERIFY:`), org-ruleset bypass actors visibility, and `pch doctor --online` against the real organisation. The GitHub App token exchange is the one POST that IS bound to host and exact path (unlike the Aikido regexes of SEC-10).
 * Aikido token / repository / issue endpoints and field names (the two token paths in `ALLOWED_POSTS`); ARM connection scope fields;
   where CRQ numbers appear in release data; how the ServiceNow check shows up in environments. Re-run the collectors against fixtures after any change.

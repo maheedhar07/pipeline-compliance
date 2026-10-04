@@ -12,6 +12,15 @@ projects: []
 # Repos to skip, as "<project>/<repo>", e.g. ["Sandbox/scratch-repo"]. Code hosted on GitHub (built by ADO pipelines) is
 # named "<org>/<repo>": "<project>/<org>/<repo>". Matching is case-insensitive.
 exclude_repos: []
+# GitHub reader (needs GITHUB_TOKEN or a GitHub App, see README "GitHub reader"). Repos = org listing (filtered) + repos referenced
+# by ADO pipelines + `repos:` below. Repos with no ADO pipeline are keyed "<org>/<org>/<repo>".
+github:
+  orgs: []                  # e.g. [acme]
+  include: []               # globs on repo or org/repo, case-insensitive; empty = all
+  exclude: []               # e.g. ["sandbox-*"]
+  topics_any: []            # keep repos with at least one of these topics; empty = no topic filter
+  include_archived: false
+  include_forks: false
 # Stage/environment name -> tier (test/uat/prod ...), applied BEFORE the name-based regex.
 env_tiers: {}
 # Per-repo overrides (project and repo required, the rest optional):
