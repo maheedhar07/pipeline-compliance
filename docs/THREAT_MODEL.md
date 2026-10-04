@@ -1,7 +1,7 @@
 # Threat model (STRIDE-lite)
 
 Scope: the deployed system on Azure App Service (web) plus a scheduled scan job, Azure SQL or PostgreSQL, Blob/Key Vault (optional), reading Azure DevOps, SonarQube, Aikido and ServiceNow.
-Companion documents: `SECURITY_REVIEW.md` (findings, `# VERIFY:` list), `DEPLOY_AZURE.md`, `IMPORT_CHECKLIST.md`. Tests are cited as `file::name` under `tests/`.
+Companion documents: `SECURITY_REVIEW.md` (findings, `# VERIFY:` list), `DEPLOY_AZURE.md`, `USING_IN_YOUR_ORG.md`. Tests are cited as `file::name` under `tests/`.
 
 ## Assets
 

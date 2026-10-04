@@ -100,13 +100,13 @@ from pch.store.migrate import make_config, upgrade
 engine = build_engine(get_settings().database_url)
 upgrade(engine)                                    # autogenerate compares against a database at head
 with engine.connect() as conn:
-    command.revision(make_config(conn), message="add scans note", autogenerate=True, rev_id="0002")
+    command.revision(make_config(conn), message="add scans note", autogenerate=True, rev_id="0003")
 PY
 ```
 
 Then review the file by hand (autogenerate misses renames, server defaults and data migrations; it runs in batch mode for SQLite), keep `downgrade()` correct, and run
 `pytest tests/test_db_portability.py` (`test_models_and_migrations_in_sync` fails on any model/migration difference, `test_upgrade_empty_to_head_and_downgrade_base` exercises the chain).
-Revision ids so far are sequential (`0001`); keep that convention with `rev_id`. Test the revision on PostgreSQL and SQL Server too: CI's `db-matrix` job does.
+Revision ids so far are sequential (`0001`, `0002`); keep that convention with `rev_id`. Test the revision on PostgreSQL and SQL Server too: CI's `db-matrix` job does.
 Never edit an already released revision; add a new one.
 
 ### Adding another dialect (checklist)
@@ -266,7 +266,7 @@ The product name is cosmetic; the Python package name is a mechanical but wide c
 | CLI help text | `src/pch/cli.py` (`typer.Typer(help=...)`), `src/pch/__init__.py` docstring |
 | Cloud role names (App Insights `service.name`) | `SERVICE_WEB`, `SERVICE_SCAN` in `src/pch/telemetry.py` (`pch-web`, `pch-scan`), the `_bootstrap(..., "pch-scan")` calls in `cli.py` and the matching text in `DEPLOY_AZURE.md`, `README.md`, `tests/test_ops.py` |
 | App role value | Entra app role `PCH.Reader` (your tenant) and `AUTH_ALLOWED_ROLES`; examples in `config_reference.py`, `.env.example`, docs |
-| Org placeholders | see `IMPORT_CHECKLIST.md` (grep list) |
+| Org placeholders | see `USING_IN_YOUR_ORG.md` phase 2 (grep list) |
 
 **Python package and console script** (`src/pch`, import path `pch`, command `pch`). Keeping the command name `pch` is fine and avoids touching docs and hint messages; rename only the import path if you must:
 

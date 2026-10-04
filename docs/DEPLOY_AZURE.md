@@ -1,4 +1,6 @@
-# Azure App Service runbook
+# Azure App Service runbook (optional)
+
+> **Only if you host the dashboard on Azure App Service.** The adoption path is [USING_IN_YOUR_ORG.md](USING_IN_YOUR_ORG.md); a local `pch serve` plus the scheduled GitHub Actions scan needs nothing from this page.
 
 Ordered runbook to run the dashboard on **Azure App Service for Containers (Linux)** with Entra ID sign-in (Easy Auth), Azure SQL, Key Vault and Blob, and the scan as a separate scheduled job.
 All `az` snippets are **examples**: confirm flags with `az <command> --help` for your CLI version, run them with an identity that may create resources, and adapt names, SKUs, networking and tags to your landing zone.
@@ -114,7 +116,7 @@ CREATE USER [id-pch-scan]   FROM EXTERNAL PROVIDER;  ALTER ROLE db_datareader AD
 CREATE USER [id-pch-deploy] FROM EXTERNAL PROVIDER;  ALTER ROLE db_ddladmin  ADD MEMBER [id-pch-deploy]; ALTER ROLE db_datareader ADD MEMBER [id-pch-deploy]; ALTER ROLE db_datawriter ADD MEMBER [id-pch-deploy];
 ```
 
-Source systems (ADO, Sonar, Aikido, ServiceNow): create **read-only** tokens/users (ADO PAT scopes are listed in the README) and store them in Key Vault (`ado-pat`, `sonar-token`, `aikido-client-secret`, `servicenow-password`). The web app needs none of them.
+Source systems (ADO, Sonar, Aikido, ServiceNow): create **read-only** tokens/users (ADO PAT scopes are listed in `USING_IN_YOUR_ORG.md` phase 0) and store them in Key Vault (`ado-pat`, `sonar-token`, `aikido-client-secret`, `servicenow-password`). The web app needs none of them.
 The database role set above is the intended minimum; confirm `db_ddladmin` is sufficient for your migrations in staging (**# VERIFY**).
 
 ## 4. Build and push the image
@@ -193,7 +195,7 @@ export APP_ENV=prod DB_AUTH=azure_ad DATABASE_URL='mssql+pyodbc://@<sql-pch-prod
 pch db upgrade && pch db check
 ```
 
-The SQL server's firewall / private endpoint must allow the runner. Do not use `DB_AUTO_MIGRATE=true` in prod: it needs DDL rights on the app identity and concurrent instances can race. Rollback policy and backups: `IMPORT_CHECKLIST.md`, section 10.
+The SQL server's firewall / private endpoint must allow the runner. Do not use `DB_AUTO_MIGRATE=true` in prod: it needs DDL rights on the app identity and concurrent instances can race. Rollback policy and backups: section 11 below.
 
 ## 7. Authentication (Web App, Settings, Authentication)
 
@@ -219,7 +221,7 @@ The SQL server's firewall / private endpoint must allow the runner. Do not use `
 ```
 
 Assign users or groups to **PCH Reader** under Enterprise applications, Users and groups. The `roles` claim is then present in the principal that Easy Auth passes in `X-MS-CLIENT-PRINCIPAL`; the app allows the request only if it contains a role from `AUTH_ALLOWED_ROLES`. Sign-out is `/.auth/logout` (linked in the header).
-Then run the forged-header test in `IMPORT_CHECKLIST.md` (expect 401, or a 302 to Microsoft sign-in, never data).
+Then run the forged-header test in section 11 (expect 401, or a 302 to Microsoft sign-in, never data).
 
 ## 8. Health check, logging, telemetry, shutdown
 
@@ -233,10 +235,10 @@ Then run the forged-header test in `IMPORT_CHECKLIST.md` (expect 401, or a 302 t
 ## 9. The scan job (out-of-band)
 
 `pch serve` (the web app) and `pch scan` (minutes to hours) are separate processes: never run scans inside the web container. Both use the same image and database; the scan lock in the database ensures one scan at a time even if two schedulers fire.
-Exit codes (README): 0 ok, 1 generic failure, 2 configuration, 3 database not ready, 4 another scan holds the lock (usually fine), 5 interrupted or timed out (the scan row is `failed`, the lock released).
+Exit codes (`USING_IN_YOUR_ORG.md` phase 4): 0 ok, 1 generic failure, 2 configuration, 3 database not ready, 4 another scan holds the lock (usually fine), 5 interrupted or timed out (the scan row is `failed`, the lock released).
 Run `pch scan` and then `pch scans prune --keep 30 --older-than 90` (retention; `--dry-run` first).
 
-**(0) GitHub Actions (provided).** `.github/workflows/scheduled-scan.yml` runs the scan on a cron schedule with OIDC login to Azure (no stored client secret), secrets from the `pch-scan` environment and a job summary; see README "Scheduling" for the variables and the federated credential. Pair it with an alert on "no `complete` scan in the last N hours" (the dashboard banner uses `SCAN_STALE_HOURS`).
+**(0) GitHub Actions (provided).** `.github/workflows/scheduled-scan.yml` runs the scan on a cron schedule with OIDC login to Azure (no stored client secret), secrets from the `pch-scan` environment and a job summary; see `USING_IN_YOUR_ORG.md` phase 4 for the variables and the federated credential. Pair it with an alert on "no `complete` scan in the last N hours" (the dashboard banner uses `SCAN_STALE_HOURS`).
 
 **(a) Azure DevOps scheduled pipeline (container job).** A YAML pipeline with a `schedules:` cron trigger and `container:` pointing at the same image in ACR, running `pch scan`. The pipeline only *reads* ADO via the PAT stored as a secret variable / variable group linked to Key Vault; it must not write to ADO. Authenticate to Azure SQL/Blob/Key Vault with a workload-identity-federation service connection (OIDC); give that identity the scan roles from section 3. # VERIFY: use `AzureCLI@2` with `addSpnToEnvironment: true` or the pipeline's federated identity to obtain tokens for `DefaultAzureCredential` (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_FEDERATED_TOKEN_FILE`).
 
@@ -254,7 +256,61 @@ Alert on a failed job run and on "no `complete` scan in the last N hours".
 
 ## 11. Verify, then go live
 
-Run the go-live gate in `IMPORT_CHECKLIST.md` section 9 (forged-header test, readiness probe, excluded paths, role assignment, retention, backup/restore, rollback).
+All of these must hold before real users get access. Items marked (V) are `# VERIFY:` assumptions; the authoritative list with file references is
+[SECURITY_REVIEW.md, "VERIFY markers and go-live checklist"](SECURITY_REVIEW.md#verify-markers-and-go-live-checklist). Do not copy it; tick each entry there and record the result in your change ticket.
+
+**Platform behavior**
+- [ ] Every (V) item in the SECURITY_REVIEW list is confirmed on the real App Service (Easy Auth variables and header stripping, health probe host, shutdown window, Azure SQL token auth, telemetry content, source API field names).
+- [ ] **Forged-header test** (from outside, against the public URL): a request with a made-up principal must not get data.
+
+  ```bash
+  P=$(printf '%s' '{"auth_typ":"aad","name_typ":"name","role_typ":"roles","claims":[{"typ":"roles","val":"PCH.Reader"},{"typ":"oid","val":"00000000-0000-0000-0000-000000000000"}]}' | base64 | tr -d '\n')
+  curl -s -o /dev/null -w '%{http_code}\n' -H "X-MS-CLIENT-PRINCIPAL: $P" https://<app>.azurewebsites.net/api/v1/overview   # expect 401 (or 302 to the Microsoft login if the unauthenticated action is Redirect); never 200
+  curl -s -o /dev/null -w '%{http_code}\n' -H "X-MS-CLIENT-PRINCIPAL: $P" https://<app>.azurewebsites.net/health/live         # 200 and no data: excluded paths stay data-free
+  ```
+  Repeat against every other ingress that exists (private endpoint name, custom domain, `*.scm.azurewebsites.net` must not serve the app). A 200 with data anywhere is a stop.
+- [ ] **Readiness probe**: `curl -i https://<app>.azurewebsites.net/health/ready` returns `200 {"status":"ok"}`; with the DB stopped or the schema behind head it returns `503` with a reason code and no URL or exception text. The App Service health check path is `/health/ready` and at least 2 instances run.
+- [ ] **Easy Auth excluded paths** are exactly `/health/live` and `/health/ready` (and `/api/v1/health` if used). Everything else requires sign-in: an anonymous browser request to `/` is redirected to Microsoft (or 401), `/api/v1/overview` and `/static/` behave as documented.
+- [ ] **Role assignment**: *Assignment required = Yes*; the reader app role is assigned to the intended group; a signed-in user without the role gets 403 (page with no data); a user with the role gets 200. `AUTH_ALLOW_ANY_AUTHENTICATED` is unset. The app registration is single tenant.
+- [ ] `APP_ENV=prod`; `/api/docs` and `/openapi.json` return 404; response headers include HSTS and the strict CSP; `ALLOWED_HOSTS` lists only your host names.
+- [ ] All source URLs are `https://` (settings validation enforces it) and the credentials are read-only tokens with the scopes in USING_IN_YOUR_ORG.md phase 0.
+
+**Data and operations**
+- [ ] **Retention schedule** exists and ran once: `pch scans prune --keep 30 --older-than 90` (or `RETENTION_KEEP_SCANS` / `RETENTION_MAX_AGE_DAYS`) scheduled after the scan; `--dry-run` reviewed first.
+- [ ] **Scan job**: runs `pch scan` out-of-band with `APP_ENV=prod`, `SCAN_TIMEOUT_MINUTES` below `SCAN_LOCK_STALE_MINUTES` (validated), exit code alerts (`4` = already running is benign; `1`, `2`, `3`, `5` alert).
+- [ ] **Backup and restore of the database** tested, not assumed (next section).
+- [ ] Logs reach Log Analytics / App Insights, and a sample of `exceptions`, `dependencies` and `requests` contains no URL query, credential or row value (SEC-09).
+- [ ] Identities hold only the roles in the section 3 table; Azure SQL is Entra-only, the storage account has shared-key access disabled, Key Vault uses RBAC.
+- [ ] Alerts: failed scan (exit code or no `complete` scan within 36 h), health check failures, 5xx rate.
+
+### Backup, restore and rollback
+
+**Database backup and restore.** Azure SQL: automated backups and point-in-time restore are on by default (check the retention you need; configure long-term retention if policy requires). PostgreSQL: your managed service's PITR or `pg_dump`. Before every release that includes a migration, take (or confirm) a restorable point.
+Restore drill: restore to a **new** database name, point a staging copy of the app at it (`DATABASE_URL`), run `pch db current` and `pch doctor`, open the dashboard. Compliance data can be re-created by re-scanning (history cannot), so the drill's pass criterion is "schema at head and the latest scan visible".
+
+**Rollback of the application.** Deployments are by image digest. Roll back by redeploying the previous image digest (`<acr>.azurecr.io/<repo>@sha256:<previous>`) to the web app and the scan job. Keep the digest of the running release in your release notes.
+The app requires the database to be at **exactly the head revision of the running build** (`pch db check`, readiness `schema_not_ready`), so an older image will not start against a newer schema. Decide by the migrations in the release:
+
+| Migrations in the release | Rollback |
+|---|---|
+| None | Redeploy the previous digest. Done. |
+| Additive only (new table, new nullable column, new index) | Redeploy the previous digest after running the downgrade to the previous revision (below); it only drops the new, empty objects. Test it on a restored copy first. |
+| Destructive or data-rewriting (drop, narrowing a type, backfill) | Do **not** run a downgrade in prod. Restore the pre-release backup into a new database, point the app at it, redeploy the previous digest, re-scan if needed. |
+
+Downgrade (no CLI command exists for it; `pch db upgrade --revision` can only move forward). Run it from the previous or current image, with the app and scan job stopped:
+
+```bash
+python - <<'PY'
+from pch.settings import get_settings
+from pch.store.engine import build_engine
+from pch.store.migrate import downgrade
+downgrade(build_engine(get_settings().database_url), "<previous-revision-id>")   # never "base": that drops every table
+PY
+pch db check    # run with the PREVIOUS image: must report at head
+```
+
+Downgrading to `base` (or below revision `0001`) deletes all data and is never a rollback. Write a correct `downgrade()` for every migration you add (`CUSTOMIZING.md`, "Add a migration").
+Release order that keeps rollback simple: stop the scan schedule, confirm the backup, `pch db upgrade` (as the deploy identity), deploy the new digest, check `/health/ready`, re-enable the schedule.
 
 ## 12. Where infrastructure-as-code goes
 

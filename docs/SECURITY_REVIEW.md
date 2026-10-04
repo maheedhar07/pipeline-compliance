@@ -74,7 +74,7 @@ New `# VERIFY:` markers (confirm on first contact with real data): `release/depl
 
 ## VERIFY markers and go-live checklist
 
-Confirm on a real App Service before go-live (the `# VERIFY:` comments in the code; the full gate is in `IMPORT_CHECKLIST.md`).
+Confirm on a real App Service before go-live (the `# VERIFY:` comments in the code; the full gate is in `DEPLOY_AZURE.md` section 11).
 
 **Easy Auth / ingress** (`web/auth.py`, `web/guard.py`, `settings.py`, `docs/DEPLOY_AZURE.md`)
 * `WEBSITE_AUTH_ENABLED=True` reaches the container when Authentication is on (`guard.py:62`, `settings.py:131`).

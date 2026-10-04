@@ -1,41 +1,33 @@
 # Pipeline Compliance Hub
 
-A **report-only** CI/CD compliance dashboard, built as a **template** you import and extend. It scores the pipelines of every repository
-(Azure DevOps Classic build, Classic release and YAML; SonarQube, Aikido and ServiceNow as supporting sources) against a catalog of 61
-deterministic Python rules and serves the result as a server-rendered dashboard plus a JSON API. GitHub Actions workflows are assessed as pipelines too (G3).
-
-* **Report-only.** It never writes to Azure DevOps, GitHub, SonarQube, Aikido or ServiceNow (a transport-level guard, tested), and compliance is decided by Python rules, never by an AI.
-* **Safe by default.** Fails closed when misconfigured (`APP_ENV=prod` refuses unsafe auth, bind, host and URL settings), never persists secret values, redacts every cache and log.
-* **Five swappable seams**, chosen by settings: database (SQLite / PostgreSQL / Azure SQL), secrets (env / file / Key Vault), auth (none / Easy Auth), artifact storage (local / Blob), source collectors. Everything else is concrete code.
-* **Runs without credentials.** A synthetic 280-repo estate goes through the real collectors, normalizers and rules.
-
-## Quick start (demo, no credentials)
+A **report-only** CI/CD compliance dashboard, built as a template you import and extend. It scores every repository's pipelines (Azure DevOps YAML and Classic, GitHub Actions; SonarQube, Aikido and ServiceNow as supporting sources) against 61 deterministic Python rules and serves the result as a server-rendered dashboard plus a JSON API.
+It never writes to Azure DevOps, GitHub, SonarQube, Aikido or ServiceNow (a transport-level guard, tested), never persists secret values, and fails closed when misconfigured.
+Standards are configuration (`config/policy.yaml`, `config/scope.yaml`); five seams (database, secrets, auth, artifact storage, source collectors) are swappable by settings.
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"
-pch seed-demo --repos 280 && pch scan --demo     # synthetic API payloads -> REAL collectors -> rules (~15 s incl. 3 history snapshots)
+pch seed-demo --repos 280 && pch scan --demo     # synthetic API payloads -> REAL collectors -> rules (~15 s)
 pch serve                                        # http://127.0.0.1:8000  (AUTH_MODE=none, loopback only)
 ```
 
-Variants: `pch scan --demo --history 0` (single snapshot, ~3 s), `pch scan --demo --cache` (also write the redacted raw cache), `pch rules list`.
+Variants: `pch scan --demo --history 0` (single snapshot), `pch scan --demo --cache` (also write the redacted raw cache), `pch rules list`. The demo keeps the GitHub reader disabled, so its GitHub-only checks show UNKNOWN.
 
-## Using this as a template
+## Start here
 
-| Guide | What it covers |
+| You want to... | Read |
 |---|---|
-| [docs/IMPORT_CHECKLIST.md](docs/IMPORT_CHECKLIST.md) | Importing the repo into your org, replacing placeholders, first deploy, the go-live gate and rollback |
-| [docs/CUSTOMIZING.md](docs/CUSTOMIZING.md) | Architecture and one recipe per task: switch DB, secrets, auth, artifact store, add a collector or rule, rebrand, rebuild assets, update dependencies |
-| [docs/DEPLOY_AZURE.md](docs/DEPLOY_AZURE.md) | Ordered Azure App Service runbook: resources, role assignments, app settings, Easy Auth, health check, scan job |
-| [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) | Assets, trust boundaries, threats, mitigations with their tests, residual risks |
-| [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md) | Independent review findings (all fixed or accepted) and the `# VERIFY:` list to confirm on a real platform |
-| [docs/PLAN.md](docs/PLAN.md) · [docs/RULES.md](docs/RULES.md) · [docs/DECISIONS.md](docs/DECISIONS.md) · [docs/TEMPLATE_PLAN.md](docs/TEMPLATE_PLAN.md) | Domain plan, generated rule catalog, decision records, template/hardening plan |
-
-AI-assisted work in a derived repo should keep the invariants listed at the end of [CLAUDE.md](CLAUDE.md).
+| Adopt it in your organisation (ordered phases, commands, troubleshooting) | [docs/USING_IN_YOUR_ORG.md](docs/USING_IN_YOUR_ORG.md) |
+| Change a standard, threshold, severity or scope | [docs/STANDARDS.md](docs/STANDARDS.md) |
+| Extend it (rule, collector, DB, auth, rebrand, dependencies) | [docs/CUSTOMIZING.md](docs/CUSTOMIZING.md) |
+| Work on it with an AI coding assistant | [docs/AI_GUIDE.md](docs/AI_GUIDE.md) and [CLAUDE.md](CLAUDE.md) |
+| Host the dashboard on Azure App Service (optional) | [docs/DEPLOY_AZURE.md](docs/DEPLOY_AZURE.md) |
+| Review security | [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md), [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) |
+| Background | [docs/RULES.md](docs/RULES.md) (generated catalog), [docs/DECISIONS.md](docs/DECISIONS.md), [docs/PLAN.md](docs/PLAN.md), [docs/TEMPLATE_PLAN.md](docs/TEMPLATE_PLAN.md) |
 
 ## Configuration reference
 
 Settings are environment variables (or a `.env` file; copy `.env.example`). Invalid values stop startup with a clear error naming the variable, and
-`pch doctor` validates the whole setup (credentials are reported only as `set` / `missing`). This table is generated from the `Settings` class
+`pch doctor` validates the whole setup (credentials are reported only as `set` / `missing`; see [docs/USING_IN_YOUR_ORG.md](docs/USING_IN_YOUR_ORG.md)). This table is generated from the `Settings` class
 (`pch config reference`) and a test fails when it, `src/pch/config_reference.py` or `.env.example` drift from the code.
 
 <!-- config-reference:start -->
@@ -206,16 +198,6 @@ docker compose run --rm app pch scan                        # real scan (needs .
 
 The container image runs as a non-root user. Compose runs the app with `APP_ENV=dev`, `AUTH_MODE=none` and `AUTH_NONE_ALLOW_CONTAINER_BIND=true` (the app must listen on `0.0.0.0` inside the container) and publishes the port to `127.0.0.1` only. Never change that mapping: there is no sign-in in this mode.
 
-## Pointing it at your real systems
-
-1. `cp .env.example .env` and fill in the values (the file is gitignored; secrets only ever come from the environment or a secret provider). See the [configuration reference](#configuration-reference).
-2. **`config/scope.yaml` and `config/policy.yaml`** ship as commented examples with placeholder values (`your-org`, `myorgacr.azurecr.io`); every field is documented inline. They are strictly validated: an unknown or mistyped key is an error such as `config/policy.yaml: waivers.0.expires: ...` (file plus field path). Set your organisation's Sonar quality gate via `sonar_quality_gate_name` (default `Sonar way`).
-3. **ADO PAT scopes (all read-only):** Build (Read), Release (Read), Code (Read), Project and Team (Read), Service Connections (Read), Variable Groups (Read), Environment (Read), Task Groups (Read). Do not grant write, manage or execute scopes. The tool also refuses to send any non-GET request except the YAML `preview` call (`previewRun: true`).
-4. **`pch doctor`** (`--json` for machines) checks that settings load, scope/policy validate, which sources are configured and whether each has its credentials (`set`/`missing`, never values), the secret provider, the artifact store (write/read/delete probe), that the database answers `SELECT 1` and is at the migration head, and that `DATA_DIR` is writable. Output is `OK`/`WARN`/`FAIL` per check; exit code 1 if any check fails.
-5. `pch scan` (live) or `pch scan --from-cache <scan_id>` to re-evaluate the cached, redacted raw responses of an earlier scan. Then `pch serve`.
-
-Things to check on first contact with real data (all marked `# VERIFY:` in the code): the Aikido endpoint paths/field names (`collectors/aikido.py`), how your CRQ numbers appear in release names/descriptions/pipeline parameters (`collectors/ado/runs.py`), how the ServiceNow integration is attached to environments/release gates, and the resource-group scope fields of service connections. The full list is in [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md#verify-markers-and-go-live-checklist).
-
 ## How it works
 
 ```
@@ -236,13 +218,13 @@ Scoring: `score = 100 * sum(weight x credit) / sum(weight x applicable)` with cr
 
 **Standards are configuration.** Every rule can be disabled, re-rated or tuned in `config/policy.yaml` (`rules: {QLT-004: {enabled: false}, DEP-001: {severity: high}, DEP-005: {params: {window_slack_hours: 4}}}`); `docs/STANDARDS.md` is the one page that maps every knob (file, key, default, which rules use it, how to verify): [docs/STANDARDS.md](docs/STANDARDS.md). The rules and their tunable params are in [docs/RULES.md](docs/RULES.md); `pch rules list --params` prints them.
 
-**GitHub Actions as a pipeline platform (G3).** With the GitHub reader configured, every repo's workflows (`.github/workflows`, default branch) are read-only collected and assessed as `Pipeline(platform="gha")` with the same rule catalog: jobs are stages, jobs with `environment:` are deployment stages whose protection (required reviewers, prevent self-review, wait timer, deployment branches, custom protection rules such as ServiceNow) is read from the environments API, runs give HYG-001/002, and the last deployment per environment feeds the lineage. Needs the read-only permissions **Actions, Environments, Deployments** (plus Contents, Metadata); anything unreadable (denied permission, unreadable reusable workflow, invalid YAML) is UNKNOWN with the reason, never FAIL. Five rules are GitHub-specific: SUP-006 (actions pinned to a commit SHA), SEC-006 (least-privilege token permissions), SEC-007 (`pull_request_target` / `workflow_run` safety), SEC-008 (script injection), SEC-009 (self-hosted runners on public triggers); the others carry GHA semantics or are NOT_APPLICABLE, rule by rule in ADR-17 ([docs/DECISIONS.md](docs/DECISIONS.md)). Action capabilities, deprecated actions and rule params are data/config ([docs/STANDARDS.md](docs/STANDARDS.md)). The **Migration** tab shows each repo as ADO only / In progress (both) / Migrated (GHA only) / No pipelines with counts and a filter, lists ADO pipelines that look superseded by a workflow (candidates to retire), and its readiness score covers Azure DevOps pipelines only. Repo pages badge each pipeline (ADO YAML / ADO Classic / GitHub Actions). **The demo keeps the GitHub reader disabled, so GitHub Actions is not in the demo data**; the respx-fixture tests (`tests/test_gha_*.py`) carry the verification.
+**GitHub Actions as a pipeline platform (G3).** With the GitHub reader configured, every repo's workflows (`.github/workflows`, default branch) are read-only collected and assessed as `Pipeline(platform="gha")` with the same rule catalog: jobs are stages, jobs with `environment:` are deployment stages whose protection (required reviewers, prevent self-review, wait timer, deployment branches, custom protection rules such as ServiceNow) is read from the environments API, runs give HYG-001/002, and the last deployment per environment feeds the lineage. Needs the read-only permissions **Actions, Environments, Deployments** (plus Contents, Metadata); anything unreadable (denied permission, unreadable reusable workflow, invalid YAML) is UNKNOWN with the reason, never FAIL. Five rules are GitHub-specific: SUP-006 (actions pinned to a commit SHA), SEC-006 (least-privilege token permissions), SEC-007 (`pull_request_target` / `workflow_run` safety), SEC-008 (script injection), SEC-009 (self-hosted runners on public triggers); the others carry GHA semantics or are NOT_APPLICABLE, rule by rule in ADR-17 ([docs/DECISIONS.md](docs/DECISIONS.md)). Action capabilities, deprecated actions and rule params are data/config ([docs/STANDARDS.md](docs/STANDARDS.md)). The **Migration** tab shows each repo as ADO only / In progress (both) / Migrated (GHA only) / No pipelines with counts and a filter, lists ADO pipelines that look superseded by a workflow (candidates to retire), and its readiness score covers Azure DevOps pipelines only. Repo pages badge each pipeline (ADO YAML / ADO Classic / GitHub Actions). GitHub Actions is not in the demo data; the respx-fixture tests (`tests/test_gha_*.py`) carry the verification.
 
 **Why is a repo not compliant?** Each repo carries an ordered list of reasons (its failing rules, critical first, one per rule: `<RULE-ID> <short title>: <message>`), computed once per scan and stored with the repo result. They appear in the Repos "Why" column (top 3, "+N more"), the Overview "Top reasons" panel (click through to the failing repos/findings), the repo page, the Lineage tab (repo status and reasons; failing rules on pipelines and stages), the CSV/Excel exports (`reasons` column) and the JSON API (`reasons` list).
 
 Test states per repo: `TESTS_OK`, `TESTS_LOW_COVERAGE`, `TESTS_NO_COVERAGE`, `TESTS_NOT_RUN`, `NO_TESTS`, `UNKNOWN`, `NOT_APPLICABLE` (ADF / Synapse / IaC / docs repos get the validation rule TST-006 instead).
 
-**Code on GitHub, pipelines in Azure DevOps.** GitHub is the default code host (`code_hosts: [github]` in `config/scope.yaml`; Azure Repos stays available as an opt-in for template reuse, but its API is not called and pipelines sourced from it are out of scope unless `azure_repos` is listed). Repos are discovered per ADO project from the repositories that build definitions and classic release artifacts point at, plus any `org/repo` named in `scope.yaml` `repos:`, so GitHub-hosted repos appear everywhere (named `org/repo`). The provider badge and the "Code hosted on" filter only show when more than one code host is in the scan. Pipeline, release, environment, Sonar, Aikido and ServiceNow rules evaluate normally. Checks that need data only GitHub has (branch protection, CODEOWNERS, repository contents for test detection) are read by the **read-only GitHub reader** when `GITHUB_TOKEN` (or a GitHub App) is configured, see below; without it they are **UNKNOWN with a reason, never FAIL**, and a GitHub repo that is neither named in `scope.yaml` nor referenced by an ADO pipeline is invisible (ADR-13). The demo estate is ~70% GitHub-hosted; the demo runs with the GitHub reader disabled (it has no GitHub API to read), so its GitHub-only checks show UNKNOWN. The GitHub reader is covered by respx-fixture tests.
+**Code on GitHub, pipelines in Azure DevOps.** GitHub is the default code host (`code_hosts: [github]` in `config/scope.yaml`; Azure Repos stays available as an opt-in for template reuse, but its API is not called and pipelines sourced from it are out of scope unless `azure_repos` is listed). Repos are discovered per ADO project from the repositories that build definitions and classic release artifacts point at, plus any `org/repo` named in `scope.yaml` `repos:`, so GitHub-hosted repos appear everywhere (named `org/repo`). The provider badge and the "Code hosted on" filter only show when more than one code host is in the scan. Pipeline, release, environment, Sonar, Aikido and ServiceNow rules evaluate normally. Checks that need data only GitHub has (branch protection, CODEOWNERS, repository contents for test detection) are read by the **read-only GitHub reader** when `GITHUB_TOKEN` (or a GitHub App) is configured, see below; without it they are **UNKNOWN with a reason, never FAIL**, and without `github.orgs`/`repos:` a GitHub repo that no ADO pipeline references is not scanned (ADR-13). The demo estate is ~70% GitHub-hosted but runs with the GitHub reader disabled, so its GitHub-only checks show UNKNOWN; the reader is covered by respx-fixture tests.
 
 **GitHub reader (read-only, G2).** Set `GITHUB_TOKEN` (fine-grained PAT, default) or `GITHUB_AUTH=app` with an App installation (`pip install '.[github-app]'`); `GITHUB_API_URL` for GitHub Enterprise Server (`https://<host>/api/v3`). Name the organisations in `config/scope.yaml`:
 
@@ -260,7 +242,7 @@ Repos = the filtered org listing, plus repos ADO pipelines reference, plus `repo
 
 ## Lineage
 
-The **Lineage** tab (last in the navigation) maps what comes out of each repository, per scan, from Azure DevOps only:
+The **Lineage** tab (last in the navigation) maps what comes out of each repository, per scan, from Azure DevOps pipelines and GitHub Actions workflows:
 
 ```
 repo (provider badge, default branch, service connection)
@@ -273,7 +255,7 @@ repo (provider badge, default branch, service connection)
 
 * **Flow view** (default on the repo page, `?view=table` for the table): Repo -> pipelines (ADO YAML / ADO Classic / GitHub Actions badge, last run) -> releases / deploy workflows -> environment stages in order (tier colour, target icons, approval and ServiceNow badges, last-deploy chip), drawn as connected cards with plain CSS connectors. Downstream triggers (`workflow_run`, pipeline completion) are dashed side branches; each card shows its failing-rule count linking to the matching findings. The frame scrolls horizontally inside the card; a compact flow is previewed on the repo page.
 * List view: a sortable, paginated table with one row per repo and a compact chain (pipelines -> releases -> environment chips with the last-deploy status); the **Flow** button of a row loads its flow on first open (no inline script), or use `/lineage/{project}/{repo}` for one repo (linked from the Repos table and the repo page). Filters: project, code host, deploy target, environment tier, has prod deployment (a prod stage whose last deployment succeeded), orphans only, search (repo, pipeline, release, environment, service connection and target resource names), plus the scan selector.
-* **Orphans**: pipelines whose repository cannot be resolved, releases with no linked build, and repos without any pipeline or release. A GitHub repo that no Azure DevOps pipeline builds is invisible to this scan by design (ADR-13); the page says so.
+* **Orphans**: pipelines whose repository cannot be resolved, releases with no linked build, and repos without any pipeline or release. A GitHub repo that no pipeline builds is listed only when the GitHub reader discovers it (`github.orgs`) or `scope.yaml` names it.
 * **Unknown is not "never".** A stage whose deployment data could not be collected shows `unknown (not collected)`; `never deployed` only appears when the lookup succeeded and found nothing. Failures are collection errors (see Scans), never a crash.
 * Data: reuses what the scan already collects (definitions, expanded YAML, environments and checks, service connections, build runs) plus read-only GETs for the last deployments (ADR-14): two calls per classic release definition, one call per YAML environment. `LINEAGE_ENABLED=false` skips them (stages show as unknown); `LINEAGE_DEPLOYMENTS_TOP` sizes the lookups.
 * People: only the **display name** of whoever triggered the last deployment is stored and shown. E-mails/UPNs are dropped, approvers are summarised as counts and kinds, never named.
@@ -366,17 +348,8 @@ Collectors are tested against fixtures in `tests/fixtures/` (no live credentials
 
 ## Scheduling
 
-`.github/workflows/scheduled-scan.yml` runs `pch scan` on a schedule (daily 02:00 UTC) and on **Run workflow**. It is **opt-in**: the job runs only when the repository variable `PCH_SCAN_ENABLED` is `true`, so forks and the public template do nothing. It is read-only like the scan itself.
-
-1. **Database.** The runner is ephemeral, so `DATABASE_URL` must point at a real database (Azure SQL or PostgreSQL) that is migrated to head (`pch db upgrade`, once, from your machine or a deploy step). The dashboard reads the same database.
-2. **Environment.** Create the GitHub environment `pch-scan` (Settings, Environments) and add the secrets there, so the organisation can require reviewers or limit branches: `ADO_PAT`, `PCH_GITHUB_TOKEN` (fine-grained read-only PAT; or `PCH_GITHUB_APP_PRIVATE_KEY` with `PCH_GITHUB_AUTH=app`), `DATABASE_URL`, and as needed `SONAR_TOKEN`, `AIKIDO_CLIENT_SECRET`, `SERVICENOW_PASSWORD`. GitHub does not allow names starting with `GITHUB_`, hence the `PCH_GITHUB_*` names (mapped to `GITHUB_TOKEN` etc. inside the job).
-3. **Variables** (Settings, Variables, repository level): `PCH_SCAN_ENABLED=true`, `ADO_ORG`, and as needed `ADO_BASE_URL`, `PCH_GITHUB_AUTH`, `PCH_GITHUB_API_URL`, `PCH_GITHUB_APP_ID`, `PCH_GITHUB_APP_INSTALLATION_ID`, `SONAR_URL`, `AIKIDO_URL`, `AIKIDO_CLIENT_ID`, `SERVICENOW_URL`, `SERVICENOW_USER`, `CONCURRENCY`, `SCAN_TIMEOUT_MINUTES`, `RETENTION_KEEP_SCANS`, `RETENTION_MAX_AGE_DAYS`, `ARTIFACT_STORE` (+ blob variables). The scan scope and policy come from `config/scope.yaml` and `config/policy.yaml` of the repository the workflow runs in: your organisation's copy holds the real ones.
-4. **Azure SQL with `DB_AUTH=azure_ad`.** Set `DB_AUTH`, `PCH_LOCKFILE=requirements-azure.lock`, `PCH_INSTALL_ODBC=true` (installs ODBC Driver 18) and `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` for a federated credential of an app registration / managed identity (subject `repo:<org>/<repo>:environment:pch-scan`). The workflow then logs in with `azure/login` over OIDC (no client secret) and the URL in `DATABASE_URL` holds no password, so it may be a variable. `id-token: write` is the only permission beyond `contents: read`. For `GITHUB_AUTH=app` build a lockfile that includes the `github-app` extra and point `PCH_LOCKFILE` at it.
-5. **Change the schedule** by editing the `cron` line in the workflow (UTC). Manual runs offer a `prune` checkbox.
-
-The job installs from the hash-checked lockfile, then runs `pch doctor` and `pch db check` (fail fast), `pch scan` and, when `RETENTION_*` is configured, `pch scans prune`. Runs never overlap (`concurrency` group, and the database scan lock). The **job summary** shows the exit code with its meaning (table below), repos scanned, status counts and collection errors per source (`pch scans summary --exit-code N`; counts only, no secrets). Every action is pinned by full commit SHA; the workflow never runs on `pull_request_target`, and no `run:` line interpolates `${{ }}` (values go through `env:`).
-
-**Freshness.** The dashboard header shows `Last scan: 3 h ago (live)` and a warning banner when the latest complete scan is older than `SCAN_STALE_HOURS` (default 36) or the newest scan failed, so a broken schedule is visible. Set `SCAN_STALE_HOURS` a little above the scan interval.
+`.github/workflows/scheduled-scan.yml` runs `pch scan` daily (02:00 UTC) and on demand; it is opt-in (`PCH_SCAN_ENABLED=true`), read-only, SHA-pinned and takes its secrets from the GitHub environment `pch-scan`. Setup, the secret and variable tables, the Azure SQL OIDC variant and the exit codes are in [docs/USING_IN_YOUR_ORG.md](docs/USING_IN_YOUR_ORG.md) (phase 4); the design is ADR-18 in [docs/DECISIONS.md](docs/DECISIONS.md).
+The dashboard header shows `Last scan: 3 h ago (live)` and a warning banner when the latest complete scan is older than `SCAN_STALE_HOURS` (default 36) or the newest scan failed.
 
 ## Operations
 
@@ -390,16 +363,7 @@ The job installs from the hash-checked lockfile, then runs `pch doctor` and `pch
 
 **Shutdown and timeouts.** uvicorn drains in-flight requests for `GRACEFUL_SHUTDOWN_SECONDS` (default 20) after SIGTERM; keep-alive is `KEEP_ALIVE_SECONDS` (default 65). On shutdown the app disposes its DB engine. `pch scan` turns SIGTERM/SIGINT into a cancellation: collectors stop, the scan is marked `failed` with reason `interrupted`, the lock is released and the exit code is 5. `SCAN_TIMEOUT_MINUTES` (default 240) does the same with reason `timeout`.
 
-**`pch scan` exit codes** (constants in `pch/exitcodes.py`):
-
-| Code | Meaning |
-|---|---|
-| 0 | scan completed |
-| 1 | generic failure (for example demo data missing; `prune` had failures) |
-| 2 | configuration error (invalid settings/YAML, missing secret or extra, `ADO_ORG` unset) |
-| 3 | database not ready (not at migration head, unreachable, driver missing) |
-| 4 | another scan (or prune) holds the scan lock |
-| 5 | interrupted (SIGTERM/SIGINT) or timed out; the scan row is `failed` and the lock released |
+**Exit codes** of `pch scan` (0 ok, 1 failure, 2 configuration, 3 database not ready, 4 lock held, 5 interrupted/timeout; constants in `pch/exitcodes.py`) and what to do about each: [docs/USING_IN_YOUR_ORG.md](docs/USING_IN_YOUR_ORG.md) (phase 4).
 
 ## Tables
 
@@ -407,4 +371,4 @@ Repos, Findings, Rules and the Lineage list share the same behaviour, all throug
 
 ## Roadmap
 
-M9 (GitHub Actions) is implemented, see ADR-17. M10: read-only agent layer (`pch/agent/tools.py` exposes `list_findings`, `get_repo`, `explain_rule`; MCP server and chat panel are stubs). The AI layer will explain findings, never decide compliance.
+GitHub Actions (ADR-17) and the read-only GitHub reader (ADR-16) are implemented. Next: a read-only agent layer (`pch/agent/tools.py` exposes `list_findings`, `get_repo`, `explain_rule`; the MCP server and chat panel are stubs) that explains findings and never decides compliance.
