@@ -245,3 +245,62 @@ def test_demo_github_estate_is_scanned_through_real_collectors(world, tmp_path):
     gh_ids = {r["id"] for p in world["ado"].values() for d in p["build_defs"].values() if d["repository"]["type"] == "GitHub" for r in [d["repository"]]}
     assert gh_ids
     assert not any("/git/repositories/" in p and any(i in p for i in gh_ids) for p in seen)  # no Items API call for GitHub repos
+
+
+# ------------------------------------------------------------------ scan ids are unique; persistence errors are clean
+def _cli_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/t.db")
+    monkeypatch.setenv("APP_ENV", "dev")
+    from pch.settings import reset_settings
+
+    reset_settings()
+    d = str(tmp_path / "data")
+    assert CliRunner().invoke(app, ["seed-demo", "--repos", "10", "--data-dir", d]).exit_code == 0
+    return d
+
+
+def test_new_scan_id_unique_for_same_second_and_fits_column():
+    from pch.cli import new_scan_id
+    from pch.store.models import ScanRow
+
+    now = datetime(2026, 10, 1, 12, 0, 0)
+    ids = {new_scan_id(now, "live") for _ in range(200)}
+    assert len(ids) == 200
+    assert all(i.startswith("20261001-120000-live-") and len(i) <= ScanRow.id.type.length for i in ids)
+
+
+def test_two_demo_scans_of_same_world_both_succeed(tmp_path, monkeypatch):
+    d = _cli_env(tmp_path, monkeypatch)
+    runner = CliRunner()
+    for _ in range(2):
+        r = runner.invoke(app, ["scan", "--demo", "--history", "0", "--data-dir", d])
+        assert r.exit_code == 0, r.output
+    from pch.settings import get_settings
+
+    with session_scope(get_settings().database_url) as s:
+        scans = store.list_scans(s)
+        assert len(scans) == 2 and len({x.id for x in scans}) == 2 and all(x.mode == "demo" and x.status == "complete" for x in scans)
+
+
+def test_persist_failure_is_a_clean_error_and_lock_released(tmp_path, monkeypatch):
+    from sqlalchemy.exc import IntegrityError
+
+    from pch import exitcodes
+    from pch.orchestrator import Scanner
+    from pch.settings import get_settings
+    from pch.store.db import get_engine
+    from pch.store.models import ScanLockRow
+
+    d = _cli_env(tmp_path, monkeypatch)
+
+    def boom(self, scan_id, results, t0):
+        raise IntegrityError("INSERT", {}, Exception("UNIQUE constraint failed: scans.id"))
+
+    monkeypatch.setattr(Scanner, "persist", boom)
+    r = CliRunner().invoke(app, ["scan", "--demo", "--history", "0", "--data-dir", d])
+    assert r.exit_code == exitcodes.FAILED
+    assert "Traceback" not in r.output and "could not persist" in r.output
+    from sqlalchemy.orm import Session
+
+    with Session(get_engine(get_settings().database_url)) as s:
+        assert s.query(ScanLockRow).count() == 0

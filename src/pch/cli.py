@@ -9,6 +9,8 @@ import typer
 from pch import exitcodes
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from pch.settings import Settings
 
 app = typer.Typer(help="Pipeline Compliance Hub (report-only)", no_args_is_help=True)
@@ -243,6 +245,14 @@ def _demo_paths(data_dir: str):
     return d, d / "world.json.gz", d / "scope.yaml", d / "policy.yaml"
 
 
+def new_scan_id(now: datetime, mode: str) -> str:
+    """Sortable, readable and unique: timestamp prefix + mode + random suffix (re-scans / same-second starts never collide).
+    Nothing parses this id; the scan's mode lives in scans.mode."""
+    import secrets
+
+    return f"{now:%Y%m%d-%H%M%S}-{mode}-{secrets.token_hex(3)}"
+
+
 @app.command("seed-demo")
 def seed_demo(
     repos: int = typer.Option(280, help="Number of synthetic repositories"),
@@ -343,7 +353,7 @@ def scan(
                 snapshots.append((w, now0 - timedelta(days=14 * k)))
             snapshots.append((world, now0))
             for w, now in snapshots:
-                scan_id = f"{now:%Y%m%d-%H%M%S}-demo"
+                scan_id = new_scan_id(now, "demo")
                 record = PrefixedStore(artifacts, scan_id) if cache else None
                 src = demo_sources(w, record_to=record)
                 cfg = ScanConfig(scope=scope, policy=policy, db_url=db_url, mode="demo", now=now, stale_after=stale, timeout_s=timeout_s,
@@ -359,10 +369,10 @@ def scan(
         live_settings = settings.model_copy(update={"ado_org": resolve_ado_org(settings, scope)[0]})  # ConfigError on a conflict (exit 2)
         now = utcnow_naive()
         if from_cache:
-            scan_id, src = f"{now:%Y%m%d-%H%M%S}-cache", cache_sources(PrefixedStore(artifacts, from_cache), live_settings)
+            scan_id, src = new_scan_id(now, "cache"), cache_sources(PrefixedStore(artifacts, from_cache), live_settings)
             mode = "cache"
         else:
-            scan_id = f"{now:%Y%m%d-%H%M%S}-live"
+            scan_id = new_scan_id(now, "live")
             src = live_sources(live_settings, record_to=PrefixedStore(artifacts, scan_id) if cache is not False else None)
             mode = "live"
         cfg = ScanConfig(scope=scope, policy=policy, db_url=db_url, mode=mode, now=now, stale_after=stale, timeout_s=timeout_s,
@@ -376,6 +386,8 @@ def scan(
     if not demo and not from_cache and not _ado_org_known(settings, scope_file):
         typer.echo("ADO_ORG is not set (nor `organization:` in scope.yaml). Copy .env.example to .env, or try `pch seed-demo && pch scan --demo`.", err=True)
         raise typer.Exit(exitcodes.CONFIG)
+    from sqlalchemy.exc import OperationalError, SQLAlchemyError
+
     from pch.scanrun import ScanInterrupted, ScanTimeout, run_guarded
     from pch.settings import ConfigError
     from pch.store.locks import ScanLockHeld, scan_lock
@@ -396,6 +408,13 @@ def scan(
     except ConfigError as exc:
         typer.echo(f"Config error: {exc}", err=True)
         raise typer.Exit(exitcodes.CONFIG) from None
+    except SQLAlchemyError as exc:  # persistence failure: one clean line instead of a traceback (lock already released)
+        from pch.logging_setup import scrub
+
+        msg = scrub(str(getattr(exc, "orig", None) or exc)).splitlines()[0][:300]
+        unreachable = isinstance(exc, OperationalError)
+        typer.echo(f"Scan failed: could not persist to the database ({type(exc).__name__}: {msg}); scan marked failed, lock released.", err=True)
+        raise typer.Exit(exitcodes.SCHEMA_NOT_READY if unreachable else exitcodes.FAILED) from None
     sys.stdout.flush()
 
 
