@@ -148,6 +148,8 @@ Scan the image in your registry (Defender for Containers or your scanner) before
 | `APP_ENV` | `prod` | HSTS, `/api/docs` off, `ALLOWED_HOSTS` mandatory, `AUTH_MODE=none` forbidden, https-only source URLs, `scope.yaml` required |
 | `AUTH_MODE` | `easyauth` | |
 | `AUTH_ALLOWED_ROLES` | `PCH.Reader` | Entra app role value(s), comma separated, exact and case-sensitive |
+| `AUTH_ADMIN_ROLES` | `PCH.Admin` | App role(s) that may change the feature switches on the Settings page (ADR-19); empty = nobody (read-only for all); an admin role also grants read access |
+| `SETTINGS_SIGNING_KEY` | Key Vault reference | Secret, at least 32 characters, signs the Settings form tokens (CSRF). Not set in prod = the Settings page is read-only. Same secret on every instance |
 | `ALLOWED_HOSTS` | `pch-prod-web.azurewebsites.net` | `*.azurewebsites.net` works; add custom domains; a bare `*` is refused in prod |
 | `HOST` | `0.0.0.0` | The container must listen on all interfaces; allowed because Easy Auth is enforced |
 | `WEBSITES_PORT` | `8000` | Used when `PORT` is not set |
@@ -219,6 +221,8 @@ The SQL server's firewall / private endpoint must allow the runner. Do not use `
   "value": "PCH.Reader"
 }
 ```
+
+For the Settings page add a second role, the same way, with `"displayName": "PCH Admin"`, `"description": "May change the feature switches on the Settings page."` and `"value": "PCH.Admin"`, and set `AUTH_ADMIN_ROLES=PCH.Admin` (keep the group small: an admin can switch a source off, which is audited).
 
 Assign users or groups to **PCH Reader** under Enterprise applications, Users and groups. The `roles` claim is then present in the principal that Easy Auth passes in `X-MS-CLIENT-PRINCIPAL`; the app allows the request only if it contains a role from `AUTH_ALLOWED_ROLES`. Sign-out is `/.auth/logout` (linked in the header).
 Then run the forged-header test in section 11 (expect 401, or a 302 to Microsoft sign-in, never data).

@@ -16,6 +16,7 @@ Scope, architecture and the rule catalog (historical build plan): `docs/PLAN.md`
 
 ## Template invariants
 These hold for every change in this repo and in repos derived from it. A change that weakens one needs an explicit decision recorded in `docs/DECISIONS.md`.
+- **Read-only toward every source, one local write path.** The app is GET-only except the feature-switch POSTs (`/settings/features/{key}[/reset]`), which require an admin role (`AUTH_ADMIN_ROLES`) + a CSRF token + a same-origin request, write only this app's own database, and are audited (ADR-19). Public paths stay limited to `/health/*` and `/static/`. A new write route needs its own decision and an entry in the allowlist tests.
 - **Fail-closed serve guard.** `pch.web.guard.assert_safe_to_serve` decides whether the app may start; any new auth mode or bind option gets its own branch there (an unknown mode must not start unchecked). Public paths stay limited to the health endpoints (`/health/live`, `/health/ready`, `/api/v1/health`) and `/static/`.
 - **Strict config.** `Settings` validates at startup and YAML models are `extra="forbid"`. `APP_ENV=prod` requires https source URLs; `SCAN_TIMEOUT_MINUTES` stays below `SCAN_LOCK_STALE_MINUTES`.
 - **Schema only through migrations.** Every model change ships an Alembic revision (with a working `downgrade()`); no `create_all` outside the SQLite dev/test auto-migrate path. Dialect options live only in `store/engine.py`.

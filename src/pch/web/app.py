@@ -77,9 +77,9 @@ HERE = Path(__file__).parent
 MSG_NOT_ADMIN = "You do not have permission to change settings."
 MSG_WRITES_DISABLED = "Changing settings is disabled on this deployment (no signing key is configured)."
 MSG_CROSS_SITE = "This request did not come from this site and was refused."
-MSG_TOKEN = "The form has expired or is invalid. Open the Settings page again and retry."
+MSG_FORM_STALE = "The form has expired or is invalid. Open the Settings page again and retry."
 MSG_BAD_FORM = "The submitted form is not valid."
-SAFE_DETAILS = {MSG_NOT_ADMIN, MSG_WRITES_DISABLED, MSG_CROSS_SITE, MSG_TOKEN, MSG_BAD_FORM}
+SAFE_DETAILS = {MSG_NOT_ADMIN, MSG_WRITES_DISABLED, MSG_CROSS_SITE, MSG_FORM_STALE, MSG_BAD_FORM}
 MAX_FORM_BYTES = 4096
 FLASH_CODES = {"saved", "reset", "nochange"}
 # Output keys that exist only because of the Migration switch; removed everywhere (pages, API, exports) while it is off.
@@ -516,8 +516,10 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
         return ""
 
     def token_for(request: Request, action: str, key: str) -> str:
-        assert signing.key is not None and current_principal(request) is not None  # callers check writability first
-        return csrf.make_token(signing.key, current_principal(request).id, f"{action}:{key}", csrf_now())
+        principal = current_principal(request)
+        if principal is None or signing.key is None:  # callers check writability first; never hand out a token otherwise
+            return ""
+        return csrf.make_token(signing.key, principal.id, f"{action}:{key}", csrf_now())
 
     def csrf_now() -> float:
         return time.time()
@@ -577,7 +579,7 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
         form = await read_form(request)
         if not csrf.verify_token(signing.key, principal.id, f"{action}:{key}", form.get("csrf_token"), csrf_now()):
             log.warning("settings write refused: invalid or expired form token (principal %s)", principal_hash(principal))
-            raise HTTPException(403, MSG_TOKEN)
+            raise HTTPException(403, MSG_FORM_STALE)
         value: bool | None = None
         if action == "set":
             if form.get("value") not in F.VALUES:

@@ -4,7 +4,7 @@ Read `CLAUDE.md` (rules and invariants) and this file; that is enough to start. 
 
 ## What it is (5 lines)
 
-* Report-only CI/CD compliance hub: it never writes to GitHub, Azure DevOps, SonarQube, Aikido or ServiceNow.
+* Report-only CI/CD compliance hub: it never writes to GitHub, Azure DevOps, SonarQube, Aikido or ServiceNow. Its only write is the admin-only feature switches on the Settings page, into its own database (ADR-19).
 * Code is on GitHub, pipelines are Azure DevOps (YAML, Classic) and GitHub Actions workflows, all normalised to one `Pipeline` model.
 * 61 deterministic Python rules (`pch rules list`) produce findings (PASS/FAIL/WARN/UNKNOWN/NA/WAIVED), scored per repo.
 * Standards are config: `config/policy.yaml` and `config/scope.yaml` (see `docs/STANDARDS.md`); a scan is stored as one DB snapshot.
@@ -14,14 +14,15 @@ Read `CLAUDE.md` (rules and invariants) and this file; that is enough to start. 
 
 | Layer | What it does | Key files (under `src/pch/`) |
 |---|---|---|
-| Entry | Typer CLI (`pch --help`: doctor, db, scan, serve, scans, rules, config, seed-demo), exit codes | `cli.py`, `exitcodes.py`, `settings.py` (all env + YAML models), `doctor.py` |
+| Entry | Typer CLI (`pch --help`: doctor, db, scan, serve, scans, rules, config, features, seed-demo), exit codes | `cli.py`, `exitcodes.py`, `settings.py` (all env + YAML models), `doctor.py` |
 | Collectors | Read-only HTTP to ADO, GitHub, Sonar, Aikido, ServiceNow; plain facts out | `collectors/http.py` (`SourceClient`), `collectors/transport.py` (`ReadOnlyTransport`), `collectors/ado/`, `collectors/github/`, `sonar.py`, `aikido.py`, `servicenow.py` |
 | Wiring | Builds live/demo/cache clients; secrets via provider | `sources.py`, `providers/` |
 | Orchestration | One scan: collect, normalise, evaluate, store in one transaction | `orchestrator.py` (`Scanner`), `scanrun.py` (timeout/SIGTERM) |
 | Normalise | Canonical models and detection; data files | `model/`, `normalize/` (`gha.py`, `lineage.py`, `target_detect.py`, `capabilities.yaml`, `gha_capabilities.yaml`, `deprecated_tasks.yaml`, `gha_mapping.yaml`), `repo_scan/` |
 | Engine | Rule registry, runner, scoring, waivers, reasons | `engine/registry.py` (`@rule`), `engine/rules/*.py`, `engine/runner.py`, `engine/scoring.py`, `engine/reasons.py`, `engine/migration.py` |
 | Store | SQLAlchemy models, Alembic, engine factory, scan lock | `store/models.py`, `store/migrations/versions/`, `store/engine.py` (only place for dialect options), `store/repository.py`, `store/locks.py` |
-| Web | Pages, JSON API, auth, security headers, exports | `web/app.py` (routes), `web/queries.py`, `web/tables.py`, `web/lineage_q.py`, `web/auth.py`, `web/guard.py`, `web/security.py`, `web/templates/`, `web/static/app.js` |
+| Web | Pages, JSON API, auth, security headers, exports, the Settings page | `web/app.py` (routes), `web/queries.py`, `web/tables.py`, `web/lineage_q.py`, `web/auth.py`, `web/guard.py`, `web/security.py`, `web/csrf.py`, `web/templates/`, `web/static/app.js` |
+| Feature switches | Defaults file, DB overrides, audit | `features.py`, `store/models.py` (`FeatureFlagRow`, `FeatureAuditRow`); defaults in config/features.yaml |
 | Demo | Synthetic payloads through the real collectors (GitHub reader disabled) | `demo/` |
 
 Flow: collectors -> normalize -> engine/rules -> store -> web. Rules read the normalised context (`ctx`), never raw API payloads and never do I/O.
@@ -40,6 +41,8 @@ Flow: collectors -> normalize -> engine/rules -> store -> web. Rules read the no
 | Add a DB column or table | `store/models.py` plus an Alembic revision with a working `downgrade()` (`docs/CUSTOMIZING.md` "Add a migration") | `pytest tests/test_db_portability.py` |
 | Change a UI page | route in `web/app.py`, query in `web/queries.py`, template in `web/templates/`; no inline script or style, no third-party origin | `scripts/build_css.sh --check` (Tailwind rebuild if classes changed); `tests/test_web*.py` |
 | Add an export column | append to `COLUMNS` in `web/lineage_q.py` (never reorder) and to the README "Export columns" table | `pytest tests/test_web_lineage.py` |
+| Add or change a feature switch (what the Settings page toggles) | key in `features.py` (`FEATURES`, `FeaturesFile`), default in `config/features.yaml`; a scan effect in `orchestrator.py` / `sources.py`, a display effect in `web/app.py` (`request_flags`); a rule that needs a source: `@rule(..., requires_sources={"sonar"})` | `tests/test_features.py`, `tests/test_web_settings.py`; [STANDARDS.md](STANDARDS.md); `pch features list` |
+| Add a write route or change who may write | do not, without an ADR: the only POSTs are the two in `web/app.py` (`write_feature`) allowed by `WRITE_PATH` in `web/security.py`; admin check `Authenticator.is_admin`, token `web/csrf.py` | allowlist tests in `tests/test_web.py` and `tests/test_web_security.py`; `docs/DECISIONS.md` (ADR-19) |
 | Add or change an auth mode or bind option | `web/auth.py` (`AUTHENTICATORS`) and a branch in `web/guard.py` | extend `tests/test_web_security.py` |
 | Change the scheduled scan | `.github/workflows/scheduled-scan.yml` (no `${{ }}` inside `run:`; pin actions by SHA) | `tests/test_scheduled_workflow.py` |
 | Record a decision that weakens an invariant | `docs/DECISIONS.md` (new ADR) | |

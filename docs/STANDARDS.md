@@ -12,6 +12,7 @@ All YAML is strict: an unknown key, rule id, severity or param is an error that 
 | Name GitHub repos explicitly | `scope.yaml` `repos[].repo` (`org/repo`) | none | Repo is scanned even when no pipeline references it and the listing is off or filtered it out; a `project` that is not an ADO project becomes its grouping name | `- {project: Payments, repo: acme/ledger}` |
 | Per-repo facts and overrides | `scope.yaml` `repos[]`: `sonar_key`, `aikido_repo`, `owner`, `servicenow_ci`, `coverage_threshold`, `env_tiers` | none | Source matching, TST-003 threshold, HYG-003, DEP-005 CI window fallback | `coverage_threshold: 70` |
 | Map stage / environment names to tiers | `scope.yaml` `env_tiers` (global) and `repos[].env_tiers` (per repo) | name heuristics in `normalize/target_detect.py` | Every `tiers=`-filtered rule: SRC-005, DEP-001..006, SEC-002, SEC-005, TGT-*-001, TST-005 | `env_tiers: {"Blue": prod, "Staging": uat}` |
+| Turn a feature on or off | `config/features.yaml` (defaults) and the **Settings** page (admins; stored in the database, wins over the file) or `pch features set <key> on\|off\|default` | all on (`migration`, `gha_scanning`, `source_sonar`, `source_aikido`, `source_servicenow`) | `migration`: Migration tab, overview donut, readiness and retire hints, repos filter, API, exports (off = hidden, API 404, scans skip the readiness computation). `gha_scanning`: no Actions / Environments / Deployments calls, no workflows, no SUP-006 / SEC-006..009. `source_*`: the client is not built (credentials not read) and QLT-003..005 (Sonar), QLT-006/007 (Aikido), DEP-005 (ServiceNow) are not evaluated or scored; the Rules page shows "off (Settings)" | `source_aikido: false` |
 | Disable a rule | `config/policy.yaml` `rules.<ID>.enabled` | `true` | Not evaluated, no findings, not scored; Rules page shows "disabled by policy" | `rules: {QLT-004: {enabled: false}}` |
 | Re-rate a rule | `policy.yaml` `rules.<ID>.severity` (`critical high medium low info`) | the rule's own severity | Scoring weight, repo status (any critical FAIL = NON_COMPLIANT, any high FAIL = AT_RISK); marked "overridden" in the UI | `rules: {DEP-001: {severity: high}}` |
 | Tune a rule's knobs | `policy.yaml` `rules.<ID>.params` (list with `pch rules list --params`) | declared next to the rule in `@rule(..., params={...})` | SRC-001 `allow_creator_vote`, `require_reset_on_push` (GitHub: dismissed stale reviews or last-push approval); SRC-002 `required_checks` (GitHub: status check names that must all be required); SRC-007 `require_linear_history`, `require_signed_commits`; SRC-009 `require_code_owner_review`; QLT-001 `required_steps`; QLT-002 `wait_pattern`; TST-004 `required_published`; DEP-004 `lower_tiers`; DEP-005 `crq_pattern` (CRQ number format), `window_slack_hours`; SEC-002 `prod_name_hints`; SEC-005 `fail_scope_levels`, `warn_scope_levels`; SUP-002 `ignored_tasks`; SUP-003 `trusted_action_owners` (GHA); SUP-004 `forbidden_tags`; SUP-006 `trusted_owners` (GHA: owners that may use version tags); SEC-006 `job_write_scopes`; SEC-008 `untrusted_contexts` (regexes); DEP-003 `servicenow_app_pattern` (which custom deployment protection rule counts as ServiceNow) | `rules: {DEP-005: {params: {window_slack_hours: 4}}}` |
@@ -34,6 +35,21 @@ All YAML is strict: an unknown key, rule id, severity or param is an error that 
 | Deprecated tasks / actions | `src/pch/normalize/deprecated_tasks.yaml` (`deprecated` for ADO tasks, `deprecated_actions` for GitHub Actions) | shipped list | SUP-002 | `- {task: X, below_major: 3, replacement: "X@3"}` |
 | Azure task -> GitHub Actions equivalent | `src/pch/normalize/gha_mapping.yaml` | shipped map | GitHub Actions readiness score and blockers | `X: {gha: "uses: org/action@v1"}` |
 | Change or add rule *logic* | `src/pch/engine/rules/*.py` (`@rule(...)`) | | Only needed when a new check cannot be expressed with the knobs above; needs a PASS and a FAIL test, then `pch rules docs --write docs/RULES.md` | see [CUSTOMIZING.md](CUSTOMIZING.md#6-rules-policy-and-data-files) |
+
+## Feature switches (Settings page)
+
+`config/features.yaml` holds the defaults; every key is optional and defaults to `true`; unknown keys and non-boolean values are errors that name the file and key (`pch doctor`).
+
+```yaml
+# config/features.yaml
+migration: true
+gha_scanning: true
+source_sonar: true
+source_aikido: false      # e.g. Aikido is not rolled out yet
+source_servicenow: true
+```
+
+An administrator changes a switch on the **Settings** page (last item of the navigation; a role from `AUTH_ADMIN_ROLES` is required, see [USING_IN_YOUR_ORG.md](USING_IN_YOUR_ORG.md) section 6). The change is stored in the app's own database and wins over the file; "Reset to default" returns to the file's value. The page shows each switch's effective value, its source ("default from features.yaml" or "changed by <name> at <time>"), whether it takes effect **immediately** (`migration`, a display switch) or **on the next scan** (the others), and the last 20 changes. Every scan reads the effective values when it starts and records them in `scans.summary.features`, so an older scan keeps the rules and sources it was actually made with. `pch features list` and `pch features set <key> on|off|default` do the same from the command line (audited as actor `cli`); `pch doctor` prints the effective values and where each comes from. Rules depend on a source through `@rule(..., requires_sources={"sonar"})` in the registry (`sonar`, `aikido`, `servicenow`, `gha`).
 
 ## Rules map, step by step
 

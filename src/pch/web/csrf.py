@@ -28,7 +28,7 @@ from pch.settings import Settings
 log = logging.getLogger("pch.web.csrf")
 TOKEN_TTL_SECONDS = 30 * 60
 MIN_KEY_CHARS = 32
-SECRET_NAME = "SETTINGS_SIGNING_KEY"
+KEY_NAME = "SETTINGS_SIGNING_KEY"
 
 
 @dataclass(frozen=True)
@@ -47,20 +47,20 @@ def resolve_signing_key(s: Settings) -> SigningKey:
     value: str | None = None
     problem = ""
     try:
-        value = get_secret_provider(s).get(SECRET_NAME)
+        value = get_secret_provider(s).get(KEY_NAME)
     except ProviderError as exc:
         problem = f"the secret provider could not be read ({type(exc).__name__})"
     except Exception as exc:  # noqa: BLE001 - never let a backend error (or its message) escape; writes just stay disabled
         problem = f"the secret provider could not be read ({type(exc).__name__})"
     if problem:
-        log.warning("%s: %s", SECRET_NAME, problem)
+        log.warning("%s: %s", KEY_NAME, problem)
     elif value and len(value) < MIN_KEY_CHARS:
-        problem = f"{SECRET_NAME} is shorter than {MIN_KEY_CHARS} characters"
+        problem = f"{KEY_NAME} is shorter than {MIN_KEY_CHARS} characters"
         log.warning(problem)
     elif value:
         return SigningKey(value.encode())
     if s.is_prod:
-        return SigningKey(None, problem or f"{SECRET_NAME} is not set")
+        return SigningKey(None, problem or f"{KEY_NAME} is not set")
     return SigningKey(secrets.token_bytes(32), generated=True)  # dev/test: usable, but forms do not survive a restart
 
 

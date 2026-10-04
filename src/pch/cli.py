@@ -608,7 +608,7 @@ def serve(
 
     from pch.settings import ConfigError, get_settings
     from pch.web.app import create_app
-    from pch.web.guard import assert_safe_to_serve
+    from pch.web.guard import assert_safe_to_serve, guard_warnings
 
     s = get_settings()
     if db:
@@ -622,6 +622,8 @@ def serve(
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(exitcodes.CONFIG) from None
     _bootstrap(s, "pch-web")
+    for warning in guard_warnings(s):  # the Settings page is read-only for these reasons (not a reason to refuse to start)
+        typer.echo(f"warning: {warning}", err=True)
     # Fail fast (exit 3) when the schema is not at head; a database that is merely unreachable is served as "not ready".
     _open_db(db or s.database_url, tolerate_unreachable=True)
     web = create_app(db or s.database_url, settings=s, host=bind_host)
