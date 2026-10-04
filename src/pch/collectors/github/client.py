@@ -6,8 +6,8 @@ POST this client can ever send is the GitHub App installation token exchange, al
 data is changed). Tokens live in memory only and are registered for log redaction.
 
 Required permissions (fine-grained PAT or GitHub App, READ-ONLY): Metadata, Contents and Administration (the last one only for
-classic branch protection: without it protection that comes from classic rules is UNKNOWN, never FAIL). For G3 (not required
-now): Actions, Environments and Deployments (read). A token with write access is refused by policy in docs, not by code: GitHub
+classic branch protection: without it protection that comes from classic rules is UNKNOWN, never FAIL). For GitHub Actions (G3): Actions, Environments and
+Deployments (read). A token with write access is refused by policy in docs, not by code: GitHub
 offers no way to ask a token for its scopes with fine-grained PATs, so the mitigation is to create it read-only.
 """
 

@@ -1,11 +1,9 @@
-import asyncio
 from pathlib import Path
 
 from typer.testing import CliRunner
 
 from pch.agent import tools
 from pch.cli import app
-from pch.collectors.github import GitHubAdapter, NotImplementedGitHubAdapter
 from pch.docs import render_rules_md
 from pch.engine.registry import all_rules
 
@@ -29,17 +27,6 @@ def test_rules_docs_cli(tmp_path):
     out.write_text("stale")
     assert runner.invoke(app, ["rules", "docs", "--write", str(out), "--check"]).exit_code == 1
     assert "61 rules" in runner.invoke(app, ["rules", "docs"]).output
-
-
-def test_github_adapter_is_a_stub():
-    adapter = NotImplementedGitHubAdapter()
-    assert isinstance(adapter, GitHubAdapter)
-    try:
-        asyncio.run(adapter.list_workflows("o", "r"))
-    except NotImplementedError as e:
-        assert "M9" in str(e)
-    else:
-        raise AssertionError("expected NotImplementedError")
 
 
 def test_agent_tools_interface(tmp_path):

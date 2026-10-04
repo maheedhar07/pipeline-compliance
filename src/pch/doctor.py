@@ -218,7 +218,10 @@ async def _github_online(s: Settings, scope: Scope | None) -> list[Check]:
         full, branch = first[0]["full_name"], first[0].get("default_branch") or "main"
         for label, path, need in (("rules/branches", f"/repos/{full}/rules/branches/{branch}", "Metadata: read"),
                                   ("file tree", f"/repos/{full}/git/trees/{branch}", "Contents: read"),
-                                  ("classic branch protection", f"/repos/{full}/branches/{branch}/protection", "Administration: read")):
+                                  ("classic branch protection", f"/repos/{full}/branches/{branch}/protection", "Administration: read"),
+                                  ("actions workflows", f"/repos/{full}/actions/workflows?per_page=1", "Actions: read"),
+                                  ("environments", f"/repos/{full}/environments?per_page=1", "Environments: read"),
+                                  ("deployments", f"/repos/{full}/deployments?per_page=1", "Deployments: read")):
             try:
                 await client.get_json(path)
                 probes.append(f"{label}=ok")
