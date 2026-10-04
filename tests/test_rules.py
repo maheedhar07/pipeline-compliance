@@ -494,7 +494,7 @@ def test_catalog_complete():
 
     ids = {r.id for r in all_rules()}
     expected = (
-        [f"SRC-00{i}" for i in range(1, 7)] + [f"QLT-00{i}" for i in range(1, 9)] + [f"TST-00{i}" for i in range(1, 7)]
+        [f"SRC-00{i}" for i in range(1, 10)] + [f"QLT-00{i}" for i in range(1, 9)] + [f"TST-00{i}" for i in range(1, 7)]
         + [f"SUP-00{i}" for i in range(1, 6)] + [f"SEC-00{i}" for i in range(1, 6)] + [f"DEP-00{i}" for i in range(1, 7)]
         + ["TGT-FA-001", "TGT-FA-002", "TGT-WA-001", "TGT-WA-002", "TGT-AKS-001", "TGT-AKS-002", "TGT-ADF-001", "TGT-ADF-002",
            "TGT-ADF-003", "TGT-SYN-001", "TGT-SYN-002", "TGT-SQL-001", "TGT-SQL-002", "TGT-IAC-001"]

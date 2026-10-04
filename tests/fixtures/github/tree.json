@@ -1,0 +1,10 @@
+{"sha": "abc123", "truncated": false, "tree": [
+  {"path": ".github", "type": "tree"},
+  {"path": ".github/CODEOWNERS", "type": "blob"},
+  {"path": "Dockerfile", "type": "blob"},
+  {"path": "src", "type": "tree"},
+  {"path": "src/Billing.Api.csproj", "type": "blob"},
+  {"path": "src/Program.cs", "type": "blob"},
+  {"path": "tests/Billing.Api.Tests/Billing.Api.Tests.csproj", "type": "blob"},
+  {"path": "tests/Billing.Api.Tests/InvoiceTests.cs", "type": "blob"}
+]}

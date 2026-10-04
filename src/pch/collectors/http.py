@@ -18,11 +18,12 @@ from pch.collectors.transport import ReadOnlyTransport, SizeLimitTransport
 
 
 class HttpError(Exception):
-    def __init__(self, status: int, url: str, body: str = ""):
+    def __init__(self, status: int, url: str, body: str = "", headers: dict[str, str] | None = None):
         super().__init__(f"HTTP {status} for {url}")
         self.status = status
         self.url = url
         self.body = body
+        self.headers = {k.lower(): v for k, v in (headers or {}).items()}  # lower-cased response headers (rate limits, accepted permissions)
 
     @property
     def not_found(self) -> bool:
@@ -60,13 +61,15 @@ class SourceClient:
         backoff_base: float = 0.5,
         backoff_max: float = 20.0,
         max_response_bytes: int | None = None,
+        allowed_posts: frozenset[str] = frozenset(),
+        retry_statuses: frozenset[int] = frozenset({408, 429, 502, 503, 504}),
     ):
         inner = transport or httpx.AsyncHTTPTransport(retries=1)
         if max_response_bytes:
             # Note: a RecordingTransport passed in buffers inside itself, so live wiring (pch.sources) applies the same
             # cap to the network transport underneath it. This one covers every other transport.
             inner = SizeLimitTransport(inner, max_response_bytes)
-        guarded = inner if isinstance(inner, ReadOnlyTransport) else ReadOnlyTransport(inner)
+        guarded = inner if isinstance(inner, ReadOnlyTransport) else ReadOnlyTransport(inner, allowed_posts)
         self.client = httpx.AsyncClient(
             base_url=base_url, transport=guarded, auth=auth, headers=headers, timeout=timeout, follow_redirects=True
         )
@@ -74,6 +77,7 @@ class SourceClient:
         self.max_attempts = max_attempts
         self.backoff_base = backoff_base
         self.backoff_max = backoff_max
+        self.retry_statuses = retry_statuses
 
     def _wait(self, rs: RetryCallState) -> float:
         exc = rs.outcome.exception() if rs.outcome else None
@@ -91,10 +95,10 @@ class SourceClient:
             with attempt:
                 async with self.sem:
                     resp = await self.client.request(method, url, **kw)
-                if resp.status_code in (429, 502, 503, 504) or resp.status_code == 408:
+                if resp.status_code in self.retry_statuses:
                     raise RetryableError(resp.status_code, str(resp.url), _parse_retry_after(resp.headers.get("Retry-After")))
                 if resp.status_code >= 400:
-                    raise HttpError(resp.status_code, str(resp.url), resp.text[:500])
+                    raise HttpError(resp.status_code, str(resp.url), resp.text[:500], dict(resp.headers))
                 return resp
         raise RuntimeError("unreachable")  # pragma: no cover
 

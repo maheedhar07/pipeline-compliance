@@ -1,0 +1,3 @@
+# Owners of everything unless a later rule says otherwise
+*       @contoso-payments/payments-team @alice
+/docs/  @contoso-payments/docs-team

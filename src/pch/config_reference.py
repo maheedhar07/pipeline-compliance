@@ -53,6 +53,14 @@ FIELD_DOCS: dict[str, list[tuple[str, str]]] = {
         ("ado_base_url", "Base URL of Azure DevOps Services (change for Azure DevOps Server). https in prod."),
         ("ado_vsrm_url", "Base URL of the release management service. https in prod."),
     ],
+    "GitHub": [
+        ("github_api_url", "GitHub REST API base URL: `https://api.github.com`, or GHES `https://<host>/api/v3`. https in prod. Only this host is ever called (pagination links elsewhere are refused)."),
+        ("github_auth", "`pat` (fine-grained personal access token, default) or `app` (GitHub App installation; needs the `github-app` extra)."),
+        ("github_token", "Fine-grained PAT, READ-ONLY (Metadata, Contents, Administration: read) (secret). Setting it enables the GitHub reader."),
+        ("github_app_id", "Numeric GitHub App id (`GITHUB_AUTH=app`)."),
+        ("github_app_installation_id", "Numeric installation id of the App on your organisation (`GITHUB_AUTH=app`)."),
+        ("github_app_private_key", "App private key, PEM; a one-line value with literal backslash-n line breaks is accepted (secret)."),
+    ],
     "SonarQube": [
         ("sonar_url", "SonarQube base URL. Unset = Sonar not queried. https in prod."),
         ("sonar_token", "User token with Browse permission (secret)."),

@@ -1,0 +1,6 @@
+[
+  {"name": "ledger", "full_name": "contoso-payments/ledger", "default_branch": "main", "archived": false, "fork": false, "private": true, "visibility": "private", "topics": ["payments"], "pushed_at": "2026-09-01T10:00:00Z", "html_url": "https://github.com/contoso-payments/ledger"},
+  {"name": "standalone-svc", "full_name": "contoso-payments/standalone-svc", "default_branch": "main", "archived": false, "fork": false, "private": true, "visibility": "private", "topics": ["internal"], "pushed_at": "2026-09-28T10:00:00Z", "html_url": "https://github.com/contoso-payments/standalone-svc"},
+  {"name": "upstream-fork", "full_name": "contoso-payments/upstream-fork", "default_branch": "main", "archived": false, "fork": true, "private": false, "visibility": "public", "topics": [], "pushed_at": "2026-08-01T10:00:00Z", "html_url": "https://github.com/contoso-payments/upstream-fork"},
+  {"name": "sandbox-play", "full_name": "contoso-payments/sandbox-play", "default_branch": "main", "archived": false, "fork": false, "private": true, "visibility": "private", "topics": ["internal"], "pushed_at": "2026-08-01T10:00:00Z", "html_url": "https://github.com/contoso-payments/sandbox-play"}
+]

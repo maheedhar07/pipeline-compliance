@@ -9,6 +9,7 @@ import httpx
 
 from pch.collectors.ado.client import AdoClient
 from pch.collectors.aikido import AikidoClient
+from pch.collectors.github.client import GitHubAppAuth, GitHubClient
 from pch.collectors.servicenow import ServiceNowClient
 from pch.collectors.sonar import SonarClient
 from pch.collectors.transport import CacheReplayTransport, RecordingTransport, SizeLimitTransport
@@ -24,9 +25,10 @@ class Sources:
     sonar: SonarClient | None = None
     aikido: AikidoClient | None = None
     snow: ServiceNowClient | None = None
+    github: GitHubClient | None = None  # read-only GitHub reader; None = not configured (GitHub-only checks stay UNKNOWN)
 
     async def aclose(self) -> None:
-        for c in (self.ado, self.sonar, self.aikido, self.snow):
+        for c in (self.ado, self.sonar, self.aikido, self.snow, self.github):
             if c is not None:
                 await c.aclose()
 
@@ -83,4 +85,20 @@ def _live(settings: Settings, transport: httpx.AsyncBaseTransport, kw: dict[str,
               if settings.aikido_client_id else None)
     snow = (ServiceNowClient(settings.servicenow_url, settings.servicenow_user, secret("SERVICENOW_PASSWORD"), transport=transport, **kw)
             if settings.servicenow_url else None)
-    return Sources(ado, sonar, aikido, snow)
+    return Sources(ado, sonar, aikido, snow, _github_client(settings, transport, kw, secrets))
+
+
+def _github_client(settings: Settings, transport: httpx.AsyncBaseTransport, kw: dict[str, Any], secrets: SecretProvider | None) -> GitHubClient | None:
+    """The GitHub reader, or None when no credential is configured. ``secrets=None`` (cache replay) never needs credentials."""
+    gh_kw = {k: v for k, v in kw.items() if k in ("concurrency", "timeout", "backoff_base", "max_attempts")}
+    url = settings.github_api_url
+    if secrets is None:  # replay: same decision from the settings; the secret provider is not consulted
+        hinted = bool(settings.github_token.get_secret_value() or settings.github_app_id) or settings.secrets_provider != "env"
+        return GitHubClient(url, transport=transport, **gh_kw) if hinted else None
+    if settings.github_auth == "app":
+        if not (settings.github_app_id and settings.github_app_installation_id):
+            return None
+        app = GitHubAppAuth(settings.github_app_id, settings.github_app_installation_id, require_secret(secrets, "GITHUB_APP_PRIVATE_KEY"))
+        return GitHubClient(url, app=app, transport=transport, **gh_kw)
+    token = secrets.get("GITHUB_TOKEN")
+    return GitHubClient(url, token=token, transport=transport, **gh_kw) if token else None

@@ -3,30 +3,65 @@
 from __future__ import annotations
 
 import fnmatch
+from typing import Any
 
 from pch.engine.helpers import branch_allowed
 from pch.engine.registry import rule, rule_params
 from pch.model.findings import RuleResult
 from pch.model.pipeline import Pipeline
-from pch.model.repo import RepoContext
+from pch.model.repo import BranchProtection, RepoContext
 from pch.settings import Policy
+
+
+def _github_protection(ctx: RepoContext) -> tuple[BranchProtection | None, RuleResult | None]:
+    """(protection, early result). protection is None for repos without GitHub branch protection data (ADO policies apply)."""
+    pr = ctx.protection
+    if pr is None:
+        return None, None
+    if not pr.available:
+        return pr, RuleResult.unknown(pr.unavailable_reason or "GitHub branch protection could not be read")
+    return pr, None
+
+
+def _github_verdict(pr: BranchProtection, problems: list[str], ok: str, **ev: Any) -> RuleResult:
+    """PASS when nothing is missing. A control that is not seen while a source could not be read (classic protection needs
+    Administration: read) is UNKNOWN with the reason, never FAIL."""
+    if not problems:
+        return RuleResult.passed(ok, sources=pr.sources, **ev)
+    if pr.incomplete:
+        return RuleResult.unknown("not visible in the readable sources: " + "; ".join(problems) + " | unreadable: " + "; ".join(pr.incomplete), **ev)
+    return RuleResult.failed("; ".join(problems), sources=pr.sources, **ev)
 
 
 @rule(
     "SRC-001", "Default branch requires 2+ reviewers (creator vote excluded, reset on push)", "high", "repo",
-    "Peer review on the default branch is the primary preventive control for unreviewed code reaching production.",
-    {"any": "Repos > Branches > main > Branch policies: set minimum reviewers to 2, disable 'Allow requestors to approve their own changes', enable 'Reset all approval votes' on new changes."},
+    "Peer review on the default branch is the primary preventive control for unreviewed code reaching production. "
+    "Azure Repos: minimum reviewers policy. GitHub: required approving reviews from branch rules or classic protection (the PR author can never approve, "
+    "so `allow_creator_vote` has nothing to check there); `require_reset_on_push` is met by dismissing stale approvals or by requiring approval of the most recent push.",
+    {"any": "Azure Repos: Branches > main > Branch policies: minimum reviewers 2, disable 'Allow requestors to approve their own changes', enable 'Reset all approval votes'. "
+            "GitHub: Settings > Rules (or Branches): require a pull request with 2 approvals and 'Dismiss stale pull request approvals' (or 'Require approval of the most recent reviewable push')."},
     params={"allow_creator_vote": False, "require_reset_on_push": True},
 )
 def src_001(ctx: RepoContext, policy: Policy) -> RuleResult:
+    prm = rule_params(policy, "SRC-001")
+    need = policy.min_reviewers
+    gh, early = _github_protection(ctx)
+    if early is not None:
+        return early
+    if gh is not None:
+        problems = []
+        if gh.required_approving_review_count < need:
+            problems.append(f"required approving reviews is {gh.required_approving_review_count}, need >= {need}")
+        if prm["require_reset_on_push"] and not (gh.dismiss_stale_reviews or gh.require_last_push_approval):
+            problems.append("approvals are not reset on new pushes (stale approvals are not dismissed and the last push needs no approval)")
+        return _github_verdict(gh, problems, "reviewer policy meets the standard", approvals=gh.required_approving_review_count,
+                               dismiss_stale_reviews=gh.dismiss_stale_reviews, require_last_push_approval=gh.require_last_push_approval)
     pol = ctx.policies
     if not pol.available:
         return RuleResult.unknown(pol.unavailable_reason or "branch policies were not collected")
     problems = []
-    need = policy.min_reviewers
     if (pol.min_reviewers or 0) < need:
         problems.append(f"minimum reviewers is {pol.min_reviewers or 0}, need >= {need}")
-    prm = rule_params(policy, "SRC-001")
     if pol.creator_vote_counts and not prm["allow_creator_vote"]:
         problems.append("creator's own vote counts")
     if not pol.reset_on_push and prm["require_reset_on_push"]:
@@ -39,10 +74,24 @@ def src_001(ctx: RepoContext, policy: Policy) -> RuleResult:
 
 @rule(
     "SRC-002", "Default branch has a build validation policy", "high", "repo",
-    "Build validation stops changes that do not build or pass tests from merging.",
-    {"any": "Add a Build validation branch policy on the default branch pointing at the CI pipeline."},
+    "Build validation stops changes that do not build or pass tests from merging. Azure Repos: Build validation policy. GitHub: required status checks "
+    "(any, or all of the names in `required_checks`).",
+    {"any": "Azure Repos: add a Build validation branch policy on the default branch pointing at the CI pipeline. "
+            "GitHub: require status checks (the CI check names) in a branch rule or branch protection."},
+    params={"required_checks": []},
 )
 def src_002(ctx: RepoContext, policy: Policy) -> RuleResult:
+    gh, early = _github_protection(ctx)
+    if early is not None:
+        return early
+    if gh is not None:
+        want = rule_params(policy, "SRC-002")["required_checks"]
+        have = {c.casefold() for c in gh.required_status_checks}
+        problems = []
+        if not gh.required_status_checks:
+            problems.append("no required status checks on the default branch")
+        problems += [f"required check '{c}' is not enforced" for c in want if c.casefold() not in have]
+        return _github_verdict(gh, problems, "required status checks present", checks=gh.required_status_checks)
     if not ctx.policies.available:
         return RuleResult.unknown(ctx.policies.unavailable_reason or "branch policies were not collected")
     if ctx.policies.build_validation:
@@ -52,10 +101,18 @@ def src_002(ctx: RepoContext, policy: Policy) -> RuleResult:
 
 @rule(
     "SRC-003", "Linked work item and resolved comments required", "medium", "repo",
-    "Work-item linkage gives change traceability; comment resolution prevents ignored review feedback.",
-    {"any": "Enable 'Check for linked work items' (required) and 'Check for comment resolution' (required) on the default branch."},
+    "Work-item linkage gives change traceability; comment resolution prevents ignored review feedback. "
+    "GitHub has no work-item link policy, so for GitHub repos only conversation resolution is assessed.",
+    {"any": "Azure Repos: enable 'Check for linked work items' (required) and 'Check for comment resolution' (required) on the default branch. "
+            "GitHub: require conversation resolution before merging."},
 )
 def src_003(ctx: RepoContext, policy: Policy) -> RuleResult:
+    gh, early = _github_protection(ctx)
+    if early is not None:
+        return early
+    if gh is not None:
+        problems = [] if gh.require_conversation_resolution else ["conversation resolution is not required before merging"]
+        return _github_verdict(gh, problems, "conversation resolution is required (work-item links are not assessed on GitHub)")
     pol = ctx.policies
     if not pol.available:
         return RuleResult.unknown(pol.unavailable_reason or "branch policies were not collected")
@@ -120,3 +177,81 @@ def src_006(ctx: RepoContext, policy: Policy) -> RuleResult:
     if any(x in ("*", "/*", "/**") or "pipeline" in x.lower() or x.lower().endswith((".yml", ".yaml")) for x in pats):
         return RuleResult.passed("required-reviewer policy covers pipeline files", paths=pats)
     return RuleResult.failed("no CODEOWNERS and no required-reviewer policy for pipeline files", paths=pats)
+
+
+def _github_only(ctx: RepoContext) -> RuleResult | None:
+    """NOT_APPLICABLE for Azure Repos; UNKNOWN (with the reason) for an external repo whose protection was not read."""
+    if ctx.protection is None:
+        if not ctx.repo.external:
+            return RuleResult.na("GitHub branch protection rule (Azure Repos policies are not mapped)")
+        return RuleResult.unknown(ctx.policies.unavailable_reason or "GitHub branch protection was not read")
+    if not ctx.protection.available:
+        return RuleResult.unknown(ctx.protection.unavailable_reason or "GitHub branch protection could not be read")
+    return None
+
+
+@rule(
+    "SRC-007", "Default branch blocks force pushes and deletion", "high", "repo",
+    "A force push rewrites the history reviewers approved and deleting the default branch destroys it; both defeat every other source control.",
+    {"any": "GitHub: in the branch rule or branch protection enable 'Block force pushes' and 'Restrict deletions' (leave 'Allow force pushes' and 'Allow deletions' off)."},
+    params={"require_linear_history": False, "require_signed_commits": False},
+)
+def src_007(ctx: RepoContext, policy: Policy) -> RuleResult:
+    if (early := _github_only(ctx)) is not None:
+        return early
+    pr = ctx.protection
+    assert pr is not None
+    prm = rule_params(policy, "SRC-007")
+    problems = []
+    if not pr.block_force_pushes:
+        problems.append("force pushes are not blocked")
+    if not pr.block_deletions:
+        problems.append("deleting the branch is not blocked")
+    if prm["require_linear_history"] and not pr.require_linear_history:
+        problems.append("linear history is not required")
+    if prm["require_signed_commits"] and not pr.require_signed_commits:
+        problems.append("signed commits are not required")
+    return _github_verdict(pr, problems, "force pushes and deletion are blocked", block_force_pushes=pr.block_force_pushes, block_deletions=pr.block_deletions)
+
+
+@rule(
+    "SRC-008", "Branch protection also applies to administrators (no bypass)", "medium", "repo",
+    "If repository administrators or bypass actors can skip the rules, the review and status-check controls only bind people who are not in a hurry.",
+    {"any": "GitHub: enable 'Do not allow bypassing the above settings' (classic) or remove bypass actors from the ruleset (or limit them to break-glass roles and waive this rule)."},
+)
+def src_008(ctx: RepoContext, policy: Policy) -> RuleResult:
+    if (early := _github_only(ctx)) is not None:
+        return early
+    pr = ctx.protection
+    assert pr is not None
+    if not pr.protected:
+        return RuleResult.na("the default branch has no protection (see SRC-001)")
+    ev = {"enforce_admins": pr.enforce_admins, "bypass_actors": pr.bypass_actors, "sources": pr.sources}
+    if pr.admins_can_bypass is None:
+        return RuleResult.unknown("cannot tell whether administrators can bypass: " + ("; ".join(pr.incomplete) or "ruleset bypass actors are not readable"), **ev)
+    if pr.admins_can_bypass:
+        why = "administrators are not subject to the branch protection" if pr.enforce_admins is False else "bypass actors exist: " + ", ".join(pr.bypass_actors)
+        return RuleResult.failed(why, **ev)
+    return RuleResult.passed("protection also applies to administrators; no bypass actors", **ev)
+
+
+@rule(
+    "SRC-009", "CODEOWNERS file present", "low", "repo",
+    "CODEOWNERS names who must review which part of the code and who is reachable for the repository; it also supplies the owner shown in this report.",
+    {"any": "GitHub: add .github/CODEOWNERS (or CODEOWNERS / docs/CODEOWNERS) with at least a default `*` owner, and with the param require_code_owner_review also enable 'Require review from Code Owners'."},
+    params={"require_code_owner_review": False},
+)
+def src_009(ctx: RepoContext, policy: Policy) -> RuleResult:
+    if ctx.facts.facts_source == "unavailable":
+        return RuleResult.unknown(ctx.facts.facts_reason)
+    if ctx.facts.facts_source != "github":
+        return RuleResult.na("GitHub CODEOWNERS rule (this repository is not read from GitHub)")
+    if not ctx.facts.codeowners:
+        return RuleResult.failed("no CODEOWNERS file (.github/CODEOWNERS, CODEOWNERS or docs/CODEOWNERS)")
+    if rule_params(policy, "SRC-009")["require_code_owner_review"]:
+        pr = ctx.protection
+        if pr is None or not pr.available:
+            return RuleResult.unknown("CODEOWNERS exists; whether code owner review is required could not be read")
+        if not pr.require_code_owner_review:
+            return _github_verdict(pr, ["code owner review is not required by the branch rules"], "")
+    return RuleResult.passed("CODEOWNERS file present")

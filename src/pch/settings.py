@@ -98,6 +98,15 @@ class Settings(BaseSettings):
     ado_base_url: str = "https://dev.azure.com"
     ado_vsrm_url: str = "https://vsrm.dev.azure.com"
 
+    # --- GitHub (read-only reader, G2). GITHUB_AUTH=pat: GITHUB_TOKEN (fine-grained PAT, read-only). app: a GitHub App installation
+    # (needs the `github-app` extra). GITHUB_API_URL is https://api.github.com or a GHES https://<host>/api/v3.
+    github_api_url: str = "https://api.github.com"
+    github_auth: Literal["pat", "app"] = "pat"
+    github_token: SecretStr = SecretStr("")
+    github_app_id: str = ""
+    github_app_installation_id: str = ""
+    github_app_private_key: SecretStr = SecretStr("")  # PEM; resolved through the secret provider like every credential
+
     # --- SonarQube
     sonar_url: str = ""
     sonar_token: SecretStr = SecretStr("")
@@ -184,14 +193,24 @@ class Settings(BaseSettings):
         return v.strip().lower() if info.field_name == "log_format" else v.strip().upper()
 
     @field_validator(
-        "ado_base_url", "ado_vsrm_url", "sonar_url", "aikido_url", "servicenow_url", "keyvault_url", "artifact_blob_account_url"
+        "ado_base_url", "ado_vsrm_url", "github_api_url", "sonar_url", "aikido_url", "servicenow_url", "keyvault_url", "artifact_blob_account_url"
     )
     @classmethod
     def _urls(cls, v: str) -> str:
         return _clean_url(v)
 
+    @field_validator("github_app_id", "github_app_installation_id")
+    @classmethod
+    def _numeric_ids(cls, v: str) -> str:
+        v = v.strip()
+        if v and not v.isdigit():
+            raise ValueError("must be the numeric id shown in the GitHub App settings")
+        return v
+
     @model_validator(mode="after")
     def _provider_settings(self) -> Settings:
+        if not self.github_api_url:
+            raise ValueError("GITHUB_API_URL must not be empty (default https://api.github.com)")
         if self.secrets_provider == "file" and self.secrets_dir is None:
             raise ValueError("SECRETS_PROVIDER=file requires SECRETS_DIR")
         if self.secrets_provider == "azure_keyvault" and not self.keyvault_url:
@@ -208,6 +227,7 @@ class Settings(BaseSettings):
                 for name, u in (
                     ("ADO_BASE_URL", self.ado_base_url),
                     ("ADO_VSRM_URL", self.ado_vsrm_url),
+                    ("GITHUB_API_URL", self.github_api_url),
                     ("SONAR_URL", self.sonar_url),
                     ("AIKIDO_URL", self.aikido_url),
                     ("SERVICENOW_URL", self.servicenow_url),
@@ -270,6 +290,11 @@ class Settings(BaseSettings):
 
         groups: dict[str, dict[str, bool]] = {
             "ado": {"ADO_ORG": bool(self.ado_org), "ADO_PAT": s(self.ado_pat)},
+            "github": (
+                {"GITHUB_APP_ID": bool(self.github_app_id), "GITHUB_APP_INSTALLATION_ID": bool(self.github_app_installation_id),
+                 "GITHUB_APP_PRIVATE_KEY": s(self.github_app_private_key)}
+                if self.github_auth == "app" else {"GITHUB_TOKEN": s(self.github_token)}
+            ),
             "sonar": {"SONAR_URL": bool(self.sonar_url), "SONAR_TOKEN": s(self.sonar_token)},
             "aikido": {"AIKIDO_CLIENT_ID": bool(self.aikido_client_id), "AIKIDO_CLIENT_SECRET": s(self.aikido_client_secret)},
             "servicenow": {"SERVICENOW_URL": bool(self.servicenow_url), "SERVICENOW_USER": bool(self.servicenow_user), "SERVICENOW_PASSWORD": s(self.servicenow_password)},
@@ -320,6 +345,32 @@ def _default_code_hosts() -> list[CodeHost]:
     return ["github"]
 
 
+_GH_ORG = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}$")
+
+
+class GitHubScope(_Strict):
+    """``scope.yaml`` ``github:``. Used only when a GitHub reader is configured (GITHUB_TOKEN or a GitHub App).
+
+    The org listing is filtered by these keys; repos that ADO pipelines reference or that ``repos:`` names are always scanned
+    (``exclude_repos`` still removes any repo). ``include``/``exclude`` are case-insensitive globs on ``repo`` or ``org/repo``.
+    """
+
+    orgs: list[str] = Field(default_factory=list)  # GitHub organisations whose repositories are listed (GET /orgs/{org}/repos)
+    include: list[str] = Field(default_factory=list)
+    exclude: list[str] = Field(default_factory=list)
+    topics_any: list[str] = Field(default_factory=list)  # keep repos that have at least one of these topics (empty = no topic filter)
+    include_archived: bool = False
+    include_forks: bool = False
+
+    @field_validator("orgs")
+    @classmethod
+    def _orgs(cls, v: list[str]) -> list[str]:
+        bad = [o for o in v if not _GH_ORG.match(o)]
+        if bad:
+            raise ValueError("must be GitHub organisation logins (letters, digits, hyphens)")
+        return list(dict.fromkeys(v))
+
+
 class Scope(_Strict):
     organization: str = ""
     # Where the code lives. GitHub is the default; Azure Repos stays available (template reuse) but is OFF unless listed:
@@ -329,6 +380,7 @@ class Scope(_Strict):
     repos: list[RepoOverride] = Field(default_factory=list)
     env_tiers: dict[str, str] = Field(default_factory=dict)  # stage/environment name -> tier
     exclude_repos: list[str] = Field(default_factory=list)
+    github: GitHubScope = Field(default_factory=GitHubScope)
 
     @field_validator("code_hosts")
     @classmethod

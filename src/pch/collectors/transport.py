@@ -28,9 +28,17 @@ class MutationBlockedError(RuntimeError):
     """Raised when something tries to send a non-read request."""
 
 
-def _check_allowed(request: httpx.Request) -> None:
+def _exact_url(request: httpx.Request) -> str:
+    """scheme://host[:port]/path without query or fragment, lower-cased host: what a per-client POST allowance is matched against."""
+    u = request.url
+    return f"{u.scheme}://{u.netloc.decode().lower()}{u.path}"
+
+
+def _check_allowed(request: httpx.Request, allowed_posts: frozenset[str] = frozenset()) -> None:
     if request.method in ("GET", "HEAD", "OPTIONS"):
         return
+    if request.method == "POST" and _exact_url(request) in allowed_posts:
+        return  # a token exchange the owning client registered for its OWN host and exact path (GitHub App installation token)
     if request.method == "POST" and any(p.search(request.url.path) for p in ALLOWED_POSTS):
         if "/preview" in request.url.path:
             try:
@@ -91,13 +99,18 @@ class SizeLimitTransport(httpx.AsyncBaseTransport):
 
 
 class ReadOnlyTransport(httpx.AsyncBaseTransport):
-    """Rejects any non-GET request, except the documented allowlist."""
+    """Rejects any non-GET request, except the documented allowlist.
 
-    def __init__(self, inner: httpx.AsyncBaseTransport):
+    ``allowed_posts`` are exact URLs (scheme://host/path, no query) one client may POST to: GitHub's installation token
+    exchange, anchored to the configured GitHub API host. They are per transport instance, so no other client gets them.
+    """
+
+    def __init__(self, inner: httpx.AsyncBaseTransport, allowed_posts: frozenset[str] = frozenset()):
         self.inner = inner
+        self.allowed_posts = allowed_posts
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        _check_allowed(request)
+        _check_allowed(request, self.allowed_posts)
         return await self.inner.handle_async_request(request)
 
     async def aclose(self) -> None:
@@ -158,7 +171,7 @@ class RecordingTransport(httpx.AsyncBaseTransport):
             "status": response.status_code,
             "kind": kind,
             "headers": {
-                k: v for k, v in response.headers.items() if k.lower() in ("x-ms-continuationtoken", "retry-after", "content-type")
+                k: v for k, v in response.headers.items() if k.lower() in ("x-ms-continuationtoken", "retry-after", "content-type", "link", "x-ratelimit-remaining", "x-ratelimit-reset")
             },
             "body": body,
         }

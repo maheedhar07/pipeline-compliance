@@ -28,7 +28,7 @@ def test_rules_docs_cli(tmp_path):
     assert runner.invoke(app, ["rules", "docs", "--write", str(out), "--check"]).exit_code == 0
     out.write_text("stale")
     assert runner.invoke(app, ["rules", "docs", "--write", str(out), "--check"]).exit_code == 1
-    assert "53 rules" in runner.invoke(app, ["rules", "docs"]).output
+    assert "56 rules" in runner.invoke(app, ["rules", "docs"]).output
 
 
 def test_github_adapter_is_a_stub():

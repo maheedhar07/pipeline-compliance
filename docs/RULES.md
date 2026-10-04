@@ -12,7 +12,7 @@ Standards are configuration, not code: in `config/policy.yaml` any rule can be d
 (`rules: {ID: {enabled, severity, params}}`), and the weights can be changed (`scoring:`). The "Tunable params"
 line of a rule lists its knobs with their defaults. See [STANDARDS.md](STANDARDS.md) for where every standard lives.
 
-**53 rules** in 8 categories.
+**56 rules** in 8 categories.
 
 | Rule | Severity | Scope | Title |
 |---|---|---|---|
@@ -44,6 +44,9 @@ line of a rule lists its knobs with their defaults. See [STANDARDS.md](STANDARDS
 | [SRC-004](#src-004) | high | pipeline | Pipeline definition is in source control |
 | [SRC-005](#src-005) | high | stage | Production deploys only artifacts from a protected branch |
 | [SRC-006](#src-006) | low | repo | CODEOWNERS or required-reviewer policy covers pipeline files |
+| [SRC-007](#src-007) | high | repo | Default branch blocks force pushes and deletion |
+| [SRC-008](#src-008) | medium | repo | Branch protection also applies to administrators (no bypass) |
+| [SRC-009](#src-009) | low | repo | CODEOWNERS file present |
 | [SUP-001](#sup-001) | high | pipeline | Build once, promote everywhere (no rebuild per environment) |
 | [SUP-002](#sup-002) | medium | pipeline | Task major versions are pinned and not deprecated |
 | [SUP-003](#sup-003) | medium | pipeline | Marketplace tasks are on the allowlist |
@@ -80,9 +83,9 @@ line of a rule lists its knobs with their defaults. See [STANDARDS.md](STANDARDS
 - Evaluated per: **repo**
 - Applies to: all
 - Tunable params (`policy.yaml` `rules.SRC-001.params`): `allow_creator_vote` = `False`, `require_reset_on_push` = `True`
-- Why it matters: Peer review on the default branch is the primary preventive control for unreviewed code reaching production.
+- Why it matters: Peer review on the default branch is the primary preventive control for unreviewed code reaching production. Azure Repos: minimum reviewers policy. GitHub: required approving reviews from branch rules or classic protection (the PR author can never approve, so `allow_creator_vote` has nothing to check there); `require_reset_on_push` is met by dismissing stale approvals or by requiring approval of the most recent push.
 - Remediation:
-  - All platforms: Repos > Branches > main > Branch policies: set minimum reviewers to 2, disable 'Allow requestors to approve their own changes', enable 'Reset all approval votes' on new changes.
+  - All platforms: Azure Repos: Branches > main > Branch policies: minimum reviewers 2, disable 'Allow requestors to approve their own changes', enable 'Reset all approval votes'. GitHub: Settings > Rules (or Branches): require a pull request with 2 approvals and 'Dismiss stale pull request approvals' (or 'Require approval of the most recent reviewable push').
 
 ### SRC-002
 
@@ -91,9 +94,10 @@ line of a rule lists its knobs with their defaults. See [STANDARDS.md](STANDARDS
 - Severity: **high**
 - Evaluated per: **repo**
 - Applies to: all
-- Why it matters: Build validation stops changes that do not build or pass tests from merging.
+- Tunable params (`policy.yaml` `rules.SRC-002.params`): `required_checks` = `[]`
+- Why it matters: Build validation stops changes that do not build or pass tests from merging. Azure Repos: Build validation policy. GitHub: required status checks (any, or all of the names in `required_checks`).
 - Remediation:
-  - All platforms: Add a Build validation branch policy on the default branch pointing at the CI pipeline.
+  - All platforms: Azure Repos: add a Build validation branch policy on the default branch pointing at the CI pipeline. GitHub: require status checks (the CI check names) in a branch rule or branch protection.
 
 ### SRC-003
 
@@ -102,9 +106,9 @@ line of a rule lists its knobs with their defaults. See [STANDARDS.md](STANDARDS
 - Severity: **medium**
 - Evaluated per: **repo**
 - Applies to: all
-- Why it matters: Work-item linkage gives change traceability; comment resolution prevents ignored review feedback.
+- Why it matters: Work-item linkage gives change traceability; comment resolution prevents ignored review feedback. GitHub has no work-item link policy, so for GitHub repos only conversation resolution is assessed.
 - Remediation:
-  - All platforms: Enable 'Check for linked work items' (required) and 'Check for comment resolution' (required) on the default branch.
+  - All platforms: Azure Repos: enable 'Check for linked work items' (required) and 'Check for comment resolution' (required) on the default branch. GitHub: require conversation resolution before merging.
 
 ### SRC-004
 
@@ -140,6 +144,41 @@ line of a rule lists its knobs with their defaults. See [STANDARDS.md](STANDARDS
 - Why it matters: Pipeline definitions are privileged code; changes need review from the owning team.
 - Remediation:
   - All platforms: Add a CODEOWNERS file covering azure-pipelines*.yml, or a Required reviewers policy with path filter /azure-pipelines*.yml.
+
+### SRC-007
+
+**Default branch blocks force pushes and deletion**
+
+- Severity: **high**
+- Evaluated per: **repo**
+- Applies to: all
+- Tunable params (`policy.yaml` `rules.SRC-007.params`): `require_linear_history` = `False`, `require_signed_commits` = `False`
+- Why it matters: A force push rewrites the history reviewers approved and deleting the default branch destroys it; both defeat every other source control.
+- Remediation:
+  - All platforms: GitHub: in the branch rule or branch protection enable 'Block force pushes' and 'Restrict deletions' (leave 'Allow force pushes' and 'Allow deletions' off).
+
+### SRC-008
+
+**Branch protection also applies to administrators (no bypass)**
+
+- Severity: **medium**
+- Evaluated per: **repo**
+- Applies to: all
+- Why it matters: If repository administrators or bypass actors can skip the rules, the review and status-check controls only bind people who are not in a hurry.
+- Remediation:
+  - All platforms: GitHub: enable 'Do not allow bypassing the above settings' (classic) or remove bypass actors from the ruleset (or limit them to break-glass roles and waive this rule).
+
+### SRC-009
+
+**CODEOWNERS file present**
+
+- Severity: **low**
+- Evaluated per: **repo**
+- Applies to: all
+- Tunable params (`policy.yaml` `rules.SRC-009.params`): `require_code_owner_review` = `False`
+- Why it matters: CODEOWNERS names who must review which part of the code and who is reachable for the repository; it also supplies the owner shown in this report.
+- Remediation:
+  - All platforms: GitHub: add .github/CODEOWNERS (or CODEOWNERS / docs/CODEOWNERS) with at least a default `*` owner, and with the param require_code_owner_review also enable 'Require review from Code Owners'.
 
 
 ## QLT: Code quality and security

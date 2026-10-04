@@ -25,6 +25,7 @@ from pch.providers.secrets import (
     SecretProvider,
     build_secret_provider,
     require_secret,
+    source_secret_names,
 )
 from pch.settings import Settings
 
@@ -54,4 +55,5 @@ __all__ = [
     "get_artifact_store",
     "get_secret_provider",
     "require_secret",
+    "source_secret_names",
 ]

@@ -32,6 +32,8 @@ from pch.collectors.ado.service_conn import collect_service_connections
 from pch.collectors.ado.task_catalog import TaskCatalog, load_task_catalog
 from pch.collectors.ado.variable_groups import collect_variable_groups
 from pch.collectors.ado.yaml_pipeline import parse_yaml_pipeline
+from pch.collectors.github.discovery import list_org_repos
+from pch.collectors.github.reader import RepoRead, read_repo
 from pch.collectors.redact import SECRET_NAME, value_looks_secret
 from pch.engine.migration import repo_readiness
 from pch.engine.reasons import compute_reasons
@@ -45,6 +47,7 @@ from pch.model.pipeline import Pipeline
 from pch.model.repo import (
     AikidoFacts,
     BranchPolicies,
+    BranchProtection,
     RepoContext,
     RepoFacts,
     RepoRef,
@@ -140,6 +143,7 @@ class Scanner:
         self.lineages: dict[str, RepoLineage] = {}  # repo key -> lineage
         self.orphans: dict[str, list[LOrphan]] = {}  # project -> unlinked pipelines / releases
         self.env_records = EnvRecordCache(sources.ado, cfg.lineage_top)
+        self.gh_listing: dict[str, dict[str, Any]] = {}  # "org/repo" (casefold) -> record of the GitHub organisation listing
 
     def err(self, source: str, subject: str, exc: BaseException | str) -> None:
         msg = scrub(f"{type(exc).__name__}: {exc}" if isinstance(exc, BaseException) else exc)  # persisted: never a secret
@@ -192,6 +196,44 @@ class Scanner:
             self.err("ado", f"{name}: code hosts", summary)
         return pd
 
+    async def github_groups(self, pdatas: list[_ProjectData]) -> list[_ProjectData]:
+        """GitHub repos that no ADO project already holds: the organisation listing (scope.yaml ``github:``) plus ``repos:`` entries whose
+        project is not an ADO project. Grouped by GitHub organisation (the "project" of a repo without an ADO pipeline), key ``<org>/<org>/<repo>``;
+        a ``repos:`` entry with a ``project`` groups its repo under that name instead."""
+        gh, cfg = self.src.github, self.cfg
+        gs = cfg.scope.github
+        if gh is None:
+            if gs.orgs:
+                self.err("github", "organisation discovery", "info: scope.yaml github.orgs is set but no GitHub reader is configured (GITHUB_TOKEN or a GitHub App); those repos are not discovered")
+            return []
+        provider = "github" if gh.is_github_com else "github_enterprise"
+        if provider not in cfg.scope.hosts():
+            self.err("github", "organisation discovery", f"info: the GitHub reader is configured but code_hosts does not list '{provider}'; GitHub repos are only read for what ADO pipelines reference")
+            return []
+        known = {r.name.casefold() for pd in pdatas for r in pd.disc.repos if r.provider in ("github", "github_enterprise")}
+        groups: dict[str, list[RepoEntry]] = {}
+
+        def add(group: str, full: str, url: str = "", branch: str = "") -> None:
+            if "/" in full and full.casefold() not in known:
+                known.add(full.casefold())
+                groups.setdefault(group, []).append(RepoEntry(provider=provider, id=full, name=full, url=url, default_branch=branch))  # type: ignore[arg-type]
+
+        ado_projects = {pd.name for pd in pdatas}
+        for o in cfg.scope.repos:
+            if o.project not in ado_projects:
+                add(o.project, o.repo.strip("/"), f"https://github.com/{o.repo.strip('/')}" if gh.is_github_com else "")
+        for org in gs.orgs:
+            try:
+                listed = await list_org_repos(gh, org, gs)
+            except Exception as e:  # noqa: BLE001 - one organisation failing must not stop the scan
+                self.err("github", f"{org}: repository listing", e)
+                continue
+            for raw in listed:
+                full = str(raw["full_name"])
+                self.gh_listing[full.casefold()] = raw
+                add(org, full, str(raw.get("html_url") or ""), str(raw.get("default_branch") or ""))
+        return [_ProjectData(name, disc=Discovery(entries, {}, {}, [])) for name, entries in groups.items()]
+
     # ------------------------------------------------------------------ repo level
     async def scan_repo(self, pd: _ProjectData, repo: RepoEntry, builds: list[dict[str, Any]], releases: list[dict[str, Any]]):
         cfg, ado = self.cfg, self.src.ado
@@ -215,7 +257,20 @@ class Scanner:
         # 1. repo files -> facts. Externally hosted repos are not in Azure Repos: the Items API does not apply, the facts
         #    stay "unavailable" (not "empty") until a reader for that host provides them.
         facts: RepoFacts
-        if ref.external:
+        protection: BranchProtection | None = None
+        gh: RepoRead | None = None
+        if ref.external and self.src.github is not None and ref.provider in ("github", "github_enterprise"):
+            gh = await read_repo(self.src.github, ref.name, known=self.gh_listing.get(ref.name.casefold()))
+            facts, protection = gh.facts, gh.protection
+            for msg in gh.errors:
+                rerr("github", msg)
+            if gh.default_branch:
+                branch = ref.default_branch = gh.default_branch
+            if gh.web_url and not ref.url:
+                ref.url = gh.web_url
+            if ref.owner is None and gh.owner:
+                ref.owner = gh.owner  # CODEOWNERS default rule; scope.yaml owner wins
+        elif ref.external:
             facts = unavailable_facts(ref.provider)
         else:
             facts = analyze_repo(None)
@@ -255,7 +310,7 @@ class Scanner:
             self.catalog.annotate(p)
             enrich_pipeline(p, adf_only, facts.synapse and not facts.iac, tier_over)
             apply_environment_checks(p, pd.envs)
-        if ref.external:
+        if ref.external and facts.facts_source == "unavailable":
             inferred = infer_external_kind(pipelines)  # data-platform / IaC repos are recognisable from what they deploy
             if inferred:
                 facts.kind, facts.has_app_code = inferred, False
@@ -309,14 +364,14 @@ class Scanner:
         state, reason, cov = classify_test_state(facts, pipelines, sonar, threshold)
         facts.test_state, facts.test_state_reason, facts.coverage = state, reason, cov
         # 8. rules
-        if ref.external:  # ADO branch policies cover Azure Repos only; GitHub branch protection needs the GitHub reader
-            policies = BranchPolicies(available=False, unavailable_reason=facts.facts_reason)
+        if ref.external:  # ADO branch policies cover Azure Repos only; GitHub branch protection comes from the GitHub reader (ctx.protection)
+            policies = BranchPolicies(available=False, unavailable_reason=facts.facts_reason or "GitHub-hosted: Azure DevOps branch policies do not apply")
         else:
             policies = policies_for_repo(pd.policies, ref.id, branch)
             if not pd.policies:
                 policies.available = False  # policies were not collected for this project
         ctx = RepoContext(
-            repo=ref, pipelines=pipelines, facts=facts, policies=policies,
+            repo=ref, pipelines=pipelines, facts=facts, policies=policies, protection=protection,
             sonar=sonar, aikido=aikido, snow=snow, service_connections=pd.conns, variable_groups=pd.groups, environments=pd.envs, now=cfg.now,
         )
         findings = evaluate(ctx, cfg.policy, self.rules)
@@ -440,7 +495,8 @@ class Scanner:
                 self.aikido_data = await self.src.aikido.fetch_all()
             except Exception as e:
                 self.err("aikido", "organisation fetch", e)
-        pdatas = await asyncio.gather(*(self.collect_project(p) for p in projects))
+        pdatas = list(await asyncio.gather(*(self.collect_project(p) for p in projects)))
+        pdatas += await self.github_groups(pdatas)
         jobs = []
         excluded = {x.casefold() for x in cfg.scope.exclude_repos}
         for pd in pdatas:
@@ -521,6 +577,7 @@ class Scanner:
                         "snow_available": ctx.snow.available,
                         "repo": {"provider": ctx.repo.provider, "full_name": ctx.repo.full_name, "service_connection_id": ctx.repo.service_connection_id},
                         "policies": ctx.policies.model_dump(mode="json"),
+                        "protection": ctx.protection.model_dump(mode="json") if ctx.protection else None,
                         "reasons": compute_reasons(findings, self.rules),  # why the repo is not compliant (pages/exports read this)
                     },
                 ))

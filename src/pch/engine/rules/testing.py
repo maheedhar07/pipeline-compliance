@@ -112,8 +112,8 @@ def tst_006(ctx: RepoContext, policy: Policy) -> RuleResult:
     kind = ctx.facts.kind
     need = {"adf": {"validate:adf"}, "synapse": {"validate:synapse"}, "iac": {"whatif", "plan", "validate:iac"}}.get(kind)
     if need is None:
-        if ctx.facts.facts_source == "unavailable":
-            # kind could not be read from the repo; ADF/Synapse/IaC repos are recognised from their pipelines' deploy targets
+        if ctx.facts.facts_source == "unavailable" or not ctx.facts.tree_complete:
+            # kind could not be (fully) read from the repo; ADF/Synapse/IaC repos are recognised from their pipelines' deploy targets
             if any(p.deploy_targets for p in ctx.pipelines):
                 return RuleResult.na("pipelines deploy application targets, not ADF/Synapse/IaC")
             return RuleResult.unknown(ctx.facts.facts_reason)

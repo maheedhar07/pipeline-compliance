@@ -27,7 +27,7 @@ class TestState(StrEnum):
 RepoKind = Literal["application", "adf", "synapse", "iac", "sql", "docs"]
 RepoProvider = Literal["azure_repos", "github", "github_enterprise", "other_git"]
 PROVIDER_LABEL: dict[str, str] = {"azure_repos": "Azure Repos", "github": "GitHub", "github_enterprise": "GitHub Enterprise", "other_git": "Other Git"}
-FactsSource = Literal["ado_items", "unavailable"]  # where RepoFacts came from; a future reader adds its own value
+FactsSource = Literal["ado_items", "github", "unavailable"]  # where RepoFacts came from
 
 
 def unavailable_reason(provider: str) -> str:
@@ -67,6 +67,17 @@ class RepoRef(BaseModel):
         return self.name.rsplit("/", 1)[-1]
 
 
+class GitHubMeta(BaseModel):
+    """Repository metadata from ``GET /repos/{owner}/{repo}`` (or the organisation listing)."""
+
+    default_branch: str = ""
+    archived: bool = False
+    fork: bool = False
+    visibility: str = ""
+    topics: list[str] = Field(default_factory=list)
+    pushed_at: str | None = None
+
+
 class RepoFacts(BaseModel):
     languages: list[str] = Field(default_factory=list)
     kind: RepoKind = "application"
@@ -89,6 +100,9 @@ class RepoFacts(BaseModel):
     # "unavailable" = nothing was read from the repository (empty defaults mean "not collected", NOT "collected and empty")
     facts_source: FactsSource = "ado_items"
     facts_reason: str = ""
+    # False when the host truncated the file tree: "not found in the listing" then proves nothing (rules go UNKNOWN, not FAIL)
+    tree_complete: bool = True
+    github: GitHubMeta | None = None
 
 
 class BranchPolicies(BaseModel):
@@ -103,6 +117,35 @@ class BranchPolicies(BaseModel):
     work_item_required: bool = False
     comment_resolution_required: bool = False
     required_reviewer_paths: list[str] = Field(default_factory=list)  # file patterns covered by required reviewers
+
+
+class BranchProtection(BaseModel):
+    """Effective protection of the default branch on GitHub: rulesets (``rules/branches/{branch}``) merged with classic branch protection.
+
+    Merge rule: a control counts when ANY source enforces it (numbers: the maximum). ``incomplete`` lists the sources that could not be
+    read (classic protection needs Administration: read; rulesets may be hidden): a control that is not seen enabled while a source is
+    incomplete is UNKNOWN for the rules (never FAIL). ``admins_can_bypass`` is None when it cannot be told.
+    """
+
+    available: bool = False
+    unavailable_reason: str = ""  # why nothing is known (repo not readable, rate limit, ...)
+    incomplete: list[str] = Field(default_factory=list)
+    sources: list[str] = Field(default_factory=list)  # e.g. ["ruleset: Protect main", "classic branch protection"]
+    protected: bool = False  # any rule / classic protection applies to the branch
+    require_pull_request: bool = False
+    required_approving_review_count: int = 0
+    dismiss_stale_reviews: bool = False
+    require_code_owner_review: bool = False
+    require_last_push_approval: bool = False
+    require_conversation_resolution: bool = False
+    required_status_checks: list[str] = Field(default_factory=list)
+    block_force_pushes: bool = False
+    block_deletions: bool = False
+    require_linear_history: bool = False
+    require_signed_commits: bool = False
+    enforce_admins: bool | None = None  # classic only: protection also applies to administrators
+    bypass_actors: list[str] = Field(default_factory=list)  # ruleset bypass actors / classic bypass allowances (types, no names)
+    admins_can_bypass: bool | None = None
 
 
 class ServiceConnection(BaseModel):
@@ -184,6 +227,7 @@ class RepoContext(BaseModel):
     pipelines: list[Pipeline] = Field(default_factory=list)
     facts: RepoFacts = Field(default_factory=RepoFacts)
     policies: BranchPolicies = Field(default_factory=BranchPolicies)
+    protection: BranchProtection | None = None  # GitHub default-branch protection (None: not read; ADO policies apply or UNKNOWN)
     sonar: SonarFacts | None = None
     aikido: AikidoFacts | None = None
     snow: SnowFacts = Field(default_factory=SnowFacts)

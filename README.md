@@ -1,7 +1,7 @@
 # Pipeline Compliance Hub
 
 A **report-only** CI/CD compliance dashboard, built as a **template** you import and extend. It scores the pipelines of every repository
-(Azure DevOps Classic build, Classic release and YAML; SonarQube, Aikido and ServiceNow as supporting sources) against a catalog of 53
+(Azure DevOps Classic build, Classic release and YAML; SonarQube, Aikido and ServiceNow as supporting sources) against a catalog of 56
 deterministic Python rules and serves the result as a server-rendered dashboard plus a JSON API. GitHub Actions support is planned (interface only).
 
 * **Report-only.** It never writes to Azure DevOps, GitHub, SonarQube, Aikido or ServiceNow (a transport-level guard, tested), and compliance is decided by Python rules, never by an AI.
@@ -69,6 +69,13 @@ Settings are environment variables (or a `.env` file; copy `.env.example`). Inva
 | `ADO_PAT` | (empty) | Read-only personal access token (secret). |
 | `ADO_BASE_URL` | `https://dev.azure.com` | Base URL of Azure DevOps Services (change for Azure DevOps Server). https in prod. |
 | `ADO_VSRM_URL` | `https://vsrm.dev.azure.com` | Base URL of the release management service. https in prod. |
+| **GitHub** | | |
+| `GITHUB_API_URL` | `https://api.github.com` | GitHub REST API base URL: `https://api.github.com`, or GHES `https://<host>/api/v3`. https in prod. Only this host is ever called (pagination links elsewhere are refused). |
+| `GITHUB_AUTH` | `pat` | `pat` (fine-grained personal access token, default) or `app` (GitHub App installation; needs the `github-app` extra). |
+| `GITHUB_TOKEN` | (empty) | Fine-grained PAT, READ-ONLY (Metadata, Contents, Administration: read) (secret). Setting it enables the GitHub reader. |
+| `GITHUB_APP_ID` | (empty) | Numeric GitHub App id (`GITHUB_AUTH=app`). |
+| `GITHUB_APP_INSTALLATION_ID` | (empty) | Numeric installation id of the App on your organisation (`GITHUB_AUTH=app`). |
+| `GITHUB_APP_PRIVATE_KEY` | (empty) | App private key, PEM; a one-line value with literal backslash-n line breaks is accepted (secret). |
 | **SonarQube** | | |
 | `SONAR_URL` | (empty) | SonarQube base URL. Unset = Sonar not queried. https in prod. |
 | `SONAR_TOKEN` | (empty) | User token with Browse permission (secret). |
@@ -215,7 +222,7 @@ ADO / Sonar / Aikido / ServiceNow (read-only HTTP, retry/backoff, 429 aware, 8 p
 canonical model (Pipeline > Stage > Job > Step, Approval, RepoFacts)    <- normalize/capabilities.yaml (task -> capability tags)
         |  target + environment-tier detection, repo scan, test-state classification
         v
-rule engine (53 rules, registry + @rule)  ->  findings  ->  scoring + waivers  ->  snapshot in SQLite/Postgres/Azure SQL
+rule engine (56 rules, registry + @rule)  ->  findings  ->  scoring + waivers  ->  snapshot in SQLite/Postgres/Azure SQL
         v
 FastAPI + Jinja + HTMX + Chart.js dashboard   and   /api/v1 JSON API
 ```

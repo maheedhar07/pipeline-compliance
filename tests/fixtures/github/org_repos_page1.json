@@ -1,0 +1,5 @@
+[
+  {"name": "billing-api", "full_name": "contoso-payments/billing-api", "default_branch": "main", "archived": false, "fork": false, "private": true, "visibility": "private", "topics": ["payments", "tier1"], "pushed_at": "2026-09-30T10:00:00Z", "html_url": "https://github.com/contoso-payments/billing-api"},
+  {"name": "orders-func", "full_name": "contoso-payments/orders-func", "default_branch": "main", "archived": false, "fork": false, "private": true, "visibility": "private", "topics": ["payments"], "pushed_at": "2026-09-29T10:00:00Z", "html_url": "https://github.com/contoso-payments/orders-func"},
+  {"name": "old-service", "full_name": "contoso-payments/old-service", "default_branch": "master", "archived": true, "fork": false, "private": true, "visibility": "private", "topics": [], "pushed_at": "2022-01-01T10:00:00Z", "html_url": "https://github.com/contoso-payments/old-service"}
+]

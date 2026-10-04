@@ -26,10 +26,20 @@ log = logging.getLogger(__name__)
 # DATABASE_URL; use DB_AUTH=azure_ad (no password) or an App Service Key Vault reference for that variable.
 SOURCE_SECRETS: dict[str, tuple[str, ...]] = {
     "ado": ("ADO_PAT",),
+    "github": ("GITHUB_TOKEN", "GITHUB_APP_PRIVATE_KEY"),  # which one applies depends on GITHUB_AUTH: see source_secret_names
     "sonar": ("SONAR_TOKEN",),
     "aikido": ("AIKIDO_CLIENT_SECRET",),
     "servicenow": ("SERVICENOW_PASSWORD",),
 }
+
+
+def source_secret_names(settings: Settings, source: str) -> tuple[str, ...]:
+    """The credentials one source actually needs with the current settings (GitHub: the token OR the App private key)."""
+    if source == "github":
+        return ("GITHUB_APP_PRIVATE_KEY",) if settings.github_auth == "app" else ("GITHUB_TOKEN",)
+    return SOURCE_SECRETS[source]
+
+
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 

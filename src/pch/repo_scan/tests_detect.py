@@ -164,13 +164,15 @@ def classify_test_state(
 ) -> tuple[TestState, str, float | None]:
     """Return (state, human reason, coverage). See PLAN section 6."""
     coverage = sonar.coverage if sonar and sonar.onboarded else None
-    if not facts.has_app_code:
+    unread = facts.facts_source == "unavailable"
+    partial = not unread and not facts.tree_complete  # the host truncated the file tree: what is NOT listed proves nothing
+    if not facts.has_app_code and not (unread or partial):
         return TestState.NOT_APPLICABLE, f"{facts.kind} repository: validated by TST-006 instead of unit tests", coverage
     present, effective = runs_tests(pipelines)
-    if facts.facts_source == "unavailable":
-        # Repo contents were not read, so "no tests" cannot be claimed. A pipeline that effectively runs tests proves they
-        # exist; otherwise the state is UNKNOWN (never NO_TESTS / TESTS_NOT_RUN).
-        if not effective:
+    if unread or partial:
+        # Repo contents were not (fully) read, so "no tests" cannot be claimed. A pipeline that effectively runs tests proves they
+        # exist (so do test files that were seen in a partial listing); otherwise the state is UNKNOWN (never NO_TESTS / TESTS_NOT_RUN).
+        if not (effective or (partial and facts.tests_detected)):
             return TestState.UNKNOWN, f"{facts.facts_reason}; no pipeline is known to run tests", coverage
     elif not facts.tests_detected:
         return TestState.NO_TESTS, "no test files, test projects or test frameworks detected in an application repo", coverage
