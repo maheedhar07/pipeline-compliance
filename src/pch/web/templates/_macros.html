@@ -21,8 +21,8 @@
 {# Compact "why": top reasons of a repo row (a row_dict from queries.py). Import with context (links keep the selected scan). #}
 {% macro why_cell(r) -%}
 {%- if r.status in ('AT_RISK', 'NON_COMPLIANT') and r.why -%}
-<ul class="space-y-0.5 text-xs">
-  {%- for w in r.why %}<li><a class="hover:underline" href="{{ u('/rules/' ~ w.rule_id) }}" title="{{ w.text }}">{{ w.label }}</a></li>{% endfor -%}
+<ul class="w-[17rem] text-xs leading-snug">
+  {%- for w in r.why %}<li class="truncate"><a class="hover:underline" href="{{ u('/rules/' ~ w.rule_id) }}" title="{{ w.text }}">{{ w.label }}</a></li>{% endfor -%}
   {%- if r.why_more %}<li><a class="text-indigo-600 hover:underline dark:text-indigo-300" href="{{ u('/repos/' ~ r.project ~ '/' ~ r.repo) }}">+{{ r.why_more }} more</a></li>{% endif -%}
 </ul>
 {%- elif r.status in ('AT_RISK', 'NON_COMPLIANT') -%}<span class="text-xs text-slate-400" title="No single rule fails; the overall score is below the threshold">score below threshold</span>

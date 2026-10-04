@@ -44,7 +44,7 @@
 </nav>
 {% endmacro %}
 
-{% macro th_cls(extra='') -%}px-2 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 {{ extra }}{%- endmacro %}
+{% macro th_cls(extra='') -%}whitespace-nowrap px-1.5 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 {{ extra }}{%- endmacro %}
 
 {% macro sort_th(col, label, path, params, sort, dir, cls='') %}
 {%- set nxt = 'desc' if sort == col and dir == 'asc' else 'asc' -%}

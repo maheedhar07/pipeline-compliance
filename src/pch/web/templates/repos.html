@@ -8,7 +8,7 @@
   <h1 class="text-lg font-semibold">Repositories</h1>
   <span class="text-xs text-slate-500 dark:text-slate-400">{{ pg.total }} match</span>
   <div class="ml-auto flex items-center gap-3 text-xs">
-    {{ col_chooser('repos', [('project','Project'),('owner','Owner'),('platforms','Pipelines'),('targets','Targets'),('test_state','Tests'),('coverage','Coverage'),('sonar_gate','Sonar'),('aikido_criticals','Aikido critical'),('score','Score'),('critical_fails','Critical / high fails'),('migration_status','Migration'),('why','Why')], 'critical_fails,migration_status') }}
+    {{ col_chooser('repos', [('project','Project'),('status','Status'),('why','Why'),('owner','Owner'),('platforms','Pipelines'),('targets','Targets'),('test_state','Tests'),('coverage','Coverage'),('sonar_gate','Sonar'),('aikido_criticals','Aikido critical'),('score','Score (own column)'),('critical_fails','Critical / high fails'),('migration_status','Migration')], 'project,score,critical_fails,migration_status') }}
     <a class="text-indigo-600 hover:underline dark:text-indigo-300" href="/repos.csv?{{ qs(base, sort=sort, dir=dir) }}" title="All rows matching the filters, not just this page">Export CSV</a>
   </div>
 </div>
@@ -42,29 +42,29 @@
   <table class="w-full">
     <caption class="sr-only">Repositories, {{ pg.total }} match; sorted by {{ sort }} {{ 'ascending' if dir == 'asc' else 'descending' }}</caption>
     <thead class="sticky-head"><tr>
-      {{ sort_th('project','Project','/repos',params,sort,dir) }}{{ sort_th('repo','Repo','/repos',params,sort,dir) }}{{ sort_th('owner','Owner','/repos',params,sort,dir) }}
-      {{ sort_th('platforms','Pipelines','/repos',params,sort,dir) }}{{ sort_th('targets','Targets','/repos',params,sort,dir) }}
+      {{ sort_th('project','Project','/repos',params,sort,dir) }}{{ sort_th('repo','Repo','/repos',params,sort,dir) }}{{ sort_th('status','Status','/repos',params,sort,dir) }}{{ plain_th('why','Why') }}
+      {{ sort_th('owner','Owner','/repos',params,sort,dir) }}{{ sort_th('platforms','Pipelines','/repos',params,sort,dir) }}{{ sort_th('targets','Targets','/repos',params,sort,dir) }}
       {{ sort_th('test_state','Tests','/repos',params,sort,dir) }}{{ sort_th('coverage','Cov.','/repos',params,sort,dir,'text-right') }}{{ sort_th('sonar_gate','Sonar','/repos',params,sort,dir) }}{{ sort_th('aikido_criticals','Aikido crit.','/repos',params,sort,dir,'text-right') }}
-      {{ sort_th('score','Score','/repos',params,sort,dir,'text-right') }}{{ sort_th('critical_fails','Crit / high','/repos',params,sort,dir,'text-right') }}{{ sort_th('migration_status','Migration','/repos',params,sort,dir) }}{{ sort_th('status','Status','/repos',params,sort,dir) }}
-      {{ plain_th('why','Why') }}
+      {{ sort_th('score','Score','/repos',params,sort,dir,'text-right') }}{{ sort_th('critical_fails','Crit / high','/repos',params,sort,dir,'text-right') }}{{ sort_th('migration_status','Migration','/repos',params,sort,dir) }}
     </tr></thead>
     <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
     {% for r in rows %}
     <tr class="align-top hover:bg-slate-50 dark:hover:bg-slate-700/40">
-      <td data-col="project" class="px-2 py-1"><a class="hover:underline" href="{{ u('/repos', project=r.project) }}">{{ r.project }}</a></td>
-      <td data-col="repo" class="px-2 py-1 font-medium"><a class="text-indigo-700 hover:underline dark:text-indigo-300" href="{{ u('/repos/' ~ r.project ~ '/' ~ r.repo) }}">{{ r.repo }}</a> <a href="{{ u('/repos', provider=r.provider) }}">{% if multi_host %}{{ provider_badge(r.provider, r.provider_label) }}{% endif %}</a> <a class="text-[11px] text-slate-500 hover:text-indigo-700 hover:underline dark:text-slate-400" href="{{ u('/lineage/' ~ r.project ~ '/' ~ r.repo) }}" title="Lineage: pipelines, releases, environments">lineage</a></td>
-      <td data-col="owner" class="px-2 py-1 text-xs text-slate-500 dark:text-slate-400">{% if r.owner %}<a class="hover:underline" href="{{ u('/repos', owner=r.owner) }}">{{ r.owner }}</a>{% else %}–{% endif %}</td>
-      <td data-col="platforms" class="px-2 py-1 text-xs"><span class="flex flex-wrap gap-1">{% for k in r.platform_kinds if k != 'none' %}<a href="{{ u('/repos', platform=k) }}">{{ platform_badge(k) }}</a>{% else %}<span class="text-slate-400">none</span>{% endfor %}</span></td>
-      <td data-col="targets" class="px-2 py-1 text-xs">{% for t in r.targets %}<a href="{{ u('/repos', target=t) }}" class="mr-1 rounded bg-slate-100 px-1 py-0.5 hover:bg-slate-200 dark:bg-slate-700">{{ TARGET_LABEL[t] }}</a>{% else %}–{% endfor %}</td>
-      <td data-col="test_state" class="px-2 py-1"><a href="{{ u('/repos', test_state=r.test_state) }}">{{ test_badge(r.test_state) }}</a></td>
-      <td data-col="coverage" class="tnum px-2 py-1 text-right">{{ r.coverage | pct(0) if r.coverage is not none else '–' }}</td>
-      <td data-col="sonar_gate" class="px-2 py-1 text-xs">{{ r.sonar_gate or '–' }}</td>
-      <td data-col="aikido_criticals" class="tnum px-2 py-1 text-right {{ 'font-semibold text-red-600 dark:text-red-400' if r.aikido_criticals else '' }}">{{ r.aikido_criticals if r.aikido_criticals is not none else '–' }}</td>
-      <td data-col="score" class="tnum px-2 py-1 text-right">{{ '%.0f' | format(r.score) if r.score is not none else '–' }}</td>
-      <td data-col="critical_fails" class="tnum px-2 py-1 text-right text-xs"><a class="{{ 'font-semibold text-red-600 dark:text-red-400' if r.critical_fails }} hover:underline" href="{{ u('/findings', repo=r.key, severity='critical', status='FAIL') }}">{{ r.critical_fails }}</a> / <a class="hover:underline" href="{{ u('/findings', repo=r.key, severity='high', status='FAIL') }}">{{ r.high_fails }}</a></td>
-      <td data-col="migration_status" class="px-2 py-1 text-xs"><a class="hover:underline" href="{{ u('/repos', migration=r.migration_status) }}">{{ r.migration_label }}</a></td>
-      <td data-col="status" class="px-2 py-1">{{ status_badge(r.status) }}{% if r.unknowns %} <span class="text-[10px] text-slate-400" title="{{ r.unknowns }} rules could not be evaluated">?{{ r.unknowns }}</span>{% endif %}</td>
-      <td data-col="why" class="min-w-[16rem] px-2 py-1">{{ why_cell(r) }}</td>
+      <td data-col="project" class="whitespace-nowrap px-1.5 py-1"><a class="hover:underline" href="{{ u('/repos', project=r.project) }}">{{ r.project }}</a></td>
+      <td data-col="repo" class="max-w-[14rem] px-1.5 py-1 font-medium"><div class="flex items-center gap-1"><a class="truncate text-indigo-700 hover:underline dark:text-indigo-300" title="{{ r.repo }}" href="{{ u('/repos/' ~ r.project ~ '/' ~ r.repo) }}">{{ r.repo }}</a>{% if multi_host %}<a class="flex-none" href="{{ u('/repos', provider=r.provider) }}">{{ provider_badge(r.provider, r.provider_label) }}</a>{% endif %}</div>
+        <div class="truncate text-[11px] font-normal leading-tight text-slate-500 dark:text-slate-400"><span title="Project">{{ r.project }}</span> · <a class="hover:text-indigo-700 hover:underline" href="{{ u('/lineage/' ~ r.project ~ '/' ~ r.repo) }}" title="Lineage: pipelines, releases, environments">lineage</a></div></td>
+      <td data-col="status" class="whitespace-nowrap px-1.5 py-1">{{ status_badge(r.status) }}{% if r.score is not none %} <span class="tnum text-xs text-slate-600 dark:text-slate-300" title="Compliance score">{{ '%.0f' | format(r.score) }}</span>{% endif %}{% if r.unknowns %}<div class="text-[11px] leading-tight"><a class="text-slate-500 hover:underline dark:text-slate-400" href="{{ u('/findings', repo=r.key, status='UNKNOWN') }}" title="{{ r.unknowns }} checks could not be evaluated (missing data or access)">{{ r.unknowns }} unknown</a></div>{% endif %}</td>
+      <td data-col="why" class="px-1.5 py-1">{{ why_cell(r) }}</td>
+      <td data-col="owner" class="max-w-[7rem] px-1.5 py-1 text-xs text-slate-500 dark:text-slate-400">{% if r.owner %}<a class="block truncate hover:underline" title="{{ r.owner }}" href="{{ u('/repos', owner=r.owner) }}">{{ r.owner }}</a>{% else %}–{% endif %}</td>
+      <td data-col="platforms" class="px-1.5 py-1 text-xs"><span class="flex flex-wrap gap-1">{% for k in r.platform_kinds if k != 'none' %}<a href="{{ u('/repos', platform=k) }}">{{ platform_badge(k) }}</a>{% else %}<span class="text-slate-400">none</span>{% endfor %}</span></td>
+      <td data-col="targets" class="px-1.5 py-1 text-xs">{% for t in r.targets %}<a href="{{ u('/repos', target=t) }}" class="mr-1 inline-block whitespace-nowrap rounded bg-slate-100 px-1 py-0.5 hover:bg-slate-200 dark:bg-slate-700">{{ TARGET_LABEL[t] }}</a>{% else %}–{% endfor %}</td>
+      <td data-col="test_state" class="whitespace-nowrap px-1.5 py-1"><a href="{{ u('/repos', test_state=r.test_state) }}">{{ test_badge(r.test_state) }}</a></td>
+      <td data-col="coverage" class="tnum px-1.5 py-1 text-right">{{ r.coverage | pct(0) if r.coverage is not none else '–' }}</td>
+      <td data-col="sonar_gate" class="px-1.5 py-1 text-xs">{{ r.sonar_gate or '–' }}</td>
+      <td data-col="aikido_criticals" class="tnum px-1.5 py-1 text-right {{ 'font-semibold text-red-600 dark:text-red-400' if r.aikido_criticals else '' }}">{{ r.aikido_criticals if r.aikido_criticals is not none else '–' }}</td>
+      <td data-col="score" class="tnum px-1.5 py-1 text-right">{{ '%.0f' | format(r.score) if r.score is not none else '–' }}</td>
+      <td data-col="critical_fails" class="tnum whitespace-nowrap px-1.5 py-1 text-right text-xs"><a class="{{ 'font-semibold text-red-600 dark:text-red-400' if r.critical_fails }} hover:underline" href="{{ u('/findings', repo=r.key, severity='critical', status='FAIL') }}">{{ r.critical_fails }}</a> / <a class="hover:underline" href="{{ u('/findings', repo=r.key, severity='high', status='FAIL') }}">{{ r.high_fails }}</a></td>
+      <td data-col="migration_status" class="px-1.5 py-1 text-xs"><a class="hover:underline" href="{{ u('/repos', migration=r.migration_status) }}">{{ r.migration_label }}</a></td>
     </tr>
     {% else %}
     <tr><td colspan="14" class="px-3 py-8 text-center text-slate-500">No repositories match these filters.</td></tr>

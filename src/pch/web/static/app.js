@@ -78,7 +78,7 @@
   }
 
   // ---- column chooser: hidden columns per table are kept per viewer in localStorage (all wrapped: the table works without it)
-  const colKey = (id) => "pch-cols-" + id;
+  const colKey = (id) => "pch-cols-v2-" + id;
   function hiddenCols(chooser) {
     const id = chooser.dataset.colChooser;
     try {
