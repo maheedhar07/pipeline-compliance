@@ -6,7 +6,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from pch.engine.migration import STATUS_LABEL as MIGRATION_LABEL
@@ -18,6 +18,7 @@ from pch.model.repo import PROVIDER_LABEL
 from pch.store import repository as store
 from pch.store.models import CollectionErrorRow, FindingRow, RepoResultRow, ScanRow
 from pch.timeutil import utcnow
+from pch.web.tables import sort_rows, text_key
 
 STATUS_RANK = {"NON_COMPLIANT": 0, "AT_RISK": 1, "COMPLIANT": 2, "NOT_SCANNED": 3}
 FINDING_RANK = {"FAIL": 0, "WARN": 1, "UNKNOWN": 2, "WAIVED": 3, "PASS": 4, "NOT_APPLICABLE": 5}  # nosec B105 - status rank map, not a password
@@ -28,7 +29,10 @@ TARGETS = ["functionapp", "webapp", "aks", "adf", "synapse", "sql", "iac"]
 TARGET_LABEL = {"functionapp": "Function App", "webapp": "Web App", "aks": "AKS", "adf": "Data Factory", "synapse": "Synapse", "sql": "SQL (dacpac)", "iac": "IaC"}
 TARGET_RULE_CODE = {"functionapp": "FA", "webapp": "WA", "aks": "AKS", "adf": "ADF", "synapse": "SYN", "sql": "SQL", "iac": "IAC"}
 TEST_STATES = ["TESTS_OK", "TESTS_LOW_COVERAGE", "TESTS_NO_COVERAGE", "TESTS_NOT_RUN", "NO_TESTS", "UNKNOWN", "NOT_APPLICABLE"]
-SORTABLE = {"project", "repo", "owner", "test_state", "coverage", "sonar_gate", "aikido_criticals", "score", "status", "critical_fails", "migration_score"}
+SORTABLE = {"project", "repo", "owner", "provider", "platforms", "targets", "test_state", "coverage", "sonar_gate", "aikido_criticals", "score", "status",
+            "critical_fails", "high_fails", "unknowns", "migration_score", "migration_status"}
+NO_OWNER = "(no owner)"  # the owner filter value / label for repos without an owner
+MIGRATION_RANK = {"ado_only": 0, "in_progress": 1, "migrated": 2, "none": 3}
 
 
 def rule_index() -> dict[str, RuleMeta]:
@@ -132,9 +136,21 @@ def row_dict(r: RepoResultRow) -> dict[str, Any]:
 
 
 # ------------------------------------------------------------------ repos
+def _repo_sort_value(r: dict[str, Any], sort: str) -> Any:
+    """Sort value of a repo row; ``None`` (unknown / not applicable) sorts last in both directions."""
+    if sort == "status":
+        return STATUS_RANK.get(r["status"], 9)
+    if sort in ("platforms", "targets"):
+        return len(r[sort])
+    if sort == "migration_status":
+        return MIGRATION_RANK.get(r["migration_status"], 9)
+    return text_key(r[sort])
+
+
 def repos(s: Session, scan_id: str, *, project: str | None = None, status: str | None = None, test_state: str | None = None,
           platform: str | None = None, target: str | None = None, sonar: str | None = None, q: str | None = None,
-          provider: str | None = None, rule: str | None = None, sort: str = "status", direction: str = "asc") -> list[dict[str, Any]]:
+          provider: str | None = None, rule: str | None = None, owner: str | None = None, migration: str | None = None,
+          sort: str = "status", direction: str = "asc") -> list[dict[str, Any]]:
     results = store.repo_results(s, scan_id)
     if rule:  # repos where this rule fails (the "Top reasons" drill-down)
         results = [r for r in results if (r.rule_status or {}).get(rule) == "FAIL"]
@@ -155,24 +171,18 @@ def repos(s: Session, scan_id: str, *, project: str | None = None, status: str |
             return False
         if sonar and (r["sonar_gate"] or "none") != sonar:
             return False
+        if owner and (r["owner"] or NO_OWNER) != owner:
+            return False
+        if migration and r["migration_status"] != migration:
+            return False
         if q and q.lower() not in f"{r['repo']} {r['owner'] or ''} {r['project']}".lower():
             return False
         return True
 
     rows = [r for r in rows if keep(r)]
     sort = sort if sort in SORTABLE else "status"
-    rev = direction == "desc"
-
-    def key(r: dict[str, Any]):
-        v = r[sort]
-        if sort == "status":
-            return (STATUS_RANK.get(v, 9), r["score"] if r["score"] is not None else 101)
-        return (v is None, v if v is not None else 0) if not isinstance(v, str) else (False, v.lower())
-
-    rows.sort(key=key, reverse=rev)
-    if rev and sort in {"coverage", "score", "aikido_criticals", "migration_score"}:
-        rows.sort(key=lambda r: (r[sort] is None, -(r[sort] or 0)))
-    return rows
+    secondary = (lambda r: (r["score"] if r["score"] is not None else 101, r["project"].lower(), r["repo"].lower())) if sort == "status" else (lambda r: (r["project"].lower(), r["repo"].lower()))
+    return sort_rows(rows, lambda r: _repo_sort_value(r, sort), direction, secondary)
 
 
 def reasons_text(items: list[dict[str, Any]]) -> str:
@@ -222,6 +232,19 @@ def rule_stats(s: Session, scan_id: str, rows: list[RepoResultRow] | None = None
     return out
 
 
+def rules_table(stats: list[dict[str, Any]], *, category: str | None = None, severity: str | None = None, failing: str | None = None, q: str | None = None,
+                sort: str = "default", direction: str = "asc") -> list[dict[str, Any]]:
+    """Filter and sort the rule catalog rows. ``default`` keeps the catalog order (grouped by category on the page)."""
+    rows = [r for r in stats
+            if (not category or r["category"] == category) and (not severity or r["severity"] == severity) and (failing != "1" or r["fail"])
+            and (not q or q.lower() in f"{r['id']} {r['title']}".lower())]
+    if sort == "default":
+        return rows if direction == "asc" else rows[::-1]
+    sev_rank = {"severity": lambda r: SEV_RANK.get(r["severity"], 9)}
+    key = sev_rank.get(sort, lambda r: text_key(r[sort]))
+    return sort_rows(rows, key, direction, lambda r: r["id"])
+
+
 def rule_detail(s: Session, scan_id: str, rule_id: str) -> dict[str, Any] | None:
     meta = rule_index().get(rule_id)
     if not meta:
@@ -259,8 +282,27 @@ def finding_dict(f: FindingRow, meta: dict[str, RuleMeta] | None = None, platfor
     }
 
 
+FINDING_SORT = ("severity", "status", "rule", "category", "repo", "pipeline", "message")
+
+
+def _finding_order(sort: str, direction: str) -> list[Any]:
+    """ORDER BY clauses (portable: CASE ranks, no dialect functions). The default (severity, then status) keeps the worst first."""
+    sev = case(SEV_RANK, value=FindingRow.severity, else_=9)
+    st = case(FINDING_RANK, value=FindingRow.status, else_=9)
+    cols: dict[str, list[Any]] = {
+        "severity": [sev, st], "status": [st, sev], "rule": [FindingRow.rule_id], "category": [FindingRow.category, sev],
+        "repo": [FindingRow.repo_key], "pipeline": [FindingRow.pipeline_name, FindingRow.stage], "message": [FindingRow.message],
+    }
+    first = cols.get(sort, cols["severity"])
+    keys = [(c.desc() if direction == "desc" else c.asc()) for c in first]
+    if sort not in ("severity", "status"):
+        keys += [sev, st]
+    return [*keys, FindingRow.repo_key, FindingRow.rule_id, FindingRow.id]
+
+
 def findings_list(s: Session, scan_id: str, *, project: str | None = None, category: str | None = None, rule: str | None = None,
-                  status: str | None = None, severity: str | None = None, repo_key: str | None = None, limit: int = 200, offset: int = 0) -> dict[str, Any]:
+                  status: str | None = None, severity: str | None = None, repo_key: str | None = None, pipeline: str | None = None, stage: str | None = None,
+                  limit: int = 200, offset: int = 0, sort: str = "severity", direction: str = "asc") -> dict[str, Any]:
     q = select(FindingRow).where(FindingRow.scan_id == scan_id)
     if project:
         q = q.where(FindingRow.repo_key.startswith(f"{project}/", autoescape=True))  # "%" / "_" are literals, not wildcards
@@ -274,13 +316,16 @@ def findings_list(s: Session, scan_id: str, *, project: str | None = None, categ
         q = q.where(FindingRow.severity == severity)
     if repo_key:
         q = q.where(FindingRow.repo_key == repo_key)
+    if pipeline:
+        q = q.where(FindingRow.pipeline_name == pipeline)
+    if stage:
+        q = q.where(FindingRow.stage == stage)
     total = s.scalar(select(func.count()).select_from(q.subquery())) or 0
-    rows = list(s.scalars(q.limit(5000)))
-    rows.sort(key=lambda f: (SEV_RANK.get(f.severity, 9), FINDING_RANK.get(f.status, 9), f.repo_key, f.rule_id))
+    rows = list(s.scalars(q.order_by(*_finding_order(sort, direction)).offset(offset).limit(limit)))
     meta = rule_index()
     prov = provider_map(s, scan_id)
     eff = policy_effects(s, scan_id)
-    return {"total": total, "limit": limit, "offset": offset, "items": [finding_dict(f, meta, providers=prov, eff=eff) for f in rows[offset : offset + limit]]}
+    return {"total": total, "limit": limit, "offset": offset, "items": [finding_dict(f, meta, providers=prov, eff=eff) for f in rows]}
 
 
 # ------------------------------------------------------------------ overview
@@ -314,6 +359,23 @@ def top_reasons(rows: list[dict[str, Any]], limit: int = 10) -> list[dict[str, A
     return [{"rule_id": rid, "label": first[rid]["label"], "title": first[rid]["title"], "severity": first[rid]["severity"], "repos": n} for rid, n in ranked]
 
 
+STATUS_KEYS = ("COMPLIANT", "AT_RISK", "NON_COMPLIANT")
+SEVERITIES = ("critical", "high", "medium", "low")
+MAX_PROJECT_BARS = 30
+MAX_OWNER_BARS = 15
+
+
+def breakdown(rows: list[dict[str, Any]], key: str, limit: int) -> dict[str, Any]:
+    """Repos per ``key`` (project / owner) split by compliance status, for the stacked bars: biggest groups first, ``more`` = groups cut off."""
+    groups: dict[str, Counter[str]] = defaultdict(Counter)
+    for r in rows:
+        groups[(r[key] or NO_OWNER) if key == "owner" else r[key]][r["status"]] += 1
+    ranked = sorted(groups.items(), key=lambda kv: (-sum(kv[1].values()), kv[0].lower()))
+    items = [{"name": name, "total": sum(c.values()), "compliant": c["COMPLIANT"], "at_risk": c["AT_RISK"], "non_compliant": c["NON_COMPLIANT"], "not_scanned": c["NOT_SCANNED"]}
+             for name, c in ranked[:limit]]
+    return {"items": items, "more": max(0, len(ranked) - limit)}
+
+
 def noncompliant_list(rows: list[dict[str, Any]], limit: int = 15) -> list[dict[str, Any]]:
     """The worst NON_COMPLIANT repos (lowest score first) with their top reasons."""
     bad = [r for r in rows if r["status"] == "NON_COMPLIANT"]
@@ -344,6 +406,8 @@ def overview(s: Session, scan_id: str) -> dict[str, Any]:
             scored = cc["PASS"] + cc["FAIL"] + cc["WARN"]
             line.append({"project": p, "category": c, "rate": round(100 * (cc["PASS"] + 0.5 * cc["WARN"]) / scored, 1) if scored else None, "fails": cc["FAIL"]})
         heat.append({"category": c, "name": CATEGORY_NAMES[c], "cells": line})
+    sev = Counter(dict(s.execute(select(FindingRow.severity, func.count()).where(FindingRow.scan_id == scan_id, FindingRow.status == "FAIL").group_by(FindingRow.severity)).tuples().all()))
+    mig = Counter(d["migration_status"] for d in row_dicts)
     classic_repos = sum(1 for r in rows if any("classic" in p for p in r.platform_mix))
     classic_pipes = sum(1 for r in rows for p in r.pipelines if p["platform"].startswith("ado_classic"))
     return {
@@ -355,6 +419,10 @@ def overview(s: Session, scan_id: str) -> dict[str, Any]:
         "status_counts": {k: status_counts.get(k, 0) for k in ("COMPLIANT", "AT_RISK", "NON_COMPLIANT")}, "not_scanned": status_counts.get("NOT_SCANNED", 0),
         "top_rules": top, "heatmap": heat, "projects": projects, "trend": trend(s),
         "top_reasons": top_reasons(row_dicts), "noncompliant": noncompliant_list(row_dicts),
+        "by_project": breakdown(row_dicts, "project", MAX_PROJECT_BARS), "by_owner": breakdown(row_dicts, "owner", MAX_OWNER_BARS),
+        "severity_counts": {k: sev.get(k, 0) for k in SEVERITIES},
+        "migration_states": [{"key": k, "label": MIGRATION_LABEL[k], "repos": mig.get(k, 0)} for k in ("ado_only", "in_progress", "migrated")],
+        "no_pipeline_repos": mig.get("none", 0),
     }
 
 
@@ -459,6 +527,42 @@ def scans(s: Session, selected: str | None = None) -> dict[str, Any]:
 
 
 # ------------------------------------------------------------------ repo detail
+FIX_FIRST = 8
+MAX_REPO_TREND = 60
+
+
+def fix_first(categories: list[dict[str, Any]], eff: dict[str, Any], limit: int = FIX_FIRST) -> dict[str, Any]:
+    """FAIL findings of a repo grouped by rule and ordered by severity, then category weight (policy ``scoring.category_weights``, default 1), then rule id.
+
+    One entry per rule (``places`` counts the pipelines / stages it fails in), each with its fix hint."""
+    weights = eff.get("category_weights") or {}
+    by_rule: dict[str, dict[str, Any]] = {}
+    for c in categories:
+        for f in c["findings"]:
+            if f["status"] != "FAIL":
+                continue
+            e = by_rule.setdefault(f["rule_id"], {"rule_id": f["rule_id"], "title": f["title"], "severity": f["severity"], "severity_default": f["severity_default"],
+                                                  "category": f["category"], "category_name": f["category_name"], "message": f["message"], "remediation": f["remediation"],
+                                                  "link": f["link"], "places": 0, "where": []})
+            e["places"] += 1
+            where = f["pipeline_name"] + (f" / {f['stage']}" if f["stage"] else "") if f["pipeline_name"] else ""
+            if where and where not in e["where"] and len(e["where"]) < 3:
+                e["where"].append(where)
+    ranked = sorted(by_rule.values(), key=lambda e: (SEV_RANK.get(e["severity"], 9), -float(weights.get(e["category"], 1.0)), e["rule_id"]))
+    return {"items": ranked[:limit], "total": len(ranked), "shown": min(limit, len(ranked))}
+
+
+def repo_trend(s: Session, repo_key: str, limit: int = MAX_REPO_TREND) -> list[dict[str, Any]]:
+    """Score and status of one repo across the complete scans (oldest first), for the small line chart."""
+    q = (select(ScanRow.id, ScanRow.started_at, ScanRow.mode, RepoResultRow.score, RepoResultRow.status, RepoResultRow.critical_fails, RepoResultRow.high_fails)
+         .join(RepoResultRow, RepoResultRow.scan_id == ScanRow.id).where(RepoResultRow.repo_key == repo_key, ScanRow.status == "complete")
+         .order_by(ScanRow.started_at.desc()).limit(limit))
+    rows = [{"scan_id": sid, "date": started.strftime("%Y-%m-%d"), "mode": mode, "score": score, "status": st, "critical_fails": cf, "high_fails": hf}
+            for sid, started, mode, score, st, cf, hf in s.execute(q).tuples().all()]
+    rows.reverse()
+    return rows
+
+
 def repo_detail(s: Session, scan_id: str, project: str, repo: str) -> dict[str, Any] | None:
     key = f"{project}/{repo}"
     r = store.repo_result(s, scan_id, key)
@@ -489,7 +593,8 @@ def repo_detail(s: Session, scan_id: str, project: str, repo: str) -> dict[str, 
     pipelines = [p | {"badge": PLATFORM_BADGE.get(p["platform"], p["platform"]), "retire_reason": retire.get(p["id"])} for p in r.pipelines]
     return {"repo": row_dict(r) | {"reason": r.test_state_reason, "migration_blockers": r.migration_blockers}, "facts": facts,
             "repo_checks_unavailable": facts.get("facts_source") == "unavailable", "repo_checks_reason": facts.get("facts_reason", ""), "pipelines": pipelines,
-            "categories": categories, "sonar": ext.get("sonar"), "aikido": ext.get("aikido"), "policies": ext.get("policies")}
+            "categories": categories, "sonar": ext.get("sonar"), "aikido": ext.get("aikido"), "policies": ext.get("policies"),
+            "fix_first": fix_first(categories, eff), "trend": repo_trend(s, key)}
 
 
 def filter_options(s: Session, scan_id: str) -> dict[str, Any]:

@@ -137,8 +137,10 @@ def test_web_migration_tab_repo_badges_and_lineage_export(fx, fxt, tmp_path):
         assert detail.status_code == 200 and "GitHub Actions" in detail.text and "ADO" in detail.text
         csv = c.get("/lineage.csv").text
         assert csv.splitlines()[0].endswith(",platform") and ",gha" in csv
-        page = c.get(f"/lineage/{BILLING}")
+        page = c.get(f"/lineage/{BILLING}", params={"view": "table"})
         assert page.status_code == 200 and "GitHub Actions workflow" in page.text and "Deploy" in page.text
+        flow = c.get(f"/lineage/{BILLING}")
+        assert flow.status_code == 200 and "GitHub Actions" in flow.text and 'data-flow-node="stage"' in flow.text and "Deploy" in flow.text
         assert any(r["platform_kinds"] == ["gha"] or "gha" in r["platform_kinds"] for r in c.get("/api/v1/repos?platform=gha").json()["repos"])
 
 

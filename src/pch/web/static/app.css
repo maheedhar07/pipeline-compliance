@@ -1,5 +1,5 @@
-:root { --c-ok:#15803d; --c-warn:#b45309; --c-bad:#b91c1c; --c-info:#475569; --grid:#e2e8f0; --ink:#0f172a; }
-html.dark { --c-ok:#4ade80; --c-warn:#fbbf24; --c-bad:#f87171; --c-info:#94a3b8; --grid:#334155; --ink:#e2e8f0; }
+:root { --c-ok:#15803d; --c-warn:#b45309; --c-bad:#b91c1c; --c-info:#475569; --grid:#e2e8f0; --ink:#0f172a; --c-crit:#991b1b; --c-high:#c2410c; --c-med:#a16207; --c-low:#0369a1; }
+html.dark { --c-ok:#4ade80; --c-warn:#fbbf24; --c-bad:#f87171; --c-info:#94a3b8; --grid:#334155; --ink:#e2e8f0; --c-crit:#f87171; --c-high:#fb923c; --c-med:#facc15; --c-low:#38bdf8; }
 body { font-feature-settings: "tnum" 1; }
 .tnum { font-variant-numeric: tabular-nums; }
 .heat-cell { min-width: 64px; }
@@ -10,3 +10,33 @@ details > summary { cursor: pointer; }
 /* HTMX indicator CSS (htmx-config includeIndicatorStyles=false, so no <style> is injected at runtime) */
 .htmx-indicator { opacity: 0; transition: opacity .2s; }
 .htmx-request .htmx-indicator, .htmx-request.htmx-indicator { opacity: 1; }
+
+/* ---- surfaces used by custom CSS (sticky table headers) */
+:root { --surface:#ffffff; --flow-line:#94a3b8; --flow-side:#7c3aed; }
+html.dark { --surface:#1e293b; --flow-line:#64748b; --flow-side:#a78bfa; }
+
+/* ---- tables: sticky header inside a scrolling frame (the frame scrolls both ways, so the page never does) */
+.table-frame { max-height: 72vh; overflow: auto; }
+.sticky-head th { position: sticky; top: 0; z-index: 10; background: var(--surface); box-shadow: inset 0 -1px 0 var(--grid); }
+.pager a, .pager span.pager-gap { min-width: 2rem; }
+
+/* ---- lineage flow: Repo -> pipelines -> releases / deploy workflows -> environment stages.
+   Plain CSS connectors (pseudo-elements); everything is server rendered, no JavaScript. */
+.flow-scroll { overflow: auto; max-height: 78vh; padding: .5rem .25rem; }
+.flow-row { display: flex; align-items: center; }
+.flow-children { list-style: none; margin: 0; padding: 0 0 0 28px; position: relative; display: flex; flex-direction: column; }
+.flow-children::before { content: ""; position: absolute; left: 0; top: 50%; width: 14px; border-top: 2px solid var(--flow-line); }
+.flow-child { position: relative; padding: 6px 0; display: flex; align-items: center; }
+.flow-child::before { content: ""; position: absolute; left: -14px; top: 0; bottom: 0; border-left: 2px solid var(--flow-line); }
+.flow-child:first-child::before { top: 50%; }
+.flow-child:last-child::before { bottom: 50%; }
+.flow-child:only-child::before { display: none; }
+.flow-child::after { content: ""; position: absolute; left: -14px; top: 50%; width: 14px; border-top: 2px solid var(--flow-line); }
+.flow-side::before { border-left-style: dashed; border-left-color: var(--flow-side); }
+.flow-side::after { border-top-style: dashed; border-top-color: var(--flow-side); }
+.flow-chain { list-style: none; margin: 0; padding: 0; display: flex; align-items: center; }
+.flow-arrow { flex: none; position: relative; width: 26px; height: 2px; background: var(--flow-line); }
+.flow-arrow::after { content: ""; position: absolute; right: -1px; top: -4px; border-left: 7px solid var(--flow-line); border-top: 5px solid transparent; border-bottom: 5px solid transparent; }
+.flow-card { flex: none; }
+.flow-card.flow-ghost { border-style: dashed; }
+.flow-side-card { border-color: var(--flow-side); border-style: dashed; }

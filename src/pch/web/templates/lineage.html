@@ -1,26 +1,28 @@
 {% extends "base.html" %}
-{% from "_macros.html" import provider_badge, deploy_chip, status_badge %}
+{% from "_macros.html" import provider_badge, deploy_chip, status_badge, platform_badge %}
+{% from "_table.html" import pager, chips_bar, sort_th, plain_th, col_chooser with context %}
 {% block title %}Lineage · Pipeline Compliance Hub{% endblock %}
 {% block content %}
 <div class="mb-3 flex flex-wrap items-baseline gap-3">
   <h1 class="text-lg font-semibold">Lineage</h1>
-  <span class="text-xs text-slate-500 dark:text-slate-400">{{ shown }} of {{ data.summary.repos }} repos shown</span>
-  <div class="ml-auto flex gap-2 text-xs">
+  <span class="text-xs text-slate-500 dark:text-slate-400">{{ pg.total }} repos match</span>
+  <div class="ml-auto flex items-center gap-2 text-xs">
+    {{ col_chooser('lineage', [('project','Project'),('status','Compliance'),('pipelines','Pipelines'),('releases','Releases'),('stages','Stages and last deployments'),('targets','Targets'),('prod','Prod')], 'targets') }}
     <a class="rounded border border-indigo-300 px-2 py-1 text-indigo-700 hover:bg-indigo-50 dark:border-indigo-700 dark:text-indigo-300 dark:hover:bg-slate-800" href="/lineage.csv?{{ qs(base) }}">Export CSV</a>
     <a class="rounded border border-indigo-300 px-2 py-1 text-indigo-700 hover:bg-indigo-50 dark:border-indigo-700 dark:text-indigo-300 dark:hover:bg-slate-800" href="/lineage.xlsx?{{ qs(base) }}">Export Excel</a>
     <a class="px-1 py-1 text-indigo-600 hover:underline dark:text-indigo-300" href="/api/v1/lineage?{{ qs(base) }}">JSON</a>
   </div>
 </div>
 <p class="mb-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300" role="note">
-  What comes out of each repository: CI pipelines, the pipelines that consume them, releases, and every stage with its last deployment. The code is on GitHub; pipelines, releases, environments and their run history are read from <b>Azure DevOps</b>.
+  What comes out of each repository: CI pipelines, the pipelines that consume them, releases, and every stage with its last deployment. The code is on GitHub; pipelines, releases, environments and their run history are read from <b>Azure DevOps</b> and, for migrated repositories, from <b>GitHub Actions</b>.
   A GitHub repository that is neither named in scope.yaml nor referenced by an Azure DevOps pipeline is invisible here until GitHub discovery exists. People appear only as the display name of whoever triggered the last deployment.
 </p>
 {% if not data.has_data %}
 <div class="rounded-lg border border-amber-300 bg-amber-50 px-3 py-6 text-center text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-100">This scan has no lineage data (it was made before the Lineage tab existed). Run <code>pch scan</code> again, or pick a newer scan.</div>
 {% else %}
 <form id="filters" class="mb-3 grid grid-cols-2 gap-2 rounded-lg border border-slate-200 bg-white p-3 md:grid-cols-4 lg:grid-cols-8 dark:border-slate-700 dark:bg-slate-800"
-      hx-get="/lineage" hx-target="#lineage-results" hx-select="#lineage-results" hx-swap="outerHTML" hx-push-url="true" hx-trigger="change, keyup changed delay:300ms from:#q">
-  <input type="hidden" name="scan" value="{{ scan_param }}">
+      hx-get="/lineage" hx-target="#results" hx-select="#results" hx-swap="outerHTML" hx-push-url="true" hx-trigger="change, keyup changed delay:300ms from:#q">
+  <input type="hidden" name="scan" value="{{ scan_param }}"><input type="hidden" name="sort" value="{{ sort }}"><input type="hidden" name="dir" value="{{ dir }}"><input type="hidden" name="per_page" value="{{ pg.per_page }}">
   {% macro sel(name, label, opts, cur, labels=None) %}
   <label class="flex flex-col gap-0.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">{{ label }}
     <select name="{{ name }}" class="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs font-normal text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100">
@@ -40,40 +42,50 @@
     <input id="q" name="q" value="{{ filters.q or '' }}" placeholder="e.g. ledger, orders-fn, aks-prod" class="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs font-normal text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"></label>
 </form>
 
-<div id="lineage-results">
+<div id="results" data-table="lineage">
   {% set sm = data.summary %}
+  {{ chips_bar(chips, clear) }}
   <div class="mb-3 flex flex-wrap gap-x-5 gap-y-1 text-xs text-slate-600 dark:text-slate-300">
     <span><b class="tnum">{{ sm.repos }}</b> repos</span><span><b class="tnum">{{ sm.pipelines }}</b> pipelines</span><span><b class="tnum">{{ sm.releases }}</b> releases</span>
     <span><b class="tnum">{{ sm.stages }}</b> stages</span><span><b class="tnum">{{ sm.with_prod }}</b> with a successful prod deployment</span>
     <span><b class="tnum">{{ sm.empty_repos }}</b> without any pipeline</span><a class="text-indigo-600 hover:underline dark:text-indigo-300" href="#orphans"><b class="tnum">{{ data.orphans | length }}</b> orphans</a>
   </div>
-  <div class="overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
-    {% for r in data.repos[:limit] %}
-    {% set rp = r.repo %}
-    <details class="group border-b border-slate-100 last:border-b-0 dark:border-slate-700" hx-get="{{ u('/lineage/' ~ rp.project ~ '/' ~ rp.name, fragment=1) }}" hx-trigger="toggle once" hx-target="find .chain-slot" hx-swap="innerHTML">
-      <summary class="flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 hover:bg-slate-50 dark:hover:bg-slate-700/40">
-        <span class="font-medium">{{ rp.name }}</span>{% if multi_host %}{{ provider_badge(rp.provider, rp.provider_label) }}{% endif %}
-        <span class="text-xs text-slate-500 dark:text-slate-400">{{ rp.project }}</span>
-        {% set cp = r.compliance %}
-        {% if cp %}<a href="{{ u('/repos/' ~ rp.project ~ '/' ~ rp.name) }}" title="Compliance of this repository">{{ status_badge(cp.status) }}</a>
-        {% if cp.score is not none %}<span class="tnum text-[11px] text-slate-500 dark:text-slate-400">{{ '%.0f' | format(cp.score) }}</span>{% endif %}
-        {% if cp.status in ('AT_RISK', 'NON_COMPLIANT') and cp.why %}<span class="text-[11px] text-red-700 dark:text-red-300" title="{% for w in cp.why %}{{ w.text }}{{ ' | ' if not loop.last }}{% endfor %}">why: {% for w in cp.why %}{{ w.rule_id }}{{ ', ' if not loop.last }}{% endfor %}{% if cp.why_more %} +{{ cp.why_more }} more{% endif %}</span>{% endif %}{% endif %}
-        {% set sy = r.summary %}
-        <span class="text-xs text-slate-600 dark:text-slate-300">
-          {% if sy.empty %}<span class="text-slate-400">no pipelines</span>{% else %}{{ sy.pipelines }} pipeline{{ '' if sy.pipelines == 1 else 's' }} → {{ sy.releases }} release{{ '' if sy.releases == 1 else 's' }}{% endif %}</span>
-        <span class="flex flex-wrap items-center gap-1">
-          {% for c in sy.chips %}<span class="inline-flex items-center gap-1 rounded border border-slate-200 px-1 text-[11px] dark:border-slate-600">{{ c.name }} {{ deploy_chip(c.status) }}</span>{% endfor %}{% if sy.more_chips %}<span class="text-[11px] text-slate-400">+{{ sy.more_chips }} more</span>{% endif %}
-        </span>
-        {% for t in sy.targets %}<a href="{{ u('/lineage', target=t) }}" class="rounded bg-slate-100 px-1 py-0.5 text-[11px] hover:bg-slate-200 dark:bg-slate-700">{{ TARGET_LABEL.get(t, t) }}</a>{% endfor %}
-        <a class="ml-auto text-xs text-indigo-600 hover:underline dark:text-indigo-300" href="{{ u('/lineage/' ~ rp.project ~ '/' ~ rp.name) }}">open</a>
-      </summary>
-      <div class="chain-slot px-3 pb-3 text-xs text-slate-500 dark:text-slate-400">Loading the chain… <a class="text-indigo-600 hover:underline dark:text-indigo-300" href="{{ u('/lineage/' ~ rp.project ~ '/' ~ rp.name) }}">open the full page</a> if it does not appear.</div>
-    </details>
-    {% else %}
-    <p class="px-3 py-8 text-center text-slate-500">No repositories match these filters.</p>
-    {% endfor %}
+  <div class="table-frame rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
+    <table class="w-full">
+      <caption class="sr-only">Repository lineage, {{ pg.total }} repositories; sorted by {{ sort }} {{ 'ascending' if dir == 'asc' else 'descending' }}. Use the Flow button of a row to draw its lineage.</caption>
+      <thead class="sticky-head"><tr>
+        {{ plain_th('flow', 'Flow') }}{{ sort_th('repo','Repo','/lineage',params,sort,dir) }}{{ sort_th('project','Project','/lineage',params,sort,dir) }}{{ sort_th('status','Compliance','/lineage',params,sort,dir) }}
+        {{ sort_th('pipelines','Pipelines','/lineage',params,sort,dir) }}{{ sort_th('releases','Releases','/lineage',params,sort,dir) }}{{ sort_th('stages','Stages / last deployments','/lineage',params,sort,dir) }}
+        {{ sort_th('targets','Targets','/lineage',params,sort,dir) }}{{ sort_th('prod','Prod','/lineage',params,sort,dir) }}
+      </tr></thead>
+      {% for r in rows %}
+      {% set rp = r.repo %}{% set sy = r.summary %}{% set cp = r.compliance %}
+      <tbody class="border-b border-slate-100 dark:border-slate-700">
+        <tr class="align-top hover:bg-slate-50 dark:hover:bg-slate-700/40">
+          <td data-col="flow" class="px-2 py-1">
+            <button type="button" class="rounded border border-indigo-300 px-2 py-0.5 text-xs text-indigo-700 hover:bg-indigo-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-indigo-700 dark:text-indigo-300 dark:hover:bg-slate-700"
+                    data-flow-toggle="flow-{{ loop.index }}" aria-expanded="false" aria-controls="flow-{{ loop.index }}"
+                    hx-get="{{ u('/lineage/' ~ rp.project ~ '/' ~ rp.name, fragment=1) }}" hx-trigger="click once" hx-target="#flow-{{ loop.index }}-slot" hx-swap="innerHTML">Flow</button></td>
+          <td data-col="repo" class="px-2 py-1 font-medium"><a class="text-indigo-700 hover:underline dark:text-indigo-300" href="{{ u('/lineage/' ~ rp.project ~ '/' ~ rp.name) }}">{{ rp.name }}</a>{% if multi_host %} {{ provider_badge(rp.provider, rp.provider_label) }}{% endif %}</td>
+          <td data-col="project" class="px-2 py-1 text-xs text-slate-500 dark:text-slate-400"><a class="hover:underline" href="{{ u('/lineage', project=rp.project) }}">{{ rp.project }}</a></td>
+          <td data-col="status" class="px-2 py-1 text-xs">{% if cp %}<a href="{{ u('/repos/' ~ rp.project ~ '/' ~ rp.name) }}" title="Compliance of this repository">{{ status_badge(cp.status) }}</a>
+            {% if cp.score is not none %}<span class="tnum text-[11px] text-slate-500 dark:text-slate-400">{{ '%.0f' | format(cp.score) }}</span>{% endif %}
+            {% if cp.status in ('AT_RISK', 'NON_COMPLIANT') and cp.why %}<div class="mt-0.5 text-[11px] text-red-700 dark:text-red-300" title="{% for w in cp.why %}{{ w.text }}{{ ' | ' if not loop.last }}{% endfor %}">why: {% for w in cp.why %}{{ w.rule_id }}{{ ', ' if not loop.last }}{% endfor %}{% if cp.why_more %} +{{ cp.why_more }} more{% endif %}</div>{% endif %}{% else %}–{% endif %}</td>
+          <td data-col="pipelines" class="px-2 py-1 text-xs"><span class="flex flex-wrap items-center gap-1"><span class="tnum">{{ sy.pipelines }}</span>{% if sy.yaml %}{{ platform_badge('yaml') }}{% endif %}{% if sy.classic %}{{ platform_badge('classic') }}{% endif %}{% if sy.gha %}{{ platform_badge('gha') }}{% endif %}{% if sy.empty %}<span class="text-slate-400">none</span>{% endif %}</span></td>
+          <td data-col="releases" class="tnum px-2 py-1 text-xs">{{ sy.releases }}</td>
+          <td data-col="stages" class="px-2 py-1"><span class="flex flex-wrap items-center gap-1">
+            {% for c in sy.chips %}<span class="inline-flex items-center gap-1 rounded border border-slate-200 px-1 text-[11px] dark:border-slate-600">{{ c.name }} {{ deploy_chip(c.status) }}</span>{% endfor %}{% if sy.more_chips %}<span class="text-[11px] text-slate-400">+{{ sy.more_chips }} more</span>{% endif %}</span></td>
+          <td data-col="targets" class="px-2 py-1 text-xs">{% for t in sy.targets %}<a href="{{ u('/lineage', target=t) }}" class="mr-1 rounded bg-slate-100 px-1 py-0.5 hover:bg-slate-200 dark:bg-slate-700">{{ TARGET_LABEL.get(t, t) }}</a>{% else %}–{% endfor %}</td>
+          <td data-col="prod" class="px-2 py-1 text-xs">{{ '✓' if sy.has_prod else '–' }}<span class="sr-only">{{ 'has a successful prod deployment' if sy.has_prod else 'no successful prod deployment' }}</span></td>
+        </tr>
+        <tr id="flow-{{ loop.index }}" class="hidden"><td colspan="9" class="px-3 pb-3"><div id="flow-{{ loop.index }}-slot" class="text-xs text-slate-500 dark:text-slate-400">Loading the flow… <a class="text-indigo-600 hover:underline dark:text-indigo-300" href="{{ u('/lineage/' ~ rp.project ~ '/' ~ rp.name) }}">open the full page</a> if it does not appear.</div></td></tr>
+      </tbody>
+      {% else %}
+      <tbody><tr><td colspan="9" class="px-3 py-8 text-center text-slate-500">No repositories match these filters.</td></tr></tbody>
+      {% endfor %}
+    </table>
   </div>
-  {% if data.repos | length > limit %}<p class="mt-2 text-xs text-slate-500">Showing the first {{ limit }} repos; narrow the filters (the exports contain all matching rows).</p>{% endif %}
+  {{ pager(pg, '/lineage', params) }}
 
   <details id="orphans" class="mt-4 rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800" {{ 'open' if filters.orphans }}>
     <summary class="cursor-pointer px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Orphans ({{ data.orphans | length }}): pipelines without a repo, releases without a build, repos without pipelines</summary>

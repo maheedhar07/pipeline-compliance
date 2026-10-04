@@ -19,7 +19,8 @@ from pch.model.lineage import DEPLOY_STATUS_LABEL, LDeploy, LPipeline, LRelease,
 from pch.model.repo import PROVIDER_LABEL
 from pch.store import repository as store
 from pch.store.models import RepoResultRow
-from pch.web.queries import SEV_RANK, TARGET_LABEL, TARGETS, reasons_text, row_dict, rule_index
+from pch.web.queries import SEV_RANK, STATUS_RANK, TARGET_LABEL, TARGETS, reasons_text, row_dict, rule_index
+from pch.web.tables import sort_rows
 
 TIERS = ["dev", "test", "uat", "prod", "unknown"]
 PIPELINE_PLATFORM = {"yaml": "ado_yaml", "classic_build": "ado_classic_build", "gha": "gha"}
@@ -152,6 +153,17 @@ def lineage_page(s: Session, scan_id: str, **filters: Any) -> dict[str, Any]:
     full = load(s, scan_id)
     data = apply_filters(full, **filters)
     return {"has_data": full.has_data, "repos": [repo_doc(r.lin, r.compliance) for r in data.rows], "orphans": orphan_items(data), "summary": summary(data), "options": options(full)}
+
+
+def sort_repos(repos: list[dict[str, Any]], sort: str, direction: str) -> list[dict[str, Any]]:
+    """Order the repo documents of the list page (``None`` = not applicable, last in both directions)."""
+    keys: dict[str, Any] = {
+        "repo": lambda d: d["repo"]["name"].lower(), "project": lambda d: d["repo"]["project"].lower(),
+        "status": lambda d: STATUS_RANK.get((d["compliance"] or {}).get("status", ""), None) if d["compliance"] else None,
+        "score": lambda d: (d["compliance"] or {}).get("score"), "pipelines": lambda d: d["summary"]["pipelines"], "releases": lambda d: d["summary"]["releases"],
+        "stages": lambda d: d["summary"]["stages"], "targets": lambda d: len(d["summary"]["targets"]), "prod": lambda d: 0 if d["summary"]["has_prod"] else 1,
+    }
+    return sort_rows(repos, keys.get(sort, keys["repo"]), direction, lambda d: (d["repo"]["project"].lower(), d["repo"]["name"].lower()))
 
 
 def lineage_repo(s: Session, scan_id: str, project: str, repo: str) -> dict[str, Any] | None:

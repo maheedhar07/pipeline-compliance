@@ -14,27 +14,71 @@
   {{ kpi('Critical findings', k.critical_findings, u('/findings', severity='critical', status='FAIL'), 'open critical failures') }}
   {{ kpi('Repos with no tests', k.no_tests, u('/repos', test_state='NO_TESTS'), 'application repos') }}
   {{ kpi('Classic repos', k.classic_repos, u('/repos', platform='classic'), k.classic_pipelines ~ ' classic pipelines') }}
-  {{ kpi('Not scanned', data.not_scanned, u('/scans'), 'collection failures') }}
+  {{ kpi('Not scanned', data.not_scanned, u('/repos', status='NOT_SCANNED'), 'collection failures') }}
 </section>
+
+{# every chart is clickable: the target URLs (built server side, scan kept) travel in data-urls as [dataset][index] #}
+{% macro breakdown_card(cid, title, bd, key, hint) %}
+<div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800" id="{{ cid }}-card">
+  <h2 class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{{ title }} <span class="font-normal normal-case">({{ hint }})</span></h2>
+  {% set urls = [[], [], []] %}
+  {% for it in bd['items'] %}{% for st in ['COMPLIANT', 'AT_RISK', 'NON_COMPLIANT'] %}{% if urls[loop.index0].append(u('/repos', **{key: it.name, 'status': st})) %}{% endif %}{% endfor %}{% endfor %}
+  <div class="relative" data-h="{{ [150, (bd['items'] | length) * 26 + 70] | max }}"><canvas id="{{ cid }}" aria-label="{{ title }}: click a bar segment to list those repositories" role="img" data-urls='{{ urls | tojson }}'></canvas></div>
+  {% if bd.more %}<p class="mt-1 text-[11px] text-slate-500 dark:text-slate-400">{{ bd.more }} more not shown: <a class="underline" href="{{ u('/repos', sort=key) }}">sort the repository list by {{ key }}</a>.</p>{% endif %}
+  <details class="mt-2 text-xs"><summary class="text-slate-500 dark:text-slate-400">Show as a table</summary>
+    <table class="mt-1 w-full"><thead><tr class="text-left text-[10px] uppercase text-slate-500 dark:text-slate-400"><th class="py-0.5">{{ key | capitalize }}</th><th class="text-right">Repos</th><th class="text-right">Compliant</th><th class="text-right">At risk</th><th class="text-right">Non-compliant</th></tr></thead>
+      <tbody class="divide-y divide-slate-100 dark:divide-slate-700">{% for it in bd['items'] %}
+        <tr><td class="py-0.5"><a class="text-indigo-700 hover:underline dark:text-indigo-300" href="{{ u('/repos', **{key: it.name}) }}">{{ it.name }}</a></td><td class="tnum text-right">{{ it.total }}</td>
+          <td class="tnum text-right"><a class="hover:underline" href="{{ u('/repos', **{key: it.name, 'status': 'COMPLIANT'}) }}">{{ it.compliant }}</a></td>
+          <td class="tnum text-right"><a class="hover:underline" href="{{ u('/repos', **{key: it.name, 'status': 'AT_RISK'}) }}">{{ it.at_risk }}</a></td>
+          <td class="tnum text-right"><a class="hover:underline" href="{{ u('/repos', **{key: it.name, 'status': 'NON_COMPLIANT'}) }}">{{ it.non_compliant }}</a></td></tr>{% endfor %}</tbody></table></details>
+</div>
+{% endmacro %}
 
 <section class="mt-4 grid gap-3 lg:grid-cols-3">
   <div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
     <h2 class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Status distribution</h2>
-    <div class="mx-auto h-56 max-w-[16rem]"><canvas id="donut" aria-label="Status donut chart" role="img"></canvas></div>
+    <div class="mx-auto h-52 max-w-[16rem]"><canvas id="donut" aria-label="Status distribution: click a slice to list those repositories" role="img" data-urls='{{ [[u('/repos', status='COMPLIANT'), u('/repos', status='AT_RISK'), u('/repos', status='NON_COMPLIANT')]] | tojson }}'></canvas></div>
     <ul class="mt-2 flex justify-center gap-4 text-xs">
       {% for st, label in [('COMPLIANT','Compliant'),('AT_RISK','At risk'),('NON_COMPLIANT','Non-compliant')] %}
       <li><a class="hover:underline" href="{{ u('/repos', status=st) }}"><span class="tnum font-semibold">{{ data.status_counts[st] }}</span> {{ label }}</a></li>
       {% endfor %}
     </ul>
   </div>
+  <div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800" id="severity-card">
+    <h2 class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Open failures by severity <span class="font-normal normal-case">(FAIL findings)</span></h2>
+    <div class="h-44"><canvas id="severity" aria-label="Failing findings by severity: click a bar to list them" role="img" data-urls='{{ [[u('/findings', severity='critical', status='FAIL'), u('/findings', severity='high', status='FAIL'), u('/findings', severity='medium', status='FAIL'), u('/findings', severity='low', status='FAIL')]] | tojson }}'></canvas></div>
+    <ul class="mt-2 flex flex-wrap justify-center gap-x-4 gap-y-1 text-xs">
+      {% for sv in ['critical', 'high', 'medium', 'low'] %}<li><a class="hover:underline" href="{{ u('/findings', severity=sv, status='FAIL') }}"><span class="tnum font-semibold">{{ data.severity_counts[sv] }}</span> {{ sv }}</a></li>{% endfor %}
+    </ul>
+  </div>
+  <div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800" id="migration-card">
+    <h2 class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Migration to GitHub Actions</h2>
+    <div class="mx-auto h-44 max-w-[16rem]"><canvas id="migration" aria-label="Migration status: click a slice to list those repositories" role="img" data-urls='{{ [[u('/repos', migration='ado_only'), u('/repos', migration='in_progress'), u('/repos', migration='migrated')]] | tojson }}'></canvas></div>
+    <ul class="mt-2 flex flex-wrap justify-center gap-x-4 gap-y-1 text-xs">
+      {% for m in data.migration_states %}<li><a class="hover:underline" href="{{ u('/repos', migration=m.key) }}"><span class="tnum font-semibold">{{ m.repos }}</span> {{ m.label }}</a></li>{% endfor %}
+      {% if data.no_pipeline_repos %}<li><a class="hover:underline" href="{{ u('/repos', migration='none') }}"><span class="tnum font-semibold">{{ data.no_pipeline_repos }}</span> no pipelines</a></li>{% endif %}
+    </ul>
+    <p class="mt-1 text-center text-[11px]"><a class="text-indigo-600 hover:underline dark:text-indigo-300" href="{{ u('/migration') }}">Migration details</a></p>
+  </div>
+</section>
+
+<section class="mt-4 grid items-start gap-3 lg:grid-cols-2" aria-label="Compliance by project and by owner">
+  {{ breakdown_card('byproject', 'Compliance by project', data.by_project, 'project', 'repos per status, click to filter') }}
+  {{ breakdown_card('byowner', 'Compliance by owner', data.by_owner, 'owner', 'top owners by repo count') }}
+</section>
+
+<section class="mt-4 grid gap-3 lg:grid-cols-2">
   <div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
     <h2 class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Trend across scans</h2>
-    <div class="h-60"><canvas id="trend" aria-label="Compliance trend" role="img"></canvas></div>
+    {% set trend_urls = [] %}{% for p in data.trend %}{% if trend_urls.append(u('/scans', selected=p.scan_id)) %}{% endif %}{% endfor %}
+    <div class="h-60"><canvas id="trend" aria-label="Compliance trend across scans: click a point to open that scan" role="img" data-urls='{{ [trend_urls, trend_urls, trend_urls] | tojson }}'></canvas></div>
     <p class="mt-1 text-center text-xs text-slate-500">{{ data.trend | length }} scan(s). <a class="underline" href="{{ u('/scans') }}">Scan history</a></p>
   </div>
   <div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
     <h2 class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Top 10 failing rules (repos)</h2>
-    <div class="h-64"><canvas id="toprules" aria-label="Top failing rules" role="img"></canvas></div>
+    {% set rule_urls = [] %}{% for r in data.top_rules %}{% if rule_urls.append(u('/repos', rule=r.id)) %}{% endif %}{% endfor %}
+    <div class="h-64"><canvas id="toprules" aria-label="Top failing rules: click a bar to list the repositories where it fails" role="img" data-urls='{{ [rule_urls] | tojson }}'></canvas></div>
   </div>
 </section>
 
@@ -46,6 +90,7 @@
       {% for t in data.top_reasons %}
       <tr><td class="py-1 pr-2">{{ sev_badge(t.severity) }}</td>
           <td class="py-1 pr-2"><a class="hover:underline" href="{{ u('/findings', rule=t.rule_id, status='FAIL') }}" title="Failing findings of {{ t.rule_id }}">{{ t.label }}</a></td>
+          <td class="w-24 py-1 pr-2"><div class="h-1.5 rounded bg-slate-200 dark:bg-slate-700"><div class="h-1.5 rounded bg-red-600" data-w="{{ (100 * t.repos / data.top_reasons[0].repos) | round(1) }}"></div></div></td>
           <td class="tnum py-1 text-right"><a class="font-semibold text-red-600 hover:underline dark:text-red-400" href="{{ u('/repos', rule=t.rule_id) }}" title="Repositories where {{ t.rule_id }} fails">{{ t.repos }} repo{{ '' if t.repos == 1 else 's' }}</a></td></tr>
       {% else %}
       <tr><td class="py-4 text-center text-slate-500">No failing rules.</td></tr>

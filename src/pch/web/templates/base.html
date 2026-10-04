@@ -30,7 +30,7 @@
       </form>
       {% endif %}
       {% if freshness and freshness.state != 'none' %}
-      <span id="last-scan" class="{{ 'font-semibold text-amber-700 dark:text-amber-300' if freshness.state != 'ok' else '' }}" title="Latest complete scan{{ ' (' ~ freshness.scan_id ~ ')' if freshness.scan_id }}">Last scan: {% if freshness.age_text %}{{ freshness.age_text }} ({{ freshness.mode }}){% else %}none complete{% endif %}</span>
+      <span id="last-scan" class="whitespace-nowrap {{ 'font-semibold text-amber-700 dark:text-amber-300' if freshness.state != 'ok' else '' }}" title="Latest complete scan{{ ' (' ~ freshness.scan_id ~ ')' if freshness.scan_id }}">Last scan: {% if freshness.age_text %}{{ freshness.age_text }} ({{ freshness.mode }}){% else %}none complete{% endif %}</span>
       {% endif %}
       {% if docs_enabled %}<a href="/api/docs" class="hover:underline">API</a>{% endif %}
       {% if principal and principal.auth_type != 'none' %}<span class="text-slate-700 dark:text-slate-200" title="{{ principal.id }}">{{ principal.name or principal.id }}</span><a href="/.auth/logout" class="hover:underline">Sign out</a>{% endif %}

@@ -59,3 +59,10 @@
 {%- set label = {'succeeded':'✓ succeeded','partial':'~ partially succeeded','failed':'✗ failed','in_progress':'… in progress','pending':'… pending','canceled':'– canceled','never':'never deployed','unknown':'? unknown'} -%}
 <span class="inline-block whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-semibold {{ cls.get(status, cls['unknown']) }}"{% if note %} title="{{ note }}"{% endif %}>{{ label.get(status, '? unknown') }}</span>
 {%- endmacro %}
+
+{# Colour-coded pipeline platform: accepts a lineage pipeline kind (yaml | classic_build | gha), a repo platform (ado_yaml | ado_classic_* | gha) or a platform kind (yaml | classic | gha). #}
+{% macro platform_badge(kind) -%}
+{%- set k = 'gha' if kind == 'gha' else ('classic' if 'classic' in (kind or '') else 'yaml') -%}
+{%- set cls = {'yaml':'bg-sky-100 text-sky-900 dark:bg-sky-900/40 dark:text-sky-200','classic':'bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200','gha':'bg-emerald-100 text-emerald-900 dark:bg-emerald-900/40 dark:text-emerald-200'} -%}
+<span class="inline-block whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-semibold {{ cls[k] }}">{{ {'yaml':'ADO YAML','classic':'ADO Classic','gha':'GitHub Actions'}[k] }}</span>
+{%- endmacro %}

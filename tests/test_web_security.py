@@ -466,7 +466,8 @@ def test_query_validation_is_400_422_never_500(none_client):
         assert r.status_code == 422, (path, params, r.status_code)
         assert "'; drop" not in r.text and "xxxxx" not in r.text  # input not echoed
         assert_secure_headers(r)
-    for path, params in [("/repos", {"sort": "bogus"}), ("/findings", {"offset": -5}), ("/repos.csv", {"dir": "x"})]:
+    for path, params in [("/repos", {"sort": "bogus"}), ("/findings", {"page": 0}), ("/findings", {"per_page": 7}), ("/repos", {"per_page": "abc"}), ("/repos", {"page": 10**9}),
+                         ("/rules", {"sort": "bogus"}), ("/lineage", {"sort": "bogus"}), ("/lineage/P/r", {"view": "cube"}), ("/repos.csv", {"dir": "x"})]:
         assert none_client.get(path, params=params).status_code == 400
     assert none_client.get("/api/v1/findings", params={"limit": 1000, "offset": 0}).status_code == 200
     assert set(get_args(SortKey)) == Q.SORTABLE

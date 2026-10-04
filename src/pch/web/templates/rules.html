@@ -1,25 +1,45 @@
 {% extends "base.html" %}
 {% from "_macros.html" import sev_badge, bar %}
+{% from "_table.html" import pager, chips_bar, sort_th, plain_th, col_chooser with context %}
 {% block title %}Rules · Pipeline Compliance Hub{% endblock %}
 {% block content %}
-<div class="mb-3 flex items-baseline gap-3"><h1 class="text-lg font-semibold">Rule catalog</h1><span class="text-xs text-slate-500">{{ stats | length }} deterministic rules · pass rate counts WARN as half credit · click a failure count to drill down</span>
-  <a class="ml-auto text-xs text-indigo-600 hover:underline dark:text-indigo-300" href="/api/v1/rules">JSON</a></div>
+<div class="mb-3 flex flex-wrap items-center gap-3"><h1 class="text-lg font-semibold">Rule catalog</h1><span class="text-xs text-slate-500 dark:text-slate-400">{{ pg.total }} of {{ total_rules }} deterministic rules · pass rate counts WARN as half credit · click a failure count to drill down</span>
+  <div class="ml-auto flex items-center gap-3 text-xs">
+    {{ col_chooser('rules', [('title','Title'),('severity','Severity'),('scope','Scope'),('applicable','Applicable'),('pass','Pass'),('fail','Fail'),('warn','Warn'),('unknown','Unknown'),('pass_rate','Pass rate')], 'scope,warn,unknown') }}
+    <a class="text-indigo-600 hover:underline dark:text-indigo-300" href="/api/v1/rules">JSON</a>
+  </div></div>
+<form method="get" class="mb-3 flex flex-wrap items-end gap-2 rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
+  <input type="hidden" name="scan" value="{{ scan_param }}"><input type="hidden" name="sort" value="{{ sort }}"><input type="hidden" name="dir" value="{{ dir }}"><input type="hidden" name="per_page" value="{{ pg.per_page }}">
+  <label class="flex flex-col gap-0.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">Category<select name="category" data-autosubmit class="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs font-normal text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"><option value="">All</option>{% for c, n in categories.items() %}<option value="{{ c }}" {{ 'selected' if filters.category == c }}>{{ c }} · {{ n }}</option>{% endfor %}</select></label>
+  <label class="flex flex-col gap-0.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">Severity<select name="severity" data-autosubmit class="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs font-normal text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"><option value="">All</option>{% for sv in severities %}<option value="{{ sv }}" {{ 'selected' if filters.severity == sv }}>{{ sv }}</option>{% endfor %}</select></label>
+  <label class="flex flex-col gap-0.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">Show<select name="failing" data-autosubmit class="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs font-normal text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"><option value="">All rules</option><option value="1" {{ 'selected' if filters.failing }}>Only rules with failures</option></select></label>
+  <label class="flex flex-col gap-0.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">Search<input name="q" value="{{ filters.q or '' }}" placeholder="id or title" class="w-40 rounded border border-slate-300 bg-white px-1.5 py-1 text-xs font-normal text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"></label>
+  <button class="rounded bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-700">Filter</button>
+  <a href="{{ u('/rules') }}" class="text-xs text-slate-500 hover:underline dark:text-slate-400">reset</a>
+</form>
 {% set ns = namespace(cat='') %}
-<div class="overflow-x-auto rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
+<div id="results" data-table="rules">
+{{ chips_bar(chips, clear) }}
+<div class="table-frame rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
 <table class="w-full">
-  <thead class="border-b border-slate-200 dark:border-slate-700"><tr class="text-left text-[11px] uppercase tracking-wide text-slate-500">
-    <th class="px-2 py-1.5">Rule</th><th>Title</th><th>Severity</th><th>Scope</th><th class="text-right">Applicable</th><th class="text-right">Pass</th><th class="text-right">Fail</th><th class="text-right">Warn</th><th class="text-right">Unknown</th><th class="px-2">Pass rate</th></tr></thead>
+  <caption class="sr-only">Rule catalog, {{ pg.total }} rules; sorted by {{ sort }} {{ 'ascending' if dir == 'asc' else 'descending' }}</caption>
+  <thead class="sticky-head"><tr>
+    {{ sort_th('id','Rule','/rules',params,sort,dir) }}{{ sort_th('title','Title','/rules',params,sort,dir) }}{{ sort_th('severity','Severity','/rules',params,sort,dir) }}{{ sort_th('scope','Scope','/rules',params,sort,dir) }}
+    {{ sort_th('applicable','Applicable','/rules',params,sort,dir,'text-right') }}{{ sort_th('pass','Pass','/rules',params,sort,dir,'text-right') }}{{ sort_th('fail','Fail','/rules',params,sort,dir,'text-right') }}
+    {{ sort_th('warn','Warn','/rules',params,sort,dir,'text-right') }}{{ sort_th('unknown','Unknown','/rules',params,sort,dir,'text-right') }}{{ sort_th('pass_rate','Pass rate','/rules',params,sort,dir) }}</tr></thead>
   <tbody>
   {% for r in stats %}
-    {% if r.category != ns.cat %}{% set ns.cat = r.category %}
-    <tr class="bg-slate-100 dark:bg-slate-700/60"><td colspan="10" class="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide">{{ r.category }} · {{ r.category_name }}</td></tr>{% endif %}
+    {% if group and r.category != ns.cat %}{% set ns.cat = r.category %}
+    <tr class="bg-slate-100 dark:bg-slate-700/60"><td colspan="10" class="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide"><a class="hover:underline" href="{{ u('/rules', category=r.category) }}">{{ r.category }} · {{ r.category_name }}</a></td></tr>{% endif %}
     <tr class="border-b border-slate-100 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-700/40{{ ' opacity-60' if r.disabled }}">
-      <td class="px-2 py-1 font-mono text-xs font-semibold"><a class="text-indigo-700 hover:underline dark:text-indigo-300" href="{{ u('/rules/' ~ r.id) }}">{{ r.id }}</a></td>
-      <td class="py-1 pr-2">{{ r.title }}{% if r.disabled %} <span class="rounded bg-slate-200 px-1 text-[10px] font-semibold dark:bg-slate-700">disabled by policy</span>{% endif %}</td><td>{{ sev_badge(r.severity, r.severity_default) }}</td><td class="text-xs text-slate-500">{{ r.scope }}</td>
-      <td class="tnum text-right">{{ r.applicable }}</td><td class="tnum text-right">{{ r.pass }}</td>
-      <td class="tnum text-right">{% if r.fail %}<a class="font-semibold text-red-600 hover:underline dark:text-red-400" href="{{ u('/rules/' ~ r.id) }}">{{ r.fail }}</a>{% else %}0{% endif %}</td>
-      <td class="tnum text-right">{{ r.warn }}</td><td class="tnum text-right text-slate-500">{{ r.unknown }}</td><td class="px-2">{{ bar(r.pass_rate) }}</td></tr>
-  {% endfor %}
+      <td data-col="id" class="px-2 py-1 font-mono text-xs font-semibold"><a class="text-indigo-700 hover:underline dark:text-indigo-300" href="{{ u('/rules/' ~ r.id) }}">{{ r.id }}</a></td>
+      <td data-col="title" class="py-1 pr-2">{{ r.title }}{% if r.disabled %} <span class="rounded bg-slate-200 px-1 text-[10px] font-semibold dark:bg-slate-700">disabled by policy</span>{% endif %}</td><td data-col="severity">{{ sev_badge(r.severity, r.severity_default) }}</td><td data-col="scope" class="text-xs text-slate-500 dark:text-slate-400">{{ r.scope }}</td>
+      <td data-col="applicable" class="tnum text-right">{{ r.applicable }}</td><td data-col="pass" class="tnum text-right">{{ r.pass }}</td>
+      <td data-col="fail" class="tnum text-right">{% if r.fail %}<a class="font-semibold text-red-600 hover:underline dark:text-red-400" href="{{ u('/rules/' ~ r.id) }}">{{ r.fail }}</a>{% else %}0{% endif %}</td>
+      <td data-col="warn" class="tnum text-right">{{ r.warn }}</td><td data-col="unknown" class="tnum text-right text-slate-500">{{ r.unknown }}</td><td data-col="pass_rate" class="px-2">{{ bar(r.pass_rate) }}</td></tr>
+  {% else %}<tr><td colspan="10" class="px-3 py-8 text-center text-slate-500">No rules match these filters.</td></tr>{% endfor %}
   </tbody>
 </table></div>
+{{ pager(pg, '/rules', params) }}
+</div>
 {% endblock %}

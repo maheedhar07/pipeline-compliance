@@ -181,8 +181,10 @@ def test_lineage_rows_show_status_reasons_and_failing_rules(env):
     assert fails  # pipeline/stage level findings (e.g. SRC-004, DEP-*) are attached
     f = next(x for p in fails for x in (p["failing"] or [y for st in p["stages"] for y in st["failing"]]))
     assert f["rule_id"] and f["severity"] in ("critical", "high", "medium", "low", "info")
-    frag = c.get(f"/lineage/{repo['repo']['project']}/{repo['repo']['name']}", params={"fragment": "1"}).text
+    frag = c.get(f"/lineage/{repo['repo']['project']}/{repo['repo']['name']}", params={"fragment": "1", "view": "table"}).text
     assert "failing:" in frag and f["rule_id"] in frag
+    flow = c.get(f"/lineage/{repo['repo']['project']}/{repo['repo']['name']}", params={"fragment": "1"}).text
+    assert " failing</a>" in flow and f["rule_id"] in flow  # flow cards link their failing rules to the findings
     page = c.get(f"/lineage/{repo['repo']['project']}/{repo['repo']['name']}").text
     assert "Compliance of this repository" in page
 

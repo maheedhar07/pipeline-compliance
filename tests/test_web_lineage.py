@@ -83,18 +83,18 @@ def test_lineage_is_the_last_nav_item_and_page_renders(client):
     assert nav[-1] == ("/lineage", "Lineage") and nav[-2][1] == "Scans"
     for needle in ("Export CSV", "Export Excel", "Orphans", "Code hosted on", "Deploy target", "Environment tier", "Prod deployment", "invisible here", "display name"):
         assert needle in r.text
-    assert 'hx-trigger="toggle once"' in r.text and "chain-slot" in r.text  # server-rendered <details>, chain loaded on first open
+    assert 'hx-trigger="click once"' in r.text and "data-flow-toggle" in r.text  # server-rendered rows, the flow is loaded on first open
     assert "Traceback" not in r.text and "UndefinedError" not in r.text
 
 
 def test_repo_page_fragment_and_links(client):
     repo = next(r for r in client.get("/api/v1/lineage").json()["repos"] if r["summary"]["releases"] and r["summary"]["pipelines"] and "/" in r["repo"]["name"])
     key = f"{repo['repo']['project']}/{repo['repo']['name']}"
-    page = client.get(f"/lineage/{key}")
+    page = client.get(f"/lineage/{key}", params={"view": "table"})
     assert page.status_code == 200 and repo["repo"]["name"] in page.text and "Deployment" not in page.text.split("<h1")[0]
     for needle in ("Artifact source", "Last deployment", "Targets", "Service connections", "Approvals / gates", "Compliance"):
         assert needle in page.text
-    frag = client.get(f"/lineage/{key}", params={"fragment": 1})
+    frag = client.get(f"/lineage/{key}", params={"fragment": 1, "view": "table"})
     assert frag.status_code == 200 and "<html" not in frag.text and "Last deployment" in frag.text
     assert f"/lineage/{key}" in client.get("/lineage", params={"q": repo["repo"]["name"]}).text  # list links to the repo page
     assert f"/lineage/{key}" in client.get(f"/repos/{key}").text and f"/lineage/{key}" in client.get("/repos").text  # and so do the repo page and the table
@@ -106,15 +106,17 @@ def test_repo_page_fragment_and_links(client):
 def test_page_shows_chain_details(client):
     docs = client.get("/api/v1/lineage").json()["repos"]
     deploy = next(d for d in docs if any(s["last_deploy"]["status"] == "succeeded" and s["last_deploy"]["triggered_by"] for r in d["releases"] for s in r["stages"]))
-    html = client.get(f"/lineage/{deploy['repo']['key']}").text
+    html = client.get(f"/lineage/{deploy['repo']['key']}", params={"view": "table"}).text
     ld = next(s["last_deploy"] for r in deploy["releases"] for s in r["stages"] if s["last_deploy"]["triggered_by"])
     assert ld["triggered_by"] in html and "@" not in ld["triggered_by"] and "succeeded" in html
     adopted = next(d for d in docs if any(p["adopted_from"] for p in d["pipelines"]))
-    assert "defined in" in client.get(f"/lineage/{adopted['repo']['key']}").text
+    assert "defined in" in client.get(f"/lineage/{adopted['repo']['key']}", params={"view": "table"}).text
+    assert "defined in" in client.get(f"/lineage/{adopted['repo']['key']}").text  # and in the flow
     other = next(d for d in docs for p in d["pipelines"] if p["yaml_in_other_repo"] and not p["adopted_from"])
-    assert "YAML in another repo" in client.get(f"/lineage/{other['repo']['key']}").text
+    assert "YAML in another repo" in client.get(f"/lineage/{other['repo']['key']}", params={"view": "table"}).text
     consumer = next(d for d in docs for p in d["pipelines"] if p["downstream"])
-    assert "Consumed by" in client.get(f"/lineage/{consumer['repo']['key']}").text
+    assert "Consumed by" in client.get(f"/lineage/{consumer['repo']['key']}", params={"view": "table"}).text
+    assert "triggers pipeline" in client.get(f"/lineage/{consumer['repo']['key']}").text  # downstream = side branch in the flow
 
 
 # ------------------------------------------------------------------ filters
@@ -149,7 +151,7 @@ def test_filters_on_page_and_api(client):
     assert client.get("/lineage", params={"has_prod": "maybe"}).status_code == 200
     assert client.get("/lineage", params={"q": "x" * 5000}).status_code == 400
     page = client.get("/lineage", params={"orphans": "1", "project": projects[0]}).text
-    assert "no pipelines" in page and "<details id=\"orphans\"" in page and " open>" in page.split('id="orphans"')[1][:200]
+    assert "<details id=\"orphans\"" in page and " open>" in page.split('id="orphans"')[1][:200]
 
 
 def test_orphans_section_lists_reasons(client):

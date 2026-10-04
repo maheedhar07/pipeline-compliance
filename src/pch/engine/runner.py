@@ -60,7 +60,7 @@ def rule_enabled(meta: RuleMeta, policy: Policy) -> bool:
 
 def policy_effects(policy: Policy, rules: list[RuleMeta] | None = None) -> dict[str, Any]:
     """What policy.yaml did to the catalog, snapshotted into ``scans.summary["policy"]`` so pages can mark it per scan:
-    ``{"disabled": [ids], "severity": {id: {"from": default, "to": effective}}}``."""
+    ``{"disabled": [ids], "severity": {id: {"from": default, "to": effective}}}`` plus ``category_weights`` when policy sets any."""
     disabled: list[str] = []
     severity: dict[str, dict[str, str]] = {}
     for meta in rules if rules is not None else all_rules():
@@ -68,7 +68,10 @@ def policy_effects(policy: Policy, rules: list[RuleMeta] | None = None) -> dict[
             disabled.append(meta.id)
         elif (eff := effective_severity(meta, policy)) != meta.severity:
             severity[meta.id] = {"from": meta.severity.value, "to": eff.value}
-    return {"disabled": sorted(disabled), "severity": severity}
+    out: dict[str, Any] = {"disabled": sorted(disabled), "severity": severity}
+    if weights := {c: w for c, w in policy.scoring.category_weights.items() if w != 1}:  # the "Fix first" list orders by severity, then these
+        out["category_weights"] = weights
+    return out
 
 
 def _finding(meta: RuleMeta, ctx: RepoContext, res: RuleResult, p: Pipeline | None, st: Stage | None, severity: Severity) -> Finding:

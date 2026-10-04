@@ -1,0 +1,138 @@
+{# Visual lineage flow of ONE repo: Repo -> pipelines -> releases / deploy workflows -> environment stages, joined by CSS connectors.
+   `lin` is a lineage document (lineage_q.repo_doc + attach_failing). Import with context: {% from "_lineage_flow.html" import lineage_flow with context %}.
+   Downstream pipeline triggers (workflow_run / pipeline completion) are dashed side branches. The frame scrolls horizontally, never the page. #}
+{% from "_macros.html" import provider_badge, deploy_chip, status_badge, platform_badge %}
+{% macro dt(v) %}{{ v[:16] | replace('T', ' ') ~ ' UTC' if v else '' }}{% endmacro %}
+
+{# Red "N failing" chip linking to the matching findings; nothing when the card is clean. #}
+{% macro fail_chip(items, repo, pipeline=none, stage=none) -%}
+{%- set n = (items | length) if items else 0 -%}
+{%- if n -%}<a href="{{ u('/findings', repo=repo, pipeline=pipeline, stage=stage, status='FAIL') }}" class="inline-block whitespace-nowrap rounded bg-red-100 px-1.5 py-0.5 text-[11px] font-semibold text-red-800 hover:bg-red-200 dark:bg-red-900/40 dark:text-red-200" title="{{ items | map(attribute='rule_id') | join(', ') }}">{{ n }} failing</a>{%- endif -%}
+{%- endmacro %}
+
+{% macro target_chip(t) -%}
+{%- set icon = {'functionapp':'ƒ','webapp':'◎','aks':'☸','adf':'⇄','synapse':'◈','sql':'▤','iac':'▦'}.get(t.kind, '•') -%}
+<span class="inline-flex items-center gap-1 rounded bg-slate-100 px-1 py-0.5 text-[11px] dark:bg-slate-700" title="{{ t.name or '' }}{{ ' (' ~ t.detail ~ ')' if t.detail }}"><span aria-hidden="true">{{ icon }}</span>{{ TARGET_LABEL.get(t.kind, t.kind) }}{% if t.name %} <span class="font-mono">{{ t.name }}</span>{% endif %}</span>
+{%- endmacro %}
+
+{% macro stage_card(st, repo, owner, prev, compact) %}
+{%- set tier_border = {'dev':'border-l-sky-400','test':'border-l-violet-400','uat':'border-l-amber-400','prod':'border-l-rose-500'}.get(st.env_tier, 'border-l-slate-300') -%}
+{%- set tier_text = {'dev':'text-sky-700 dark:text-sky-300','test':'text-violet-700 dark:text-violet-300','uat':'text-amber-700 dark:text-amber-300','prod':'text-rose-700 dark:text-rose-300'}.get(st.env_tier, 'text-slate-500 dark:text-slate-400') -%}
+<li class="flow-card {{ 'w-44' if compact else 'w-56' }} rounded-md border border-l-4 border-slate-200 {{ tier_border }} bg-white p-2 text-xs shadow-sm dark:border-slate-600 dark:bg-slate-800" data-flow-node="stage">
+  <div class="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+    <span class="font-semibold">{{ st.name }}</span>
+    <span class="text-[10px] font-bold uppercase {{ tier_text }}" title="Environment tier">{{ st.env_tier }}</span>
+  </div>
+  {% if not compact and st.env_name and st.env_name != st.name %}<div class="text-[11px] text-slate-500 dark:text-slate-400">env {{ st.env_name }}</div>{% endif %}
+  {% if not compact and st.depends_on and (prev is none or st.depends_on[0] != prev) %}<div class="text-[11px] text-slate-400">after {{ st.depends_on | join(', ') }}</div>{% endif %}
+  {% if st.targets %}<div class="mt-1 flex flex-wrap gap-1">{% for t in st.targets %}{{ target_chip(t) }}{% endfor %}</div>{% endif %}
+  {% if st.approvals or st.gates %}
+  <div class="mt-1 flex flex-wrap gap-1">
+    {% for a in st.approvals %}<span class="rounded bg-green-100 px-1 py-0.5 text-[11px] text-green-900 dark:bg-green-900/40 dark:text-green-200" title="{{ a }}">✓ approval</span>{% endfor %}
+    {% for g in st.gates %}{% if 'servicenow' in (g | lower) %}<span class="rounded bg-fuchsia-100 px-1 py-0.5 text-[11px] text-fuchsia-900 dark:bg-fuchsia-900/40 dark:text-fuchsia-200" title="{{ g }}">ServiceNow change</span>{% else %}<span class="rounded bg-sky-100 px-1 py-0.5 text-[11px] text-sky-900 dark:bg-sky-900/40 dark:text-sky-200" title="{{ g }}">{{ g if g|length < 28 else g[:26] ~ '…' }}</span>{% endif %}{% endfor %}
+  </div>
+  {% endif %}
+  <div class="mt-1 flex flex-wrap items-center gap-1">
+    {{ deploy_chip(st.last_deploy.status, st.last_deploy.note) }}
+    {{ fail_chip(st.failing, repo, owner, st.name) }}
+  </div>
+  {% set ld = st.last_deploy %}
+  {% if not compact and (ld.version or ld.finished) %}<div class="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">{% if ld.url %}<a class="text-indigo-700 hover:underline dark:text-indigo-300" href="{{ ld.url | safe_url }}" target="_blank" rel="noopener noreferrer">{{ ld.version or 'open' }}</a>{% else %}{{ ld.version or '' }}{% endif %} {{ dt(ld.finished) }}</div>{% endif %}
+</li>
+{% endmacro %}
+
+{# Stages in order, joined by arrows. `lead` is rendered first (a release card), `owner` is the pipeline / release name used for the findings links. #}
+{% macro stage_chain(stages, repo, owner, compact, lead=none) %}
+<ol class="flow-chain">
+  {% if lead %}{{ lead }}{% endif %}
+  {% for st in stages %}
+    {% if lead or not loop.first %}<li class="flow-arrow" aria-hidden="true" role="presentation"></li>{% endif %}
+    {{ stage_card(st, repo, owner, stages[loop.index0 - 1].name if not loop.first else none, compact) }}
+  {% endfor %}
+</ol>
+{% endmacro %}
+
+{% macro release_card(rel, repo, compact) %}
+<li class="flow-card {{ 'w-44' if compact else 'w-56' }} rounded-md border border-violet-300 bg-violet-50/60 p-2 text-xs shadow-sm dark:border-violet-700 dark:bg-violet-900/20" data-flow-node="release">
+  <div class="flex flex-wrap items-center gap-1.5"><span class="rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-violet-800 dark:bg-violet-900/50 dark:text-violet-200">Classic release</span></div>
+  <a class="mt-1 block font-semibold text-indigo-700 hover:underline dark:text-indigo-300" href="{{ rel.url | safe_url }}" target="_blank" rel="noopener noreferrer">{{ rel.name }}</a>
+  {% if not compact %}<div class="text-[11px] text-slate-500 dark:text-slate-400">{% if rel.cd_enabled %}CD{% if rel.cd_branches %} on {{ rel.cd_branches | join(', ') }}{% endif %}{% else %}manual (no CD trigger){% endif %}{% for sc in rel.schedules %} · {{ sc }}{% endfor %}</div>
+  {% if rel.adopted_from %}<div class="text-[11px] text-amber-700 dark:text-amber-300">defined with {{ rel.adopted_from }}</div>{% endif %}{% endif %}
+  <div class="mt-1">{{ fail_chip(rel.failing, repo, rel.name) }}</div>
+  {% if not rel.stages %}<div class="mt-1 text-[11px] text-slate-500">no environments</div>{% endif %}
+</li>
+{% endmacro %}
+
+{% macro pipeline_card(p, repo, compact) %}
+<div class="flow-card {{ 'w-48' if compact else 'w-60' }} rounded-md border border-indigo-200 bg-indigo-50/60 p-2 text-xs shadow-sm dark:border-indigo-800 dark:bg-indigo-900/20" data-flow-node="pipeline">
+  <div class="flex flex-wrap items-center gap-1.5">{{ platform_badge(p.kind) }}
+    {% if p.adopted_from %}<span class="rounded bg-amber-100 px-1 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-900/40 dark:text-amber-200" title="The pipeline definition lives in another repository and builds this repository's code">defined in {{ p.adopted_from }}</span>{% endif %}</div>
+  <a class="mt-1 block font-semibold text-indigo-700 hover:underline dark:text-indigo-300" href="{{ p.url | safe_url }}" target="_blank" rel="noopener noreferrer">{{ p.name }}</a>
+  {% if not compact %}
+  <div class="font-mono text-[11px] text-slate-500 dark:text-slate-400">{{ p.definition_path or '' }}</div>
+  <div class="text-[11px] text-slate-600 dark:text-slate-300">{% if p.trigger.ci_enabled is none %}trigger unknown{% elif p.trigger.ci_enabled == false %}CI off{% else %}CI: {{ p.trigger.ci_branches | join(', ') or 'all branches' }}{% endif %}{% if p.trigger.schedules %} · scheduled{% endif %}</div>
+  {% for l in p.upstream %}<div class="text-[11px] text-slate-500 dark:text-slate-400">triggered by {% if l.repo_key %}<a class="text-indigo-700 hover:underline dark:text-indigo-300" href="{{ u('/lineage/' ~ l.repo_key) }}">{{ l.name }}</a>{% else %}{{ l.name }}{% endif %}</div>{% endfor %}
+  {% endif %}
+  <div class="mt-1 flex flex-wrap items-center gap-1">
+    {% if p.last_run %}<span title="Last run{{ ' ' ~ dt(p.last_run.finished) if p.last_run.finished }}">{{ deploy_chip(p.last_run.status, p.last_run.note) }}</span>{% else %}<span class="text-[11px] text-slate-400">no run info</span>{% endif %}
+    {{ fail_chip(p.failing, repo, p.name) }}
+  </div>
+  {% if not compact and p.last_run and (p.last_run.version or p.last_run.finished) %}<div class="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">run {{ p.last_run.version or '' }} {{ dt(p.last_run.finished) }}</div>{% endif %}
+</div>
+{% endmacro %}
+
+{% macro downstream_card(l, compact) %}
+<div class="flow-card flow-side-card {{ 'w-44' if compact else 'w-56' }} rounded-md border bg-white p-2 text-xs dark:bg-slate-800" data-flow-node="downstream">
+  <div class="text-[10px] font-bold uppercase text-violet-700 dark:text-violet-300">{{ 'triggers workflow' if l.kind == 'workflow_run' else 'triggers pipeline' }}</div>
+  {% if l.repo_key %}<a class="font-semibold text-indigo-700 hover:underline dark:text-indigo-300" href="{{ u('/lineage/' ~ l.repo_key) }}">{{ l.name }}</a><div class="text-[11px] text-slate-500 dark:text-slate-400">{{ l.repo_key }}</div>
+  {% else %}<span class="font-semibold">{{ l.name }}</span><div class="text-[11px] text-slate-400">not in this scan</div>{% endif %}
+  {% if not compact and l.detail %}<div class="text-[11px] text-slate-500 dark:text-slate-400">{{ l.detail }}</div>{% endif %}
+</div>
+{% endmacro %}
+
+{% macro lineage_flow(lin, compact=false) %}
+{%- set rp = lin.repo -%}
+{%- set repo = rp.project ~ '/' ~ rp.name -%}
+{%- set cp = lin.compliance -%}
+{% if lin.summary.empty %}
+<p class="rounded border border-dashed border-slate-300 p-3 text-xs text-slate-500 dark:border-slate-600 dark:text-slate-400">No pipeline or release was found for this repository, so there is no flow to draw.</p>
+{% else %}
+{% set linked = [] %}
+<div class="flow flow-scroll rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800" role="region" tabindex="0" aria-label="Lineage flow of {{ rp.name }}: repository to pipelines to releases to environments. Scrolls sideways.">
+  <div class="flow-row">
+    <div class="flow-card {{ 'w-40' if compact else 'w-48' }} rounded-md border border-slate-300 bg-slate-50 p-2 text-xs shadow-sm dark:border-slate-600 dark:bg-slate-900/40" data-flow-node="repo">
+      <div class="text-[10px] font-bold uppercase text-slate-500 dark:text-slate-400">Repository</div>
+      <a class="block font-semibold text-indigo-700 hover:underline dark:text-indigo-300" href="{{ u('/repos/' ~ repo) }}">{{ rp.name }}</a>
+      <div class="text-[11px] text-slate-500 dark:text-slate-400">{{ rp.project }}{% if multi_host %} {{ provider_badge(rp.provider, rp.provider_label) }}{% endif %}</div>
+      {% if cp %}<div class="mt-1 flex flex-wrap items-center gap-1">{{ status_badge(cp.status) }}{% if cp.score is not none %}<span class="tnum text-[11px] text-slate-600 dark:text-slate-300">{{ '%.0f' | format(cp.score) }}</span>{% endif %}
+        {% if cp.counts.fail %}<a href="{{ u('/findings', repo=repo, status='FAIL') }}" class="whitespace-nowrap rounded bg-red-100 px-1.5 py-0.5 text-[11px] font-semibold text-red-800 hover:bg-red-200 dark:bg-red-900/40 dark:text-red-200">{{ cp.counts.fail }} failing</a>{% endif %}</div>{% endif %}
+    </div>
+    <ul class="flow-children" aria-label="Pipelines and releases of {{ rp.name }}">
+      {% for p in lin.pipelines %}
+      <li class="flow-child">
+        <div class="flow-row">
+          {{ pipeline_card(p, repo, compact) }}
+          <ul class="flow-children" aria-label="Deployments of {{ p.name }}">
+            {% if p.stages %}<li class="flow-child">{{ stage_chain(p.stages, repo, p.name, compact) }}</li>{% endif %}
+            {% for rel in lin.releases if p.id in rel.source_pipeline_ids and rel.adopted_from == p.adopted_from %}
+              {% if linked.append([rel.id, rel.adopted_from]) %}{% endif %}
+              <li class="flow-child">{% set lead %}{{ release_card(rel, repo, compact) }}{% endset %}{{ stage_chain(rel.stages, repo, rel.name, compact, lead) }}</li>
+            {% endfor %}
+            {% for l in p.downstream %}<li class="flow-child flow-side">{{ downstream_card(l, compact) }}</li>{% endfor %}
+          </ul>
+        </div>
+      </li>
+      {% endfor %}
+      {% for rel in lin.releases if [rel.id, rel.adopted_from] not in linked %}
+      <li class="flow-child">
+        <div class="flow-row">
+          <div class="flow-card flow-ghost {{ 'w-40' if compact else 'w-48' }} rounded-md border border-slate-300 p-2 text-[11px] text-slate-500 dark:border-slate-600 dark:text-slate-400" data-flow-node="no-pipeline">No build pipeline in this repo{% if rel.sources and rel.sources[0].type == 'GitHub' %}: the release consumes the GitHub repository directly{% endif %}</div>
+          <ul class="flow-children"><li class="flow-child">{% set lead %}{{ release_card(rel, repo, compact) }}{% endset %}{{ stage_chain(rel.stages, repo, rel.name, compact, lead) }}</li></ul>
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+</div>
+{% endif %}
+{% endmacro %}

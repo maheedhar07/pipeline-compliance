@@ -1,17 +1,22 @@
 {% extends "base.html" %}
-{% from "_macros.html" import status_badge, test_badge, provider_badge %}
+{% from "_macros.html" import status_badge, test_badge, provider_badge, platform_badge %}
+{% from "_table.html" import pager, chips_bar, sort_th, plain_th, col_chooser with context %}
 {% from "_macros.html" import why_cell with context %}
 {% block title %}Repos · Pipeline Compliance Hub{% endblock %}
 {% block content %}
-<div class="mb-3 flex flex-wrap items-baseline gap-3">
+<div class="mb-3 flex flex-wrap items-center gap-3">
   <h1 class="text-lg font-semibold">Repositories</h1>
-  <span class="text-xs text-slate-500 dark:text-slate-400">{{ rows | length }} shown</span>
-  <a class="ml-auto text-xs text-indigo-600 hover:underline dark:text-indigo-300" href="/repos.csv?{{ qs(base, sort=sort, dir=dir) }}">Export CSV</a>
+  <span class="text-xs text-slate-500 dark:text-slate-400">{{ pg.total }} match</span>
+  <div class="ml-auto flex items-center gap-3 text-xs">
+    {{ col_chooser('repos', [('project','Project'),('owner','Owner'),('platforms','Pipelines'),('targets','Targets'),('test_state','Tests'),('coverage','Coverage'),('sonar_gate','Sonar'),('aikido_criticals','Aikido critical'),('score','Score'),('critical_fails','Critical / high fails'),('migration_status','Migration'),('why','Why')], 'critical_fails,migration_status') }}
+    <a class="text-indigo-600 hover:underline dark:text-indigo-300" href="/repos.csv?{{ qs(base, sort=sort, dir=dir) }}" title="All rows matching the filters, not just this page">Export CSV</a>
+  </div>
 </div>
 <form id="filters" class="mb-3 grid grid-cols-2 gap-2 rounded-lg border border-slate-200 bg-white p-3 md:grid-cols-4 lg:grid-cols-9 dark:border-slate-700 dark:bg-slate-800"
-      hx-get="/repos" hx-target="#repos-table" hx-select="#repos-table" hx-push-url="true" hx-trigger="change, keyup changed delay:300ms from:#q">
+      hx-get="/repos" hx-target="#results" hx-select="#results" hx-swap="outerHTML" hx-push-url="true" hx-trigger="change, keyup changed delay:300ms from:#q">
   <input type="hidden" name="scan" value="{{ scan_param }}">
-  <input type="hidden" name="sort" value="{{ sort }}"><input type="hidden" name="dir" value="{{ dir }}"><input type="hidden" name="rule" value="{{ filters.rule or '' }}">
+  <input type="hidden" name="sort" value="{{ sort }}"><input type="hidden" name="dir" value="{{ dir }}"><input type="hidden" name="per_page" value="{{ pg.per_page }}">
+  <input type="hidden" name="rule" value="{{ filters.rule or '' }}"><input type="hidden" name="owner" value="{{ filters.owner or '' }}"><input type="hidden" name="migration" value="{{ filters.migration or '' }}">
   {% macro sel(name, label, opts, cur, labels=None) %}
   <label class="flex flex-col gap-0.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">{{ label }}
     <select name="{{ name }}" class="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs font-normal text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100">
@@ -29,42 +34,44 @@
   <label class="col-span-2 flex flex-col gap-0.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">Search repo / owner
     <input id="q" name="q" value="{{ filters.q or '' }}" placeholder="e.g. ledger or team-payments" class="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs font-normal text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"></label>
 </form>
-{% if filters.rule %}<p class="mb-3 text-xs text-slate-600 dark:text-slate-300">Repositories where <a class="font-mono font-semibold text-indigo-700 hover:underline dark:text-indigo-300" href="{{ u('/rules/' ~ filters.rule) }}">{{ filters.rule }}</a> fails.
-  <a class="ml-2 text-indigo-600 hover:underline dark:text-indigo-300" href="/repos?{{ qs(base, rule='') }}">clear</a></p>{% endif %}
 
-<div id="repos-table" class="overflow-x-auto rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
-  {% macro th(col, label, cls='') %}
-  <th class="px-2 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 {{ cls }}">
-    <a href="/repos?{{ qs(base, sort=col, dir=('desc' if sort == col and dir == 'asc' else 'asc')) }}" hx-get="/repos?{{ qs(base, sort=col, dir=('desc' if sort == col and dir == 'asc' else 'asc')) }}" hx-target="#repos-table" hx-select="#repos-table" hx-push-url="true">{{ label }}{% if sort == col %} {{ '▲' if dir == 'asc' else '▼' }}{% endif %}</a></th>
-  {% endmacro %}
+{% if filters.rule %}<p class="mb-2 text-xs text-slate-600 dark:text-slate-300">Repositories where <a class="font-mono font-semibold text-indigo-700 hover:underline dark:text-indigo-300" href="{{ u('/rules/' ~ filters.rule) }}">{{ filters.rule }}</a> fails.</p>{% endif %}
+<div id="results" data-table="repos">
+  {{ chips_bar(chips, clear) }}
+  <div class="table-frame rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
   <table class="w-full">
-    <thead class="border-b border-slate-200 dark:border-slate-700"><tr>
-      {{ th('project','Project') }}{{ th('repo','Repo') }}{{ th('owner','Owner') }}
-      <th class="px-2 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Pipelines</th>
-      <th class="px-2 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Targets</th>
-      {{ th('test_state','Tests') }}{{ th('coverage','Cov.','text-right') }}{{ th('sonar_gate','Sonar') }}{{ th('aikido_criticals','Aikido crit.','text-right') }}{{ th('score','Score','text-right') }}{{ th('status','Status') }}
-      <th class="px-2 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Why</th>
+    <caption class="sr-only">Repositories, {{ pg.total }} match; sorted by {{ sort }} {{ 'ascending' if dir == 'asc' else 'descending' }}</caption>
+    <thead class="sticky-head"><tr>
+      {{ sort_th('project','Project','/repos',params,sort,dir) }}{{ sort_th('repo','Repo','/repos',params,sort,dir) }}{{ sort_th('owner','Owner','/repos',params,sort,dir) }}
+      {{ sort_th('platforms','Pipelines','/repos',params,sort,dir) }}{{ sort_th('targets','Targets','/repos',params,sort,dir) }}
+      {{ sort_th('test_state','Tests','/repos',params,sort,dir) }}{{ sort_th('coverage','Cov.','/repos',params,sort,dir,'text-right') }}{{ sort_th('sonar_gate','Sonar','/repos',params,sort,dir) }}{{ sort_th('aikido_criticals','Aikido crit.','/repos',params,sort,dir,'text-right') }}
+      {{ sort_th('score','Score','/repos',params,sort,dir,'text-right') }}{{ sort_th('critical_fails','Crit / high','/repos',params,sort,dir,'text-right') }}{{ sort_th('migration_status','Migration','/repos',params,sort,dir) }}{{ sort_th('status','Status','/repos',params,sort,dir) }}
+      {{ plain_th('why','Why') }}
     </tr></thead>
     <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
     {% for r in rows %}
-    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/40">
-      <td class="px-2 py-1"><a class="hover:underline" href="{{ u('/repos', project=r.project) }}">{{ r.project }}</a></td>
-      <td class="px-2 py-1 font-medium"><a class="text-indigo-700 hover:underline dark:text-indigo-300" href="{{ u('/repos/' ~ r.project ~ '/' ~ r.repo) }}">{{ r.repo }}</a> <a href="{{ u('/repos', provider=r.provider) }}">{% if multi_host %}{{ provider_badge(r.provider, r.provider_label) }}{% endif %}</a> <a class="text-[11px] text-slate-500 hover:text-indigo-700 hover:underline dark:text-slate-400" href="{{ u('/lineage/' ~ r.project ~ '/' ~ r.repo) }}" title="Lineage: pipelines, releases, environments">lineage</a></td>
-      <td class="px-2 py-1 text-xs text-slate-500 dark:text-slate-400">{{ r.owner or '–' }}</td>
-      <td class="px-2 py-1 text-xs">{{ r.platforms | join(', ') if r.platforms else 'none' }}</td>
-      <td class="px-2 py-1 text-xs">{% for t in r.targets %}<a href="{{ u('/repos', target=t) }}" class="mr-1 rounded bg-slate-100 px-1 py-0.5 hover:bg-slate-200 dark:bg-slate-700">{{ TARGET_LABEL[t] }}</a>{% else %}–{% endfor %}</td>
-      <td class="px-2 py-1"><a href="{{ u('/repos', test_state=r.test_state) }}">{{ test_badge(r.test_state) }}</a></td>
-      <td class="tnum px-2 py-1 text-right">{{ r.coverage | pct(0) if r.coverage is not none else '–' }}</td>
-      <td class="px-2 py-1 text-xs">{{ r.sonar_gate or '–' }}</td>
-      <td class="tnum px-2 py-1 text-right {{ 'font-semibold text-red-600 dark:text-red-400' if r.aikido_criticals else '' }}">{{ r.aikido_criticals if r.aikido_criticals is not none else '–' }}</td>
-      <td class="tnum px-2 py-1 text-right">{{ '%.0f' | format(r.score) if r.score is not none else '–' }}</td>
-      <td class="px-2 py-1">{{ status_badge(r.status) }}{% if r.unknowns %} <span class="text-[10px] text-slate-400" title="{{ r.unknowns }} rules could not be evaluated">?{{ r.unknowns }}</span>{% endif %}</td>
-      <td class="px-2 py-1">{{ why_cell(r) }}</td>
+    <tr class="align-top hover:bg-slate-50 dark:hover:bg-slate-700/40">
+      <td data-col="project" class="px-2 py-1"><a class="hover:underline" href="{{ u('/repos', project=r.project) }}">{{ r.project }}</a></td>
+      <td data-col="repo" class="px-2 py-1 font-medium"><a class="text-indigo-700 hover:underline dark:text-indigo-300" href="{{ u('/repos/' ~ r.project ~ '/' ~ r.repo) }}">{{ r.repo }}</a> <a href="{{ u('/repos', provider=r.provider) }}">{% if multi_host %}{{ provider_badge(r.provider, r.provider_label) }}{% endif %}</a> <a class="text-[11px] text-slate-500 hover:text-indigo-700 hover:underline dark:text-slate-400" href="{{ u('/lineage/' ~ r.project ~ '/' ~ r.repo) }}" title="Lineage: pipelines, releases, environments">lineage</a></td>
+      <td data-col="owner" class="px-2 py-1 text-xs text-slate-500 dark:text-slate-400">{% if r.owner %}<a class="hover:underline" href="{{ u('/repos', owner=r.owner) }}">{{ r.owner }}</a>{% else %}–{% endif %}</td>
+      <td data-col="platforms" class="px-2 py-1 text-xs"><span class="flex flex-wrap gap-1">{% for k in r.platform_kinds if k != 'none' %}<a href="{{ u('/repos', platform=k) }}">{{ platform_badge(k) }}</a>{% else %}<span class="text-slate-400">none</span>{% endfor %}</span></td>
+      <td data-col="targets" class="px-2 py-1 text-xs">{% for t in r.targets %}<a href="{{ u('/repos', target=t) }}" class="mr-1 rounded bg-slate-100 px-1 py-0.5 hover:bg-slate-200 dark:bg-slate-700">{{ TARGET_LABEL[t] }}</a>{% else %}–{% endfor %}</td>
+      <td data-col="test_state" class="px-2 py-1"><a href="{{ u('/repos', test_state=r.test_state) }}">{{ test_badge(r.test_state) }}</a></td>
+      <td data-col="coverage" class="tnum px-2 py-1 text-right">{{ r.coverage | pct(0) if r.coverage is not none else '–' }}</td>
+      <td data-col="sonar_gate" class="px-2 py-1 text-xs">{{ r.sonar_gate or '–' }}</td>
+      <td data-col="aikido_criticals" class="tnum px-2 py-1 text-right {{ 'font-semibold text-red-600 dark:text-red-400' if r.aikido_criticals else '' }}">{{ r.aikido_criticals if r.aikido_criticals is not none else '–' }}</td>
+      <td data-col="score" class="tnum px-2 py-1 text-right">{{ '%.0f' | format(r.score) if r.score is not none else '–' }}</td>
+      <td data-col="critical_fails" class="tnum px-2 py-1 text-right text-xs"><a class="{{ 'font-semibold text-red-600 dark:text-red-400' if r.critical_fails }} hover:underline" href="{{ u('/findings', repo=r.key, severity='critical', status='FAIL') }}">{{ r.critical_fails }}</a> / <a class="hover:underline" href="{{ u('/findings', repo=r.key, severity='high', status='FAIL') }}">{{ r.high_fails }}</a></td>
+      <td data-col="migration_status" class="px-2 py-1 text-xs"><a class="hover:underline" href="{{ u('/repos', migration=r.migration_status) }}">{{ r.migration_label }}</a></td>
+      <td data-col="status" class="px-2 py-1">{{ status_badge(r.status) }}{% if r.unknowns %} <span class="text-[10px] text-slate-400" title="{{ r.unknowns }} rules could not be evaluated">?{{ r.unknowns }}</span>{% endif %}</td>
+      <td data-col="why" class="min-w-[16rem] px-2 py-1">{{ why_cell(r) }}</td>
     </tr>
     {% else %}
-    <tr><td colspan="12" class="px-3 py-8 text-center text-slate-500">No repositories match these filters.</td></tr>
+    <tr><td colspan="14" class="px-3 py-8 text-center text-slate-500">No repositories match these filters.</td></tr>
     {% endfor %}
     </tbody>
   </table>
+  </div>
+  {{ pager(pg, '/repos', params) }}
 </div>
 {% endblock %}

@@ -35,6 +35,7 @@ from sqlalchemy.exc import InterfaceError, OperationalError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from pch import __version__
+from pch.model.repo import PROVIDER_LABEL
 from pch.settings import Settings, get_settings
 from pch.store import repository as store
 from pch.store.db import dispose_engine, get_engine, session_scope
@@ -42,6 +43,7 @@ from pch.timeutil import utcnow_naive
 from pch.web import exports as X
 from pch.web import lineage_q as LQ
 from pch.web import queries as Q
+from pch.web import tables as T
 from pch.web.auth import AuthMiddleware, build_authenticator
 from pch.web.guard import assert_safe_to_serve
 from pch.web.health import ReadinessProbe
@@ -63,7 +65,12 @@ log = logging.getLogger("pch.web")
 # Query-parameter types: bounded lengths, whitelisted sort keys, bounded offsets (bad input -> 422/400, never 500).
 Text = Annotated[str | None, Query(max_length=200)]
 ScanId = Annotated[str | None, Query(max_length=64)]
-SortKey = Literal["project", "repo", "owner", "test_state", "coverage", "sonar_gate", "aikido_criticals", "score", "status", "critical_fails", "migration_score"]
+SortKey = Literal["project", "repo", "owner", "provider", "platforms", "targets", "test_state", "coverage", "sonar_gate", "aikido_criticals", "score", "status",
+                  "critical_fails", "high_fails", "unknowns", "migration_score", "migration_status"]
+FindingSort = Literal["severity", "status", "rule", "category", "repo", "pipeline", "message"]
+RuleSort = Literal["default", "id", "title", "category", "severity", "scope", "applicable", "pass", "fail", "warn", "unknown", "pass_rate"]
+LineageSort = Literal["repo", "project", "status", "score", "pipelines", "releases", "stages", "targets", "prod"]
+View = Literal["flow", "table"]
 Direction = Literal["asc", "desc"]
 Offset = Annotated[int, Query(ge=0, le=1_000_000)]
 Limit = Annotated[int, Query(ge=1, le=1000)]
@@ -73,7 +80,6 @@ RulePath = Annotated[str, PathParam(max_length=64)]
 Short = Annotated[str | None, Query(max_length=8)]  # tiny enumerations from <select> (an empty value means "all"): normalised, never an error
 MigState = Annotated[str | None, Query(max_length=16)]  # migration status filter
 Flag = Annotated[str | None, Query(max_length=8)]
-LINEAGE_LIST_LIMIT = 500  # repos rendered on the list page (the exports contain every matching row)
 
 _JSON_ESCAPES = {ord("<"): "\\u003c", ord(">"): "\\u003e", ord("&"): "\\u0026", 0x2028: "\\u2028", 0x2029: "\\u2029"}
 
@@ -195,33 +201,51 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
                 return no_data(request)
             return templates.TemplateResponse(request, "overview.html", ctx(request, s, scan, data=Q.overview(s, row.id), nav="overview"))
 
-    def repo_filters(project, status, test_state, platform, target, sonar, q, provider=None, rule=None):
+    def repo_filters(project, status, test_state, platform, target, sonar, q, provider=None, rule=None, owner=None, migration=None):
         return {"project": project, "status": status, "test_state": test_state, "platform": platform, "target": target, "sonar": sonar, "q": q, "provider": provider,
-                "rule": rule}
+                "rule": rule, "owner": owner, "migration": migration}
+
+    def chip_text(name: str, v: Any) -> str:
+        labels = {"target": Q.TARGET_LABEL, "provider": PROVIDER_LABEL, "migration": Q.MIGRATION_LABEL}.get(name, {})
+        return str(labels.get(v, v)).replace("_", " ")
+
+    def chip_defs(filters: dict[str, Any], names: list[tuple[str, str]]) -> list[tuple[str, str, Any]]:
+        return [(n, label, chip_text(n, filters.get(n)) if filters.get(n) else None) for n, label in names]
+
+    REPO_CHIPS = [("project", "Project"), ("provider", "Code host"), ("status", "Status"), ("test_state", "Tests"), ("platform", "Pipelines"), ("target", "Target"),
+                  ("sonar", "Sonar gate"), ("owner", "Owner"), ("migration", "Migration"), ("rule", "Rule failing"), ("q", "Search")]
+
+    def table_params(filters: dict[str, Any], scan: str | None, sort: str, dir: str, per_page: int, **extra: Any) -> dict[str, Any]:
+        """Everything a table link must carry (filters, scan, sort, page size); ``page`` is added per link."""
+        return {**filters, "scan": scan, "sort": sort, "dir": dir, "per_page": per_page, **extra}
 
     @app.get("/repos", response_class=HTMLResponse)
     def page_repos(request: Request, scan: ScanId = None, project: Text = None, status: Text = None, test_state: Text = None,
                    platform: Text = None, target: Text = None, sonar: Text = None, q: Text = None, provider: Text = None,
-                   rule: Text = None, sort: SortKey = "status", dir: Direction = "asc"):
+                   rule: Text = None, owner: Text = None, migration: MigState = None, sort: SortKey = "status", dir: Direction = "asc",
+                   page: T.PageNo = 1, per_page: T.PerPage = T.DEFAULT_PER_PAGE):
         with session_scope(app.state.db_url) as s:
             row = Q.resolve_scan(s, scan)
             if not row:
                 return no_data(request)
-            filters = repo_filters(project, status, test_state, platform, target, sonar, q, provider, rule)
+            filters = repo_filters(project, status, test_state, platform, target, sonar, q, provider, rule, owner, migration)
             rows = Q.repos(s, row.id, sort=sort, direction=dir, **filters)
+            pg = T.slice_page(rows, page, per_page)
+            params = table_params(filters, scan, sort, dir, per_page)
             return templates.TemplateResponse(request, "repos.html", ctx(
-                request, s, scan, rows=rows, filters=filters, sort=sort, dir=dir, options=Q.filter_options(s, row.id), nav="repos",
-                base={**filters, "scan": scan}))
+                request, s, scan, rows=pg.items, pg=pg, filters=filters, sort=sort, dir=dir, options=Q.filter_options(s, row.id), nav="repos",
+                base={**filters, "scan": scan}, params=params, chips=T.chips("/repos", params, chip_defs(filters, REPO_CHIPS)),
+                clear=T.clear_url("/repos", params, [n for n, _ in REPO_CHIPS])))
 
     @app.get("/repos.csv", response_class=PlainTextResponse)
     def repos_csv(scan: ScanId = None, project: Text = None, status: Text = None, test_state: Text = None,
                   platform: Text = None, target: Text = None, sonar: Text = None, q: Text = None, provider: Text = None,
-                  rule: Text = None, sort: SortKey = "status", dir: Direction = "asc"):
+                  rule: Text = None, owner: Text = None, migration: MigState = None, sort: SortKey = "status", dir: Direction = "asc"):
         with session_scope(app.state.db_url) as s:
             row = Q.resolve_scan(s, scan)
             if not row:
                 raise HTTPException(404, "no scans yet")
-            rows = Q.repos(s, row.id, sort=sort, direction=dir, **repo_filters(project, status, test_state, platform, target, sonar, q, provider, rule))
+            rows = Q.repos(s, row.id, sort=sort, direction=dir, **repo_filters(project, status, test_state, platform, target, sonar, q, provider, rule, owner, migration))
         buf = io.StringIO()
         csv.writer(buf).writerows([[csv_cell(c) for c in r] for r in Q.csv_rows(rows)])
         return PlainTextResponse(buf.getvalue(), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=repos.csv"})
@@ -235,16 +259,29 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
             d = Q.repo_detail(s, row.id, project, repo)
             if d is None:
                 raise HTTPException(404, "repo not found in this scan")
-            return templates.TemplateResponse(request, "repo_detail.html", ctx(request, s, scan, d=d, nav="repos"))
+            lin = LQ.lineage_repo(s, row.id, project, repo)  # compact flow preview (None for scans made before the Lineage tab)
+            return templates.TemplateResponse(request, "repo_detail.html", ctx(request, s, scan, d=d, lin=lin, nav="repos"))
+
+    RULE_CHIPS = [("category", "Category"), ("severity", "Severity"), ("failing", "Only"), ("q", "Search")]
 
     @app.get("/rules", response_class=HTMLResponse)
-    def page_rules(request: Request, scan: ScanId = None):
+    def page_rules(request: Request, scan: ScanId = None, category: Text = None, severity: Text = None, failing: Flag = None, q: Text = None,
+                   sort: RuleSort = "default", dir: Direction = "asc", page: T.PageNo = 1, per_page: T.PerPage = T.DEFAULT_PER_PAGE):
         with session_scope(app.state.db_url) as s:
             row = Q.resolve_scan(s, scan)
             if not row:
                 return no_data(request)
-            stats = Q.rule_stats(s, row.id)
-            return templates.TemplateResponse(request, "rules.html", ctx(request, s, scan, stats=stats, nav="rules"))
+            filters = {"category": category, "severity": severity, "failing": "1" if failing == "1" else None, "q": q}
+            all_stats = Q.rule_stats(s, row.id)
+            stats = Q.rules_table(all_stats, sort=sort, direction=dir, **filters)
+            pg = T.slice_page(stats, page, per_page)
+            params = table_params(filters, scan, sort, dir, per_page)
+            shown = {**filters, "failing": "rules with failures" if filters["failing"] else None}
+            return templates.TemplateResponse(request, "rules.html", ctx(
+                request, s, scan, stats=pg.items, pg=pg, total_rules=len(all_stats), filters=filters, sort=sort, dir=dir, nav="rules", params=params,
+                categories=Q.CATEGORY_NAMES, severities=list(Q.SEVERITIES) + ["info"], group=sort in ("default", "category"),
+                chips=T.chips("/rules", params, [(n, label, shown.get(n)) for n, label in RULE_CHIPS]),
+                clear=T.clear_url("/rules", params, [n for n, _ in RULE_CHIPS])))
 
     @app.get("/rules/{rule_id}", response_class=HTMLResponse)
     def page_rule(request: Request, rule_id: RulePath, scan: ScanId = None):
@@ -257,17 +294,26 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
                 raise HTTPException(404, "unknown rule")
             return templates.TemplateResponse(request, "rule_detail.html", ctx(request, s, scan, d=d, nav="rules"))
 
+    FINDING_CHIPS = [("project", "Project"), ("category", "Category"), ("severity", "Severity"), ("status", "Status"), ("rule", "Rule"), ("repo", "Repo"), ("pipeline", "Pipeline"), ("stage", "Stage")]
+
     @app.get("/findings", response_class=HTMLResponse)
     def page_findings(request: Request, scan: ScanId = None, project: Text = None, category: Text = None, rule: Text = None,
-                      status: Text = None, severity: Text = None, repo: Text = None, offset: Offset = 0):
+                      status: Text = None, severity: Text = None, repo: Text = None, pipeline: Text = None, stage: Text = None,
+                      sort: FindingSort = "severity", dir: Direction = "asc", page: T.PageNo = 1, per_page: T.PerPage = T.DEFAULT_PER_PAGE):
         with session_scope(app.state.db_url) as s:
             row = Q.resolve_scan(s, scan)
             if not row:
                 return no_data(request)
-            data = Q.findings_list(s, row.id, project=project, category=category, rule=rule, status=status, severity=severity, repo_key=repo, offset=offset)
-            filt = {"project": project, "category": category, "rule": rule, "status": status, "severity": severity, "repo": repo}
-            return templates.TemplateResponse(request, "findings.html", ctx(request, s, scan, data=data, filt=filt, offset=offset,
-                                                                            options=Q.filter_options(s, row.id), nav="findings", base={**filt, "scan": scan}))
+            filt = {"project": project, "category": category, "rule": rule, "status": status, "severity": severity, "repo": repo, "pipeline": pipeline, "stage": stage}
+            kw: dict[str, Any] = dict(project=project, category=category, rule=rule, status=status, severity=severity, repo_key=repo, pipeline=pipeline, stage=stage, sort=sort, direction=dir)
+            total = Q.findings_list(s, row.id, limit=1, **kw)["total"]
+            pg = T.make_page([], total, page, per_page)  # clamp the page against the real total, then fetch exactly that window
+            data = Q.findings_list(s, row.id, limit=per_page, offset=(pg.page - 1) * per_page, **kw)
+            pg.items = data["items"]
+            params = table_params(filt, scan, sort, dir, per_page)
+            return templates.TemplateResponse(request, "findings.html", ctx(
+                request, s, scan, data=data, pg=pg, filt=filt, sort=sort, dir=dir, options=Q.filter_options(s, row.id), nav="findings", base={**filt, "scan": scan}, params=params,
+                chips=T.chips("/findings", params, chip_defs(filt, FINDING_CHIPS)), clear=T.clear_url("/findings", params, [n for n, _ in FINDING_CHIPS])))
 
     @app.get("/testing", response_class=HTMLResponse)
     def page_testing(request: Request, scan: ScanId = None):
@@ -309,20 +355,28 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
     def lineage_kwargs(f: dict[str, Any]) -> dict[str, Any]:
         return {**{k: v for k, v in f.items() if k != "orphans"}, "orphans_only": bool(f.get("orphans"))}
 
+    LINEAGE_CHIPS = [("project", "Project"), ("provider", "Code host"), ("target", "Target"), ("tier", "Tier"), ("has_prod", "Prod deployment"), ("orphans", "Orphans only"), ("q", "Search")]
+
     @app.get("/lineage", response_class=HTMLResponse)
     def page_lineage(request: Request, scan: ScanId = None, project: Text = None, provider: Text = None, q: Text = None, target: Text = None, tier: Text = None,
-                     has_prod: Short = None, orphans: Flag = None):
+                     has_prod: Short = None, orphans: Flag = None, sort: LineageSort = "repo", dir: Direction = "asc",
+                     page: T.PageNo = 1, per_page: T.PerPage = T.DEFAULT_PER_PAGE):
         with session_scope(app.state.db_url) as s:
             row = Q.resolve_scan(s, scan)
             if not row:
                 return no_data(request)
             f = lineage_filters(project, provider, q, target, tier, has_prod, orphans)
             data = LQ.lineage_page(s, row.id, **lineage_kwargs(f))
-            return templates.TemplateResponse(request, "lineage.html", ctx(request, s, scan, data=data, filters=f, base={**f, "scan": scan}, nav="lineage",
-                                                                           limit=LINEAGE_LIST_LIMIT, shown=min(len(data["repos"]), LINEAGE_LIST_LIMIT)))
+            pg = T.slice_page(LQ.sort_repos(data["repos"], sort, dir), page, per_page)
+            params = table_params(f, scan, sort, dir, per_page)
+            shown = {**f, "has_prod": {"yes": "has one", "no": "none"}.get(f["has_prod"] or ""), "orphans": "yes" if f["orphans"] else None}
+            return templates.TemplateResponse(request, "lineage.html", ctx(
+                request, s, scan, data=data, filters=f, base={**f, "scan": scan}, nav="lineage", pg=pg, rows=pg.items, sort=sort, dir=dir, params=params,
+                chips=T.chips("/lineage", params, [(n, label, chip_text(n, shown.get(n)) if shown.get(n) else None) for n, label in LINEAGE_CHIPS]),
+                clear=T.clear_url("/lineage", params, [n for n, _ in LINEAGE_CHIPS])))
 
     @app.get("/lineage/{project}/{repo:path}", response_class=HTMLResponse)
-    def page_lineage_repo(request: Request, project: ProjectPath, repo: RepoPath, scan: ScanId = None, fragment: Flag = None):
+    def page_lineage_repo(request: Request, project: ProjectPath, repo: RepoPath, scan: ScanId = None, fragment: Flag = None, view: View = "flow"):
         with session_scope(app.state.db_url) as s:
             row = Q.resolve_scan(s, scan)
             if not row:
@@ -330,7 +384,7 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
             d = LQ.lineage_repo(s, row.id, project, repo)
             if d is None:
                 raise HTTPException(404, "lineage not found for this repo in this scan")
-            context = ctx(request, s, scan, d=d, nav="lineage")
+            context = ctx(request, s, scan, d=d, nav="lineage", view=view)
             return templates.TemplateResponse(request, "lineage_fragment.html" if fragment == "1" else "lineage_repo.html", context)
 
     def export_name(started: datetime, project: str | None, ext: str) -> str:
@@ -409,8 +463,8 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
     @app.get("/api/v1/repos")
     def api_repos(scan: ScanId = None, project: Text = None, status: Text = None, test_state: Text = None,
                   platform: Text = None, target: Text = None, sonar: Text = None, q: Text = None, provider: Text = None,
-                  rule: Text = None, sort: SortKey = "status", dir: Direction = "asc"):
-        return api(lambda s, r: {"repos": Q.repos(s, r.id, sort=sort, direction=dir, **repo_filters(project, status, test_state, platform, target, sonar, q, provider, rule))})(scan)
+                  rule: Text = None, owner: Text = None, migration: MigState = None, sort: SortKey = "status", dir: Direction = "asc"):
+        return api(lambda s, r: {"repos": Q.repos(s, r.id, sort=sort, direction=dir, **repo_filters(project, status, test_state, platform, target, sonar, q, provider, rule, owner, migration))})(scan)
 
     @app.get("/api/v1/repos/{project}/{repo:path}")
     def api_repo(project: ProjectPath, repo: RepoPath, scan: ScanId = None):
@@ -426,9 +480,10 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
 
     @app.get("/api/v1/findings")
     def api_findings(scan: ScanId = None, project: Text = None, category: Text = None, rule: Text = None,
-                     status: Text = None, severity: Text = None, repo: Text = None, limit: Limit = 200, offset: Offset = 0):
+                     status: Text = None, severity: Text = None, repo: Text = None, pipeline: Text = None, stage: Text = None,
+                     sort: FindingSort = "severity", dir: Direction = "asc", limit: Limit = 200, offset: Offset = 0):
         return api(lambda s, r: Q.findings_list(s, r.id, project=project, category=category, rule=rule, status=status, severity=severity,
-                                                 repo_key=repo, limit=limit, offset=offset))(scan)
+                                                 repo_key=repo, pipeline=pipeline, stage=stage, limit=limit, offset=offset, sort=sort, direction=dir))(scan)
 
     @app.get("/api/v1/testing")
     def api_testing(scan: ScanId = None):

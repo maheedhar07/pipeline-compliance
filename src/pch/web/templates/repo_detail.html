@@ -1,5 +1,6 @@
 {% extends "base.html" %}
-{% from "_macros.html" import status_badge, sev_badge, test_badge, provider_badge, bar %}
+{% from "_macros.html" import status_badge, sev_badge, test_badge, provider_badge, bar, platform_badge %}
+{% from "_lineage_flow.html" import lineage_flow with context %}
 {% block title %}{{ d.repo.repo }} · Pipeline Compliance Hub{% endblock %}
 {% block content %}
 {% set r = d.repo %}
@@ -8,6 +9,7 @@
   <h1 class="text-lg font-semibold">{{ r.repo }}</h1>
   {% if multi_host %}{{ provider_badge(r.provider, r.provider_label) }}{% endif %}
   {{ status_badge(r.status) }}
+  {% for k in r.platform_kinds if k != 'none' %}<a href="{{ u('/repos', platform=k) }}" title="Repos with {{ k }} pipelines">{{ platform_badge(k) }}</a>{% endfor %}
   <span class="tnum text-lg font-semibold">{{ '%.0f' | format(r.score) if r.score is not none else 'n/a' }}<span class="text-xs font-normal text-slate-500"> / 100</span></span>
   {% if r.unknowns %}<span class="text-xs text-slate-500">{{ r.unknowns }} rule(s) unknown</span>{% endif %}
   <div class="ml-auto flex gap-3 text-xs">
@@ -43,7 +45,56 @@
   <b>Repo-level checks unavailable: GitHub reader not configured.</b> {{ d.repo_checks_reason }}. Branch protection, CODEOWNERS and test detection show as UNKNOWN (never as failures); pipeline, release, environment, Sonar, Aikido and ServiceNow checks are evaluated normally.
 </div>
 {% endif %}
-<section class="grid gap-3 md:grid-cols-3">
+<section class="mt-4 grid gap-3 lg:grid-cols-3" aria-label="Fix first, categories and trend">
+  <div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800 lg:col-span-2" id="fix-first">
+    <h2 class="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Fix first <span class="font-normal normal-case">(failing rules by severity, then category weight)</span></h2>
+    {% if d.fix_first['items'] %}
+    <ol class="divide-y divide-slate-100 dark:divide-slate-700">
+      {% for f in d.fix_first['items'] %}
+      <li class="py-1.5 text-xs" data-fix="{{ f.rule_id }}">
+        <div class="flex flex-wrap items-baseline gap-x-2">
+          <span class="tnum w-4 text-slate-400">{{ loop.index }}</span>{{ sev_badge(f.severity, f.severity_default) }}
+          <a class="font-mono font-semibold text-indigo-700 hover:underline dark:text-indigo-300" href="{{ u('/rules/' ~ f.rule_id) }}">{{ f.rule_id }}</a>
+          <span class="font-medium">{{ f.title }}</span><span class="text-slate-500 dark:text-slate-400">{{ f.category_name }}</span>
+          <a class="ml-auto text-indigo-600 hover:underline dark:text-indigo-300" href="{{ u('/findings', repo=r.key, rule=f.rule_id, status='FAIL') }}">{{ f.places }} finding{{ '' if f.places == 1 else 's' }}</a>
+        </div>
+        {% if f.where %}<div class="ml-6 text-[11px] text-slate-500 dark:text-slate-400">in {{ f.where | join(', ') }}{% if f.places > f.where | length %} and {{ f.places - (f.where | length) }} more{% endif %}</div>{% endif %}
+        <div class="ml-6 text-slate-700 dark:text-slate-300">{{ f.message }}</div>
+        {% if f.remediation %}<p class="ml-6 mt-0.5 rounded bg-amber-50 px-2 py-1 text-amber-900 dark:bg-amber-900/20 dark:text-amber-100"><b>Fix:</b> {{ f.remediation }}</p>{% endif %}
+      </li>
+      {% endfor %}
+    </ol>
+    {% if d.fix_first.total > d.fix_first.shown %}<p class="mt-1 text-xs"><a class="text-indigo-600 hover:underline dark:text-indigo-300" href="{{ u('/findings', repo=r.key, status='FAIL') }}">All {{ d.fix_first.total }} failing rules</a></p>{% endif %}
+    {% else %}<p class="py-4 text-center text-xs text-slate-500">Nothing to fix: no rule fails for this repository.</p>{% endif %}
+  </div>
+  <div class="space-y-3">
+    <div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
+      <h2 class="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Score by category</h2>
+      <ul class="space-y-1.5" data-score-breakdown>
+        {% for c in d.categories %}
+        <li class="text-xs"><div class="flex items-center justify-between gap-2"><a class="font-medium hover:underline" href="#cat-{{ c.code }}">{{ c.name }}</a>
+            <span class="text-slate-500 dark:text-slate-400">{% if c.counts.get('FAIL') %}<a class="font-semibold text-red-600 hover:underline dark:text-red-400" href="{{ u('/findings', repo=r.key, category=c.code, status='FAIL') }}">{{ c.counts['FAIL'] }} fail</a>{% endif %}{% if c.counts.get('WARN') %} {{ c.counts['WARN'] }} warn{% endif %}</span></div>
+          {{ bar(c.rate) }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    <div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
+      <h2 class="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Score across scans</h2>
+      {% if d.trend | length > 1 %}<div class="h-32"><canvas id="repo-trend" aria-label="Score and status of this repository across scans" role="img"></canvas></div>
+      <p class="mt-1 text-center text-[11px] text-slate-500">{{ d.trend | length }} scans. Click a point to open that scan.</p>
+      {% else %}<p class="py-4 text-center text-xs text-slate-500">A trend appears once this repository has been scanned at least twice.</p>{% endif %}
+    </div>
+  </div>
+</section>
+{% if lin and not lin.summary.empty %}
+<section class="mt-4" aria-label="Lineage preview">
+  <div class="mb-1 flex items-center gap-3"><h2 class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Lineage: repository to pipelines to environments</h2>
+    <a class="ml-auto text-xs text-indigo-600 hover:underline dark:text-indigo-300" href="{{ u('/lineage/' ~ r.project ~ '/' ~ r.repo) }}">Open the full lineage</a></div>
+  {{ lineage_flow(lin, true) }}
+</section>
+{% endif %}
+
+<section class="mt-4 grid gap-3 md:grid-cols-3">
   <div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
     <h2 class="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Test state</h2>
     <div class="flex items-center gap-2">{{ test_badge(r.test_state) }}{% if r.coverage is not none %}<span class="tnum text-xs">coverage {{ r.coverage | pct }}</span>{% endif %}</div>
@@ -75,7 +126,7 @@
     <div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
       <div class="flex flex-wrap items-center gap-2">
         <a class="font-medium text-indigo-700 hover:underline dark:text-indigo-300" href="{{ p.url | safe_url }}" target="_blank" rel="noopener noreferrer">{{ p.name }}</a>
-        <span class="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] dark:bg-slate-700">{{ p.badge }}</span>
+        {{ platform_badge(p.platform) }}
         {% if p.retire_reason %}<span class="text-[11px] text-amber-600 dark:text-amber-400" title="{{ p.retire_reason }}">candidate to retire: {{ p.retire_reason }}</span>{% endif %}
         {% if not p.definition_in_source_control %}<span class="text-[11px] text-amber-600 dark:text-amber-400">not in source control</span>{% endif %}
         {% if p.run_stats_90d and p.run_stats_90d.total %}<span class="tnum ml-auto text-xs text-slate-500">{{ p.run_stats_90d.succeeded }}/{{ p.run_stats_90d.total }} runs ok (90d)</span>{% endif %}
@@ -102,7 +153,7 @@
     <label class="ml-auto flex items-center gap-1 text-xs"><input id="show-pass" type="checkbox" class="rounded"> show passing and not applicable</label>
   </div>
   {% for c in d.categories %}
-  <div class="mb-3 rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
+  <div id="cat-{{ c.code }}" class="mb-3 rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
     <div class="flex items-center gap-3 border-b border-slate-200 px-3 py-2 dark:border-slate-700">
       <h3 class="font-semibold">{{ c.name }}</h3>
       {{ bar(c.rate) }}
@@ -128,4 +179,7 @@
   </div>
   {% endfor %}
 </section>
+{% endblock %}
+{% block scripts %}
+<script type="application/json" id="page-data">{{ {'data': {'trend': d.trend}, 'scan': scan_param, 'repo': d.repo.key} | tojson_safe }}</script>
 {% endblock %}

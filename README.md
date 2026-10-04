@@ -230,7 +230,7 @@ rule engine (61 rules, registry + @rule)  ->  findings  ->  scoring + waivers  -
 FastAPI + Jinja + HTMX + Chart.js dashboard   and   /api/v1 JSON API
 ```
 
-Pages: Overview (with "Top reasons" and the non-compliant repos), Repos (filter/sort/CSV, a "Why" column), Repo detail ("Why this repo is ..." box), Findings, Rules (+drill-down), Testing, Deploy targets, Migration readiness, Scans, Lineage (last tab, with CSV/Excel export). Every number links to the findings behind it. JSON mirrors live under `/api/v1/` (see `/api/docs`).
+Pages: Overview (status, severity, migration donuts; compliance by project and by owner; trend; top failing rules and reasons; every chart and tile is clickable and opens the filtered list), Repos (filter chips, sortable columns, pagination, a column chooser, CSV, a "Why" column), Repo detail ("Why this repo is ..." box, "Fix first" list, score by category, score trend, lineage preview), Findings, Rules (+drill-down), Testing, Deploy targets, Migration readiness, Scans, Lineage (last tab, with CSV/Excel export). Every number links to the findings behind it. JSON mirrors live under `/api/v1/` (see `/api/docs`).
 
 Scoring: `score = 100 * sum(weight x credit) / sum(weight x applicable)` with critical 10, high 5, medium 3, low 1 (defaults; severity, category and WARN weights are configurable under `scoring:` in `config/policy.yaml`). A repo is **NON_COMPLIANT** with any critical failure, otherwise **AT_RISK** below 80 or with any high failure, otherwise **COMPLIANT**. Waivers turn failures into WAIVED until they expire.
 
@@ -271,7 +271,8 @@ repo (provider badge, default branch, service connection)
             -> last deployment per stage (version, artifact version, date, result, who triggered it: display name only)
 ```
 
-* List view: one row per repo with a compact chain (pipelines -> releases -> environment chips with the last-deploy status); open a row (`<details>`, loaded on first open, no inline script) for the full chain, or use `/lineage/{project}/{repo}` for one repo (linked from the Repos table and the repo page). Filters: project, code host, deploy target, environment tier, has prod deployment (a prod stage whose last deployment succeeded), orphans only, search (repo, pipeline, release, environment, service connection and target resource names), plus the scan selector.
+* **Flow view** (default on the repo page, `?view=table` for the table): Repo -> pipelines (ADO YAML / ADO Classic / GitHub Actions badge, last run) -> releases / deploy workflows -> environment stages in order (tier colour, target icons, approval and ServiceNow badges, last-deploy chip), drawn as connected cards with plain CSS connectors. Downstream triggers (`workflow_run`, pipeline completion) are dashed side branches; each card shows its failing-rule count linking to the matching findings. The frame scrolls horizontally inside the card; a compact flow is previewed on the repo page.
+* List view: a sortable, paginated table with one row per repo and a compact chain (pipelines -> releases -> environment chips with the last-deploy status); the **Flow** button of a row loads its flow on first open (no inline script), or use `/lineage/{project}/{repo}` for one repo (linked from the Repos table and the repo page). Filters: project, code host, deploy target, environment tier, has prod deployment (a prod stage whose last deployment succeeded), orphans only, search (repo, pipeline, release, environment, service connection and target resource names), plus the scan selector.
 * **Orphans**: pipelines whose repository cannot be resolved, releases with no linked build, and repos without any pipeline or release. A GitHub repo that no Azure DevOps pipeline builds is invisible to this scan by design (ADR-13); the page says so.
 * **Unknown is not "never".** A stage whose deployment data could not be collected shows `unknown (not collected)`; `never deployed` only appears when the lookup succeeded and found nothing. Failures are collection errors (see Scans), never a crash.
 * Data: reuses what the scan already collects (definitions, expanded YAML, environments and checks, service connections, build runs) plus read-only GETs for the last deployments (ADR-14): two calls per classic release definition, one call per YAML environment. `LINEAGE_ENABLED=false` skips them (stages show as unknown); `LINEAGE_DEPLOYMENTS_TOP` sizes the lookups.
@@ -399,6 +400,10 @@ The job installs from the hash-checked lockfile, then runs `pch doctor` and `pch
 | 3 | database not ready (not at migration head, unreachable, driver missing) |
 | 4 | another scan (or prune) holds the scan lock |
 | 5 | interrupted (SIGTERM/SIGINT) or timed out; the scan row is `failed` and the lock released |
+
+## Tables
+
+Repos, Findings, Rules and the Lineage list share the same behaviour, all through GET query strings (links work without JavaScript, HTMX only swaps the results region): a sticky header, sorting on every meaningful column (`sort` and `dir`, whitelisted keys), server-side pagination (`page`, `per_page` of 25, 50, 100 or 200; the page keeps filters and sort; total count and a keyboard-reachable pager), active **filter chips** (each removable, plus "Clear all") and a **Columns** chooser whose choice is stored per viewer in `localStorage` (optional: without it every column shows). Invalid values return 400 (pages) or 422 (API). CSV/Excel exports honour the filters, never the page. Repos also filter by `owner` and `migration` (`ado_only`, `in_progress`, `migrated`, `none`); Findings by `pipeline` and `stage`.
 
 ## Roadmap
 

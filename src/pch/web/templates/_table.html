@@ -1,0 +1,69 @@
+{# Shared list-page pieces. Import with context: {% from "_table.html" import pager, chips_bar, sort_th, plain_th, col_chooser with context %}.
+   `path` is the page path, `params` the dict every link carries (filters, scan, sort, dir, per_page); `page` is added per link.
+   Sorting, paging and filtering are plain GET links (no script needed); HTMX only swaps the #results region when present. #}
+
+{% macro swap(url) -%}hx-get="{{ url }}" hx-target="#results" hx-select="#results" hx-swap="outerHTML" hx-push-url="true"{%- endmacro %}
+
+{# Active filters as removable chips (plain links: they reload the page so the filter form shows the new state) #}
+{% macro chips_bar(chips, clear) %}
+{% if chips %}
+<div class="mb-2 flex flex-wrap items-center gap-1.5" role="group" aria-label="Active filters">
+  {% for c in chips %}
+  <span class="inline-flex items-center gap-1 rounded-full border border-indigo-300 bg-indigo-50 py-0.5 pl-2 pr-0.5 text-xs text-indigo-900 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-100" data-chip="{{ c.param }}">
+    <span>{{ c.label }}: <b>{{ c.value }}</b></span>
+    <a href="{{ c.remove }}" class="flex h-5 w-5 items-center justify-center rounded-full hover:bg-indigo-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:hover:bg-indigo-800" aria-label="Remove filter {{ c.label }}: {{ c.value }}"><span aria-hidden="true">×</span></a>
+  </span>
+  {% endfor %}
+  <a href="{{ clear }}" class="text-xs text-indigo-700 underline hover:no-underline dark:text-indigo-300">Clear all</a>
+</div>
+{% endif %}
+{% endmacro %}
+
+{% macro pager(pg, path, params) %}
+<nav class="pager flex flex-wrap items-center gap-x-4 gap-y-2 py-2 text-xs text-slate-600 dark:text-slate-300" aria-label="Pagination">
+  <span class="tnum" role="status">{% if pg.total %}Showing {{ pg.start }}–{{ pg.end }} of {{ pg.total }}{% else %}0 results{% endif %}</span>
+  {% if pg.pages > 1 %}
+  <ul class="flex flex-wrap items-center gap-1">
+    {% macro link(n, text, label) %}{% set url = path ~ '?' ~ qs(params, page=n) %}<li><a href="{{ url }}" {{ swap(url) }} class="inline-block min-w-[2rem] rounded border border-slate-300 px-2 py-1 text-center hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-slate-600 dark:hover:bg-slate-700" aria-label="{{ label }}">{{ text }}</a></li>{% endmacro %}
+    {% if pg.has_prev %}{{ link(pg.page - 1, '‹ Prev', 'Previous page') }}{% endif %}
+    {% for n in pg.window() %}
+      {% if n is none %}<li aria-hidden="true" class="px-1">…</li>
+      {% elif n == pg.page %}<li><span aria-current="page" class="inline-block min-w-[2rem] rounded bg-indigo-600 px-2 py-1 text-center font-semibold text-white">{{ n }}</span></li>
+      {% else %}{{ link(n, n, 'Page ' ~ n) }}{% endif %}
+    {% endfor %}
+    {% if pg.has_next %}{{ link(pg.page + 1, 'Next ›', 'Next page') }}{% endif %}
+  </ul>
+  {% endif %}
+  <div class="ml-auto flex items-center gap-1" role="group" aria-label="Rows per page">
+    <span>Rows per page</span>
+    {% for n in [25, 50, 100, 200] %}
+      {% if n == pg.per_page %}<span aria-current="true" class="rounded bg-slate-200 px-2 py-1 font-semibold dark:bg-slate-600">{{ n }}</span>
+      {% else %}{% set url = path ~ '?' ~ qs(params, per_page=n, page=none) %}<a href="{{ url }}" {{ swap(url) }} class="rounded border border-slate-300 px-2 py-1 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-slate-600 dark:hover:bg-slate-700">{{ n }}</a>{% endif %}
+    {% endfor %}
+  </div>
+</nav>
+{% endmacro %}
+
+{% macro th_cls(extra='') -%}px-2 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 {{ extra }}{%- endmacro %}
+
+{% macro sort_th(col, label, path, params, sort, dir, cls='') %}
+{%- set nxt = 'desc' if sort == col and dir == 'asc' else 'asc' -%}
+{%- set url = path ~ '?' ~ qs(params, sort=col, dir=nxt, page=none) -%}
+<th scope="col" data-col="{{ col }}" class="{{ th_cls(cls) }}" aria-sort="{{ ('ascending' if dir == 'asc' else 'descending') if sort == col else 'none' }}">
+  <a href="{{ url }}" {{ swap(url) }} class="hover:text-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:hover:text-indigo-300" title="Sort by {{ label }}">{{ label }}{% if sort == col %}<span aria-hidden="true"> {{ '▲' if dir == 'asc' else '▼' }}</span>{% endif %}</a></th>
+{% endmacro %}
+
+{% macro plain_th(col, label, cls='') %}<th scope="col" data-col="{{ col }}" class="{{ th_cls(cls) }}">{{ label }}</th>{% endmacro %}
+
+{# Column chooser: the choice is kept per viewer in localStorage by static/app.js (try/catch; without it every column shows). #}
+{% macro col_chooser(table_id, cols, off='') %}
+<details class="relative text-xs" data-col-chooser="{{ table_id }}" data-default-off="{{ off }}">
+  <summary class="cursor-pointer rounded border border-slate-300 px-2 py-1 hover:bg-slate-100 dark:border-slate-600 dark:hover:bg-slate-700">Columns</summary>
+  <div class="absolute right-0 z-30 mt-1 w-52 rounded-lg border border-slate-200 bg-white p-2 shadow-lg dark:border-slate-600 dark:bg-slate-800">
+    {% for key, label in cols %}
+    <label class="flex items-center gap-2 py-0.5"><input type="checkbox" class="rounded" data-col-toggle="{{ key }}" checked> {{ label }}</label>
+    {% endfor %}
+    <button type="button" data-col-reset class="mt-1 text-indigo-700 underline dark:text-indigo-300">Show all</button>
+  </div>
+</details>
+{% endmacro %}
