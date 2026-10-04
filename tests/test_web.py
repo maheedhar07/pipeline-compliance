@@ -121,12 +121,19 @@ def test_scans_and_scan_param(client):
     assert client.get("/", params={"scan": "scan-1"}).status_code == 200
 
 
+# The complete write surface of the app (ADR-19): feature switches, in the app's own database. Adding to this set needs a decision record.
+WRITE_ROUTES = {"/settings/features/{key}", "/settings/features/{key}/reset"}
+
+
 def test_health_and_report_only(client):
     assert client.get("/api/v1/health").json()["status"] == "ok"
     app = client.app
     for route in app.routes:
         methods = getattr(route, "methods", None) or set()
-        assert methods <= {"GET", "HEAD"}, f"{route.path} exposes {methods}"  # no mutating endpoints at all
+        if route.path in WRITE_ROUTES:
+            assert methods == {"POST"}, route.path
+        else:
+            assert methods <= {"GET", "HEAD"}, f"{route.path} exposes {methods}"  # no other mutating endpoints at all (ADR-19)
 
 
 def test_empty_database_shows_guidance(tmp_path):

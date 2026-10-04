@@ -1,4 +1,4 @@
-"""Pure-ASGI hardening layers: security headers + last-resort 500, GET/HEAD-only, trusted hosts, minimal error pages.
+"""Pure-ASGI hardening layers: security headers + last-resort 500, GET/HEAD-only (plus the feature-switch POSTs), trusted hosts, minimal error pages.
 
 Order (outermost first): SecurityMiddleware -> TrustedHostMiddleware -> MethodGuardMiddleware -> AuthMiddleware -> app.
 SecurityMiddleware is outermost so *every* response (401/403/404/405/500, static, rejected hosts) carries the headers.
@@ -30,7 +30,7 @@ CSP = (
 )
 STATIC_HEADERS: list[tuple[bytes, bytes]] = [
     (b"x-content-type-options", b"nosniff"),
-    (b"referrer-policy", b"no-referrer"),
+    (b"referrer-policy", b"same-origin"),
     (b"x-frame-options", b"DENY"),
     (b"permissions-policy", b"accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"),
     (b"cross-origin-opener-policy", b"same-origin"),
@@ -40,6 +40,9 @@ HSTS = (b"strict-transport-security", b"max-age=31536000; includeSubDomains")
 IMMUTABLE = b"public, max-age=31536000, immutable"
 VERSIONED = re.compile(r"-\d+\.\d+\.\d+[.\-]")
 ALLOWED_METHODS = ("GET", "HEAD")
+# The ONLY write surface of the app (ADR-19): the feature-switch forms on the Settings page, which write to the app's own database.
+# Every other non-GET/HEAD request is refused here, before authentication. The route itself still requires an admin role, a CSRF token and same-origin.
+WRITE_PATH = re.compile(r"^/settings/features/[a-z][a-z0-9_]{0,39}(?:/reset)?$")
 GENERIC_500 = ("Something went wrong", "An internal error occurred. Quote the reference below when reporting it.")
 
 
@@ -171,9 +174,15 @@ class MethodGuardMiddleware:
         self.app = app
 
     async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
-        if scope["type"] == "http" and scope.get("method") not in ALLOWED_METHODS:
-            await send_error(scope, send, 405, "Method not allowed", "This application is read-only.", [(b"allow", b"GET, HEAD")])
-            return
+        if scope["type"] == "http":
+            method = scope.get("method")
+            if method == "POST" and WRITE_PATH.fullmatch(scope.get("path", "")):
+                await self.app(scope, receive, send)  # the feature-switch forms; authorised and CSRF-checked by the route
+                return
+            if method not in ALLOWED_METHODS:
+                await send_error(scope, send, 405, "Method not allowed", "This application is read-only except for the feature switches on the Settings page.",
+                                 [(b"allow", b"GET, HEAD")])
+                return
         await self.app(scope, receive, send)
 
 

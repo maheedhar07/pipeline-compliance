@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
+from pch import features as F
 from pch.engine.migration import STATUS_LABEL as MIGRATION_LABEL
 from pch.engine.migration import migration_status
 from pch.engine.reasons import empty_reasons
@@ -190,7 +191,8 @@ def reasons_text(items: list[dict[str, Any]]) -> str:
     return "; ".join(i["text"] for i in items)
 
 
-def csv_rows(rows: list[dict[str, Any]]) -> list[list[Any]]:
+def csv_rows(rows: list[dict[str, Any]], migration: bool = True) -> list[list[Any]]:
+    """``migration=False`` (the Migration switch is off) leaves the readiness column out."""
     head = ["project", "repo", "provider", "owner", "platforms", "targets", "test_state", "coverage", "sonar_gate", "aikido_criticals", "score", "status", "critical_fails", "high_fails", "unknowns", "migration_score", "reasons"]
     out: list[list[Any]] = [head]
     for r in rows:
@@ -198,6 +200,9 @@ def csv_rows(rows: list[dict[str, Any]]) -> list[list[Any]]:
                     "" if r["coverage"] is None else round(r["coverage"], 1), r["sonar_gate"] or "", "" if r["aikido_criticals"] is None else r["aikido_criticals"],
                     "" if r["score"] is None else r["score"], r["status"], r["critical_fails"], r["high_fails"], r["unknowns"],
                     "" if r["migration_score"] is None else r["migration_score"], reasons_text(r["reasons"])])
+    if not migration:
+        i = head.index("migration_score")
+        return [row[:i] + row[i + 1:] for row in out]
     return out
 
 
@@ -208,10 +213,18 @@ def policy_effects(s: Session, scan_id: str) -> dict[str, Any]:
     return dict((row.summary or {}).get("policy") or {}) if row else {}
 
 
+def scan_features(s: Session, scan_id: str) -> dict[str, bool]:
+    """The Settings switches this scan was made with (``scans.summary["features"]``); scans from before the switches existed ran with everything on."""
+    row = store.get_scan(s, scan_id)
+    snap = (row.summary or {}).get("features") if row else None
+    return {**F.ALL_ON, **{k: bool(v) for k, v in snap.items() if k in F.ALL_ON}} if isinstance(snap, dict) else dict(F.ALL_ON)
+
+
 def rule_stats(s: Session, scan_id: str, rows: list[RepoResultRow] | None = None) -> list[dict[str, Any]]:
     """Per-rule status counts across repos (worst finding per repo/rule)."""
     rows = rows if rows is not None else store.repo_results(s, scan_id)
     eff = policy_effects(s, scan_id)
+    snap = scan_features(s, scan_id)
     disabled = set(eff.get("disabled", []))
     sev_over = eff.get("severity", {})
     counts: dict[str, Counter[str]] = defaultdict(Counter)
@@ -225,7 +238,7 @@ def rule_stats(s: Session, scan_id: str, rows: list[RepoResultRow] | None = None
         out.append({
             "id": meta.id, "title": meta.title, "category": meta.category, "category_name": meta.category_name,
             "severity": sev_over.get(meta.id, {}).get("to", meta.severity.value), "severity_default": sev_over[meta.id]["from"] if meta.id in sev_over else None,
-            "disabled": meta.id in disabled, "scope": meta.scope, "pass": c["PASS"], "fail": c["FAIL"], "warn": c["WARN"], "unknown": c["UNKNOWN"], "waived": c["WAIVED"],
+            "disabled": meta.id in disabled, "off_by_settings": [F.BY_KEY[k].label for k in F.feature_off_for_rule(meta.requires_sources, snap)], "scope": meta.scope, "pass": c["PASS"], "fail": c["FAIL"], "warn": c["WARN"], "unknown": c["UNKNOWN"], "waived": c["WAIVED"],
             "applicable": scored + c["UNKNOWN"] + c["WAIVED"],
             "pass_rate": round(100 * (c["PASS"] + 0.5 * c["WARN"]) / scored, 1) if scored else None,
         })
@@ -256,7 +269,7 @@ def rule_detail(s: Session, scan_id: str, rule_id: str) -> dict[str, Any] | None
     prov = provider_map(s, scan_id)
     return {
         "rule": {"id": meta.id, "title": meta.title, "category": meta.category, "category_name": meta.category_name, "severity": stats["severity"],
-                 "severity_default": stats["severity_default"], "disabled": stats["disabled"], "params": meta.params, "scope": meta.scope, "rationale": meta.rationale, "remediation": meta.remediation,
+                 "severity_default": stats["severity_default"], "disabled": stats["disabled"], "off_by_settings": stats["off_by_settings"], "params": meta.params, "scope": meta.scope, "rationale": meta.rationale, "remediation": meta.remediation,
                  "platforms": sorted(meta.platforms or []), "targets": sorted(meta.targets or []), "tiers": sorted(meta.tiers or [])},
         "stats": stats,
         "findings": [finding_dict(f, providers=prov, eff=eff) for f in fs if f.status != "PASS"][:500],

@@ -4,7 +4,7 @@
 {% block content %}
 {% set r = d.rule %}{% set st = d.stats %}
 <nav class="mb-2 text-xs text-slate-500"><a class="hover:underline" href="{{ u('/rules') }}">Rules</a> / {{ r.id }}</nav>
-<div class="mb-3 flex flex-wrap items-center gap-3"><h1 class="text-lg font-semibold"><span class="font-mono">{{ r.id }}</span> {{ r.title }}</h1>{{ sev_badge(r.severity, r.severity_default) }}{% if r.disabled %}<span class="rounded bg-slate-200 px-1.5 py-0.5 text-[11px] font-semibold dark:bg-slate-700">disabled by policy</span>{% endif %}
+<div class="mb-3 flex flex-wrap items-center gap-3"><h1 class="text-lg font-semibold"><span class="font-mono">{{ r.id }}</span> {{ r.title }}</h1>{{ sev_badge(r.severity, r.severity_default) }}{% if r.disabled %}<span class="rounded bg-slate-200 px-1.5 py-0.5 text-[11px] font-semibold dark:bg-slate-700">disabled by policy</span>{% endif %}{% if r.off_by_settings %}<span class="rounded bg-slate-200 px-1.5 py-0.5 text-[11px] font-semibold dark:bg-slate-700" title="Not evaluated and not scored in this scan">off (Settings)</span>{% endif %}
   <a class="ml-auto text-xs text-indigo-600 hover:underline dark:text-indigo-300" href="/api/v1/rules/{{ r.id }}">JSON</a></div>
 <section class="grid gap-3 md:grid-cols-3">
   <div class="rounded-lg border border-slate-200 bg-white p-3 md:col-span-2 dark:border-slate-700 dark:bg-slate-800">

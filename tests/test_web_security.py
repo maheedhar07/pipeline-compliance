@@ -325,7 +325,7 @@ def test_doctor_auth_and_guard_checks():
 
 
 # ------------------------------------------------------------------ headers
-REQUIRED = {"x-content-type-options": "nosniff", "referrer-policy": "no-referrer", "x-frame-options": "DENY", "cross-origin-opener-policy": "same-origin"}
+REQUIRED = {"x-content-type-options": "nosniff", "referrer-policy": "same-origin", "x-frame-options": "DENY", "cross-origin-opener-policy": "same-origin"}
 
 
 def assert_secure_headers(r, *, static=False):
@@ -429,9 +429,10 @@ def test_head_works(none_client):
     assert none_client.head("/repos").status_code in (200, 405)  # router decides; never an error page with data
 
 
-def test_no_mutating_routes(none_client):
-    for route in none_client.app.routes:
-        assert (getattr(route, "methods", None) or set()) <= {"GET", "HEAD"}, route.path
+def test_write_routes_are_an_explicit_allowlist(none_client):
+    """The only non-GET routes are the two feature-switch POSTs (ADR-19); anything else must be added here AND to the method guard, with a decision record."""
+    writes = {r.path: set(r.methods) for r in none_client.app.routes if (getattr(r, "methods", None) or set()) - {"GET", "HEAD"}}
+    assert writes == {"/settings/features/{key}": {"POST"}, "/settings/features/{key}/reset": {"POST"}}
 
 
 def test_generic_500_no_leak(db, monkeypatch):

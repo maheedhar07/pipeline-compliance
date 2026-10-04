@@ -1,6 +1,9 @@
-"""FastAPI application factory: server-rendered pages + JSON API (report-only, no mutation endpoints).
+"""FastAPI application factory: server-rendered pages + JSON API (report-only toward every source system).
 
-Security layers (see pch.web.guard / auth / security): startup guard, security headers, trusted hosts, GET/HEAD only,
+The only write path is the Settings page (ADR-19): ``POST /settings/features/{key}[/reset]`` changes a feature switch in this app's OWN database.
+It needs an admin role, a CSRF token and a same-origin request; everything else is GET/HEAD.
+
+Security layers (see pch.web.guard / auth / security): startup guard, security headers, trusted hosts, GET/HEAD only (plus those two POSTs),
 authentication + role authorisation on everything except the health endpoints and /static/*.
 """
 
@@ -14,19 +17,28 @@ import itertools
 import json
 import logging
 import re
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Annotated, Any, Literal
-from urllib.parse import quote, urlencode
+from urllib.parse import parse_qs, quote, urlencode
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi import Path as PathParam
+from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.docs import get_swagger_ui_html
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from jinja2 import pass_context
@@ -35,17 +47,19 @@ from sqlalchemy.exc import InterfaceError, OperationalError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from pch import __version__
+from pch import features as F
 from pch.model.repo import PROVIDER_LABEL
 from pch.settings import Settings, get_settings
 from pch.store import repository as store
 from pch.store.db import dispose_engine, get_engine, session_scope
 from pch.timeutil import utcnow_naive
+from pch.web import csrf
 from pch.web import exports as X
 from pch.web import lineage_q as LQ
 from pch.web import queries as Q
 from pch.web import tables as T
 from pch.web.auth import AuthMiddleware, build_authenticator
-from pch.web.guard import assert_safe_to_serve
+from pch.web.guard import assert_safe_to_serve, guard_warnings
 from pch.web.health import ReadinessProbe
 from pch.web.security import (
     CSP,
@@ -55,9 +69,33 @@ from pch.web.security import (
     TrustedHostMiddleware,
     deny_auth,
     error_page,
+    principal_hash,
 )
 
 HERE = Path(__file__).parent
+# Fixed texts of the Settings write path (never built from input): shown on 400/403 pages.
+MSG_NOT_ADMIN = "You do not have permission to change settings."
+MSG_WRITES_DISABLED = "Changing settings is disabled on this deployment (no signing key is configured)."
+MSG_CROSS_SITE = "This request did not come from this site and was refused."
+MSG_TOKEN = "The form has expired or is invalid. Open the Settings page again and retry."
+MSG_BAD_FORM = "The submitted form is not valid."
+SAFE_DETAILS = {MSG_NOT_ADMIN, MSG_WRITES_DISABLED, MSG_CROSS_SITE, MSG_TOKEN, MSG_BAD_FORM}
+MAX_FORM_BYTES = 4096
+FLASH_CODES = {"saved", "reset", "nochange"}
+# Output keys that exist only because of the Migration switch; removed everywhere (pages, API, exports) while it is off.
+MIGRATION_KEYS = frozenset({"migration_score", "migration_status", "migration_label", "migration_blockers", "retire_reason", "migration_states", "no_pipeline_repos"})
+MIGRATION_SORTS = frozenset({"migration_score", "migration_status"})
+
+
+def strip_migration(obj: Any) -> Any:
+    """``obj`` without the migration fields (recursively through dicts and lists)."""
+    if isinstance(obj, dict):
+        return {k: strip_migration(v) for k, v in obj.items() if k not in MIGRATION_KEYS}
+    if isinstance(obj, list):
+        return [strip_migration(v) for v in obj]
+    return obj
+
+
 KNOWN_404 = {"no scans yet", "repo not found in this scan", "unknown rule", "not found", "no scans yet: run `pch seed-demo && pch scan --demo`",
              "this scan has no lineage data (it was made before the Lineage tab existed)", "lineage not found for this repo in this scan"}
 log = logging.getLogger("pch.web")
@@ -77,6 +115,7 @@ Limit = Annotated[int, Query(ge=1, le=1000)]
 ProjectPath = Annotated[str, PathParam(max_length=200)]
 RepoPath = Annotated[str, PathParam(max_length=200)]  # routed with {repo:path}: GitHub-hosted repos are "org/repo"
 RulePath = Annotated[str, PathParam(max_length=64)]
+FeatureKey = Annotated[str, PathParam(max_length=40)]
 Short = Annotated[str | None, Query(max_length=8)]  # tiny enumerations from <select> (an empty value means "all"): normalised, never an error
 MigState = Annotated[str | None, Query(max_length=16)]  # migration status filter
 Flag = Annotated[str | None, Query(max_length=8)]
@@ -140,6 +179,12 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
     app = FastAPI(title="Pipeline Compliance Hub", version=__version__, docs_url=None, redoc_url=None,
                   openapi_url=None if prod else "/openapi.json", lifespan=lifespan)
     app.state.db_url = db_url_
+    feature_defaults = F.load_feature_defaults(s_.config_dir / "features.yaml")  # strict: an invalid file stops the start (ConfigError)
+    signing = csrf.resolve_signing_key(s_)  # key=None: the Settings page is read-only (prod without SETTINGS_SIGNING_KEY)
+    authenticator = build_authenticator(s_)
+    app.state.signing = signing
+    for warning in guard_warnings(s_):
+        log.warning("settings: %s", warning)
     # Verify (or, per policy, migrate) the schema at startup: raises SchemaNotReadyError with a clear message in prod.
     # A database that is merely unreachable does not stop the app from starting: /health/live stays 200, /health/ready
     # reports 503 until it is back, and the engine re-checks the schema on the next request.
@@ -153,8 +198,25 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
     asset_v = _asset_version()
     docs_enabled = not prod
 
+    def request_flags(request: Request) -> dict[str, bool]:
+        """Effective feature switches (file defaults + database overrides), read once per request so a change applies to the very next page."""
+        got = getattr(request.state, "features", None)
+        if got is None:
+            try:
+                with session_scope(app.state.db_url) as db:
+                    got = F.effective_flags(db, feature_defaults)
+            except Exception as exc:  # noqa: BLE001 - an unreadable overrides table must not break error pages; the defaults apply
+                log.warning("feature overrides not readable (%s); using the features.yaml defaults", type(exc).__name__)
+                got = dict(feature_defaults)
+            request.state.features = got
+        return got
+
     def template_context(request: Request) -> dict[str, Any]:
-        return {"principal": getattr(request.state, "principal", None), "docs_enabled": docs_enabled, "asset_v": asset_v}
+        return {"principal": getattr(request.state, "principal", None), "docs_enabled": docs_enabled, "asset_v": asset_v, "features": request_flags(request)}
+
+    def require_migration(request: Request) -> None:
+        if not request_flags(request)["migration"]:
+            raise HTTPException(404, "not found")
 
     templates = Jinja2Templates(directory=HERE / "templates", context_processors=[template_context])
     env = templates.env
@@ -199,7 +261,8 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
             row = Q.resolve_scan(s, scan)
             if not row:
                 return no_data(request)
-            return templates.TemplateResponse(request, "overview.html", ctx(request, s, scan, data=Q.overview(s, row.id), nav="overview"))
+            data = Q.overview(s, row.id)
+            return templates.TemplateResponse(request, "overview.html", ctx(request, s, scan, data=data if request_flags(request)["migration"] else strip_migration(data), nav="overview"))
 
     def repo_filters(project, status, test_state, platform, target, sonar, q, provider=None, rule=None, owner=None, migration=None):
         return {"project": project, "status": status, "test_state": test_state, "platform": platform, "target": target, "sonar": sonar, "q": q, "provider": provider,
@@ -228,26 +291,33 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
             row = Q.resolve_scan(s, scan)
             if not row:
                 return no_data(request)
+            mig = request_flags(request)["migration"]
+            if not mig:  # the Migration switch is off: no migration filter or sort (ignored, never an error)
+                migration, sort = None, ("status" if sort in MIGRATION_SORTS else sort)
             filters = repo_filters(project, status, test_state, platform, target, sonar, q, provider, rule, owner, migration)
             rows = Q.repos(s, row.id, sort=sort, direction=dir, **filters)
             pg = T.slice_page(rows, page, per_page)
             params = table_params(filters, scan, sort, dir, per_page)
+            chips = [c for c in REPO_CHIPS if mig or c[0] != "migration"]
             return templates.TemplateResponse(request, "repos.html", ctx(
-                request, s, scan, rows=pg.items, pg=pg, filters=filters, sort=sort, dir=dir, options=Q.filter_options(s, row.id), nav="repos",
-                base={**filters, "scan": scan}, params=params, chips=T.chips("/repos", params, chip_defs(filters, REPO_CHIPS)),
-                clear=T.clear_url("/repos", params, [n for n, _ in REPO_CHIPS])))
+                request, s, scan, rows=strip_migration(pg.items) if not mig else pg.items, pg=pg, filters=filters, sort=sort, dir=dir, options=Q.filter_options(s, row.id), nav="repos",
+                base={**filters, "scan": scan}, params=params, chips=T.chips("/repos", params, chip_defs(filters, chips)),
+                clear=T.clear_url("/repos", params, [n for n, _ in chips])))
 
     @app.get("/repos.csv", response_class=PlainTextResponse)
-    def repos_csv(scan: ScanId = None, project: Text = None, status: Text = None, test_state: Text = None,
+    def repos_csv(request: Request, scan: ScanId = None, project: Text = None, status: Text = None, test_state: Text = None,
                   platform: Text = None, target: Text = None, sonar: Text = None, q: Text = None, provider: Text = None,
                   rule: Text = None, owner: Text = None, migration: MigState = None, sort: SortKey = "status", dir: Direction = "asc"):
+        mig = request_flags(request)["migration"]
+        if not mig:
+            migration, sort = None, ("status" if sort in MIGRATION_SORTS else sort)
         with session_scope(app.state.db_url) as s:
             row = Q.resolve_scan(s, scan)
             if not row:
                 raise HTTPException(404, "no scans yet")
             rows = Q.repos(s, row.id, sort=sort, direction=dir, **repo_filters(project, status, test_state, platform, target, sonar, q, provider, rule, owner, migration))
         buf = io.StringIO()
-        csv.writer(buf).writerows([[csv_cell(c) for c in r] for r in Q.csv_rows(rows)])
+        csv.writer(buf).writerows([[csv_cell(c) for c in r] for r in Q.csv_rows(rows, migration=mig)])
         return PlainTextResponse(buf.getvalue(), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=repos.csv"})
 
     @app.get("/repos/{project}/{repo:path}", response_class=HTMLResponse)
@@ -260,7 +330,7 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
             if d is None:
                 raise HTTPException(404, "repo not found in this scan")
             lin = LQ.lineage_repo(s, row.id, project, repo)  # compact flow preview (None for scans made before the Lineage tab)
-            return templates.TemplateResponse(request, "repo_detail.html", ctx(request, s, scan, d=d, lin=lin, nav="repos"))
+            return templates.TemplateResponse(request, "repo_detail.html", ctx(request, s, scan, d=d if request_flags(request)["migration"] else strip_migration(d), lin=lin, nav="repos"))
 
     RULE_CHIPS = [("category", "Category"), ("severity", "Severity"), ("failing", "Only"), ("q", "Search")]
 
@@ -333,11 +403,13 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
 
     @app.get("/migration", response_class=HTMLResponse)
     def page_migration(request: Request, scan: ScanId = None, state: MigState = None):
+        require_migration(request)
         with session_scope(app.state.db_url) as s:
             row = Q.resolve_scan(s, scan)
             if not row:
                 return no_data(request)
-            return templates.TemplateResponse(request, "migration.html", ctx(request, s, scan, data=Q.migration(s, row.id, state or None), nav="migration"))
+            return templates.TemplateResponse(request, "migration.html", ctx(
+                request, s, scan, data=Q.migration(s, row.id, state or None), nav="migration", scan_without_migration=not Q.scan_features(s, row.id)["migration"]))
 
     @app.get("/scans", response_class=HTMLResponse)
     def page_scans(request: Request, scan: ScanId = None, selected: ScanId = None):
@@ -425,6 +497,112 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
                      has_prod: Short = None, orphans: Flag = None):
         return lineage_export(scan, lineage_filters(project, provider, q, target, tier, has_prod, orphans), "xlsx")
 
+    # ------------------------------------------------------------------ Settings: feature switches (the only write path, ADR-19)
+    def current_principal(request: Request) -> Any:
+        return getattr(request.state, "principal", None)
+
+    def can_change(request: Request) -> bool:
+        p = current_principal(request)
+        return p is not None and authenticator.is_admin(p)
+
+    def read_only_reason(request: Request) -> str:
+        if not can_change(request):
+            if s_.auth_mode == "easyauth" and not s_.admin_roles:
+                return "No administrator role is configured (AUTH_ADMIN_ROLES is empty), so the switches are read-only for everyone."
+            roles = ", ".join(s_.admin_roles)
+            return "Only administrators can change these switches" + (f" (app role {roles})." if roles else ".")
+        if signing.key is None:
+            return "Changes are disabled on this deployment: no signing key is configured (SETTINGS_SIGNING_KEY). Ask the operator."
+        return ""
+
+    def token_for(request: Request, action: str, key: str) -> str:
+        assert signing.key is not None and current_principal(request) is not None  # callers check writability first
+        return csrf.make_token(signing.key, current_principal(request).id, f"{action}:{key}", csrf_now())
+
+    def csrf_now() -> float:
+        return time.time()
+
+    @app.get("/settings", response_class=HTMLResponse)
+    def page_settings(request: Request, scan: ScanId = None, flash: Annotated[str | None, Query(max_length=16)] = None,
+                      k: Annotated[str | None, Query(max_length=40)] = None):
+        with session_scope(app.state.db_url) as s:
+            states = F.effective_states(s, feature_defaults)
+            audit = F.audit_entries(s, 20)
+            row = Q.resolve_scan(s, scan)
+            scan_flags = Q.scan_features(s, row.id) if row else None
+            why = read_only_reason(request)
+            rows = []
+            for st in states:
+                seen = scan_flags[st.key] if scan_flags and st.timing == "next_scan" else None  # what the latest scan used
+                rows.append({"st": st, "pending": seen is not None and seen != st.enabled, "seen": seen,
+                             "set_token": "" if why else token_for(request, "set", st.key), "reset_token": "" if why or not st.overridden else token_for(request, "reset", st.key)})
+            message = ""
+            if flash in FLASH_CODES and k in F.BY_KEY:
+                st = next(x for x in states if x.key == k)
+                message = {"saved": f"Saved: {st.label} is now {'on' if st.enabled else 'off'}.", "reset": f"Reset: {st.label} is back to the default ({'on' if st.enabled else 'off'}).",
+                           "nochange": f"No change: {st.label} was already set that way."}[flash]
+            return templates.TemplateResponse(request, "settings.html", ctx(
+                request, s, scan, nav="settings", rows=rows, why=why, message=message, audit=audit,
+                admin_hint=", ".join(s_.admin_roles), key_generated=signing.generated))
+
+    async def read_form(request: Request) -> dict[str, str]:
+        """The urlencoded body (tiny and bounded). Anything else, or a repeated field, is a 400."""
+        if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/x-www-form-urlencoded":
+            raise HTTPException(400, MSG_BAD_FORM)
+        body = b""
+        async for chunk in request.stream():
+            body += chunk
+            if len(body) > MAX_FORM_BYTES:
+                raise HTTPException(400, MSG_BAD_FORM)
+        try:
+            parsed = parse_qs(body.decode("ascii"), keep_blank_values=True, max_num_fields=8)
+        except (UnicodeDecodeError, ValueError):
+            raise HTTPException(400, MSG_BAD_FORM) from None
+        if any(len(v) != 1 for v in parsed.values()):
+            raise HTTPException(400, MSG_BAD_FORM)
+        return {k: v[0] for k, v in parsed.items()}
+
+    async def write_feature(request: Request, key: str, action: str) -> Response:
+        """Checks, in order: admin role, known key, writes enabled, same-origin, CSRF token, value. Only then one audited database write."""
+        principal = current_principal(request)
+        if principal is None or not authenticator.is_admin(principal):
+            raise HTTPException(403, MSG_NOT_ADMIN)
+        if key not in F.BY_KEY:
+            raise HTTPException(404, "not found")
+        if signing.key is None:
+            raise HTTPException(403, MSG_WRITES_DISABLED)
+        if (problem := csrf.same_origin_problem({k.lower(): v for k, v in request.headers.items()})) is not None:
+            log.warning("settings write refused: %s (principal %s)", problem, principal_hash(principal))
+            raise HTTPException(403, MSG_CROSS_SITE)
+        form = await read_form(request)
+        if not csrf.verify_token(signing.key, principal.id, f"{action}:{key}", form.get("csrf_token"), csrf_now()):
+            log.warning("settings write refused: invalid or expired form token (principal %s)", principal_hash(principal))
+            raise HTTPException(403, MSG_TOKEN)
+        value: bool | None = None
+        if action == "set":
+            if form.get("value") not in F.VALUES:
+                raise HTTPException(400, MSG_BAD_FORM)
+            value = form["value"] == "on"
+        actor = F.Actor(principal.id, principal.name)
+
+        def write() -> bool:
+            with session_scope(app.state.db_url) as s:
+                return F.set_override(s, key, value, actor, "ui")
+
+        changed = await run_in_threadpool(write)
+        if changed:
+            log.info("feature switch changed: %s -> %s (principal %s)", key, "default" if value is None else "on" if value else "off", principal_hash(principal))
+        code = ("saved" if action == "set" else "reset") if changed else "nochange"
+        return RedirectResponse(f"/settings?{urlencode({'flash': code, 'k': key})}", status_code=303)
+
+    @app.post("/settings/features/{key}", include_in_schema=False)
+    async def post_feature_set(request: Request, key: FeatureKey):
+        return await write_feature(request, key, "set")
+
+    @app.post("/settings/features/{key}/reset", include_in_schema=False)
+    async def post_feature_reset(request: Request, key: FeatureKey):
+        return await write_feature(request, key, "reset")
+
     # ------------------------------------------------------------------ JSON API
     def api(fn):
         """Run fn(session, scan_row) and return JSON; 404 when there is no data."""
@@ -440,6 +618,10 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
                 return JSONResponse({"scan_id": row.id, **out} if isinstance(out, dict) else {"scan_id": row.id, "items": out})
 
         return run
+
+    def _strip_response(resp: JSONResponse) -> JSONResponse:
+        """A JSON API answer without the migration fields (the Migration switch is off)."""
+        return JSONResponse(strip_migration(json.loads(bytes(resp.body))), status_code=resp.status_code)
 
     @app.get("/api/v1/health")
     def api_health():
@@ -457,18 +639,29 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
         return JSONResponse({"status": "unavailable", "reason": code}, status_code=503)
 
     @app.get("/api/v1/overview")
-    def api_overview(scan: ScanId = None):
-        return api(lambda s, r: Q.overview(s, r.id))(scan)
+    def api_overview(request: Request, scan: ScanId = None):
+        mig = request_flags(request)["migration"]
+
+        def data(s, r):
+            d = Q.overview(s, r.id)
+            return d if mig else strip_migration(d)
+
+        return api(data)(scan)
 
     @app.get("/api/v1/repos")
-    def api_repos(scan: ScanId = None, project: Text = None, status: Text = None, test_state: Text = None,
+    def api_repos(request: Request, scan: ScanId = None, project: Text = None, status: Text = None, test_state: Text = None,
                   platform: Text = None, target: Text = None, sonar: Text = None, q: Text = None, provider: Text = None,
                   rule: Text = None, owner: Text = None, migration: MigState = None, sort: SortKey = "status", dir: Direction = "asc"):
-        return api(lambda s, r: {"repos": Q.repos(s, r.id, sort=sort, direction=dir, **repo_filters(project, status, test_state, platform, target, sonar, q, provider, rule, owner, migration))})(scan)
+        mig = request_flags(request)["migration"]
+        if not mig:
+            migration, sort = None, ("status" if sort in MIGRATION_SORTS else sort)
+        out = api(lambda s, r: {"repos": Q.repos(s, r.id, sort=sort, direction=dir, **repo_filters(project, status, test_state, platform, target, sonar, q, provider, rule, owner, migration))})
+        return out(scan) if mig else _strip_response(out(scan))
 
     @app.get("/api/v1/repos/{project}/{repo:path}")
-    def api_repo(project: ProjectPath, repo: RepoPath, scan: ScanId = None):
-        return api(lambda s, r: Q.repo_detail(s, r.id, project, repo))(scan)
+    def api_repo(request: Request, project: ProjectPath, repo: RepoPath, scan: ScanId = None):
+        out = api(lambda s, r: Q.repo_detail(s, r.id, project, repo))(scan)
+        return out if request_flags(request)["migration"] else _strip_response(out)
 
     @app.get("/api/v1/rules")
     def api_rules(scan: ScanId = None):
@@ -494,7 +687,8 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
         return api(lambda s, r: Q.targets(s, r.id))(scan)
 
     @app.get("/api/v1/migration")
-    def api_migration(scan: ScanId = None, state: MigState = None):
+    def api_migration(request: Request, scan: ScanId = None, state: MigState = None):
+        require_migration(request)
         return api(lambda s, r: Q.migration(s, r.id, state or None))(scan)
 
     @app.get("/api/v1/lineage")
@@ -527,8 +721,9 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error(request: Request, exc: StarletteHTTPException):
-        titles = {404: "Not found", 405: "Method not allowed", 400: "Bad request", 413: "Export too large"}
+        titles = {404: "Not found", 405: "Method not allowed", 400: "Bad request", 403: "Forbidden", 413: "Export too large"}
         msg = (exc.detail if (exc.status_code == 404 and isinstance(exc.detail, str) and exc.detail in KNOWN_404)
+               or (exc.status_code in (400, 403) and isinstance(exc.detail, str) and exc.detail in SAFE_DETAILS)  # fixed texts of the Settings write path
                or (exc.status_code == 413 and isinstance(exc.detail, str) and exc.detail.startswith("The export would contain"))  # server-built text: row limit + advice
                else titles.get(exc.status_code, "Request failed"))
         return error_response(request, exc.status_code, titles.get(exc.status_code, "Request failed"), msg, dict(getattr(exc, "headers", None) or {}) or None)
@@ -559,8 +754,6 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
             return page
 
     # ------------------------------------------------------------------ middleware (last added = outermost)
-    authenticator = build_authenticator(s_)
-
     async def deny(scope: dict, send: Any, status: int) -> None:
         await deny_auth(scope, send, status)
 
