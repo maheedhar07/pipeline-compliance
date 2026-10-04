@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pch.engine.helpers import ancestors
 from pch.engine.registry import rule, rule_params
 from pch.model.findings import RuleResult
 from pch.model.pipeline import Pipeline
@@ -86,7 +87,8 @@ def tst_004(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
     "TST-005", "Post-deployment smoke or health check exists", "medium", "stage",
     "Without a post-deploy check a broken release is only noticed by users.",
     {"classic": "Add a post-deployment gate (Invoke REST API / Azure Monitor) or a smoke-test task after the deploy.",
-     "yaml": "Add a smoke test step (curl /health) or an environment check after deployment."},
+     "yaml": "Add a smoke test step (curl /health) or an environment check after deployment.",
+     "gha": "Add a smoke-test step (curl --fail /health) to the deploy job, or a job that `needs` it."},
     tiers={"test", "uat", "prod"},
 )
 def tst_005(ctx, policy: Policy, t) -> RuleResult:
@@ -97,6 +99,10 @@ def tst_005(ctx, policy: Policy, t) -> RuleResult:
         return RuleResult.na("tier not in scope")
     if "smoke-test" in st.capabilities():
         return RuleResult.passed("smoke/health check step present")
+    if t.pipeline.platform == "gha":  # a later job that needs this one can verify it
+        later = [s.name for s in t.pipeline.stages if s is not st and st.name in {a.name for a in ancestors(t.pipeline, s)} and "smoke-test" in s.capabilities()]
+        if later:
+            return RuleResult.passed("a downstream job runs a smoke/health check", jobs=later)
     post_gates = [a for a in st.post_approvals if a.kind in ("gate", "servicenow")]
     if post_gates:
         return RuleResult.passed("post-deployment gate present", gates=[g.name for g in post_gates])

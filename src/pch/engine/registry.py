@@ -25,6 +25,15 @@ CATEGORY_NAMES = {
 
 RuleFn = Callable[..., RuleResult]
 
+# Rules whose verdict depends on the CONTENT of pipelines (steps, capabilities): when a pipeline calls a reusable workflow that could not be
+# read, or a pipeline source of the repo was unreadable, their FAIL becomes UNKNOWN (the missing steps might satisfy them). ADR-17.
+CONTENT_RULES = frozenset({"QLT-001", "QLT-002", "TST-004", "TST-005", "TST-006", "SUP-001", "SUP-005", "DEP-003", "DEP-004"})
+CONTENT_PREFIXES = ("TGT-",)
+
+
+def is_content_rule(rule_id: str) -> bool:
+    return rule_id in CONTENT_RULES or rule_id.startswith(CONTENT_PREFIXES)
+
 
 @dataclass
 class RuleMeta:

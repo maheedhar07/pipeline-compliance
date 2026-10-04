@@ -15,6 +15,8 @@ from pch.settings import Policy
       "Pipelines that have not succeeded in 90 days are likely abandoned and still hold permissions.",
       {"any": "Delete or disable abandoned pipelines; revoke their service connection access."})
 def hyg_001(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
+    if p.meta.get("callable_only"):
+        return RuleResult.na("reusable workflow: its runs are recorded under the workflows that call it")
     st = p.run_stats_90d
     if st is None:
         return RuleResult.unknown("run history was not collected")
@@ -27,6 +29,8 @@ def hyg_001(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
       "Chronically failing pipelines are ignored by their owners and hide real failures.",
       {"any": "Fix flaky tests/steps or retire the pipeline."})
 def hyg_002(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
+    if p.meta.get("callable_only"):
+        return RuleResult.na("reusable workflow: its runs are recorded under the workflows that call it")
     st = p.run_stats_90d
     if st is None:
         return RuleResult.unknown("run history was not collected")

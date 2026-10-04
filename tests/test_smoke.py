@@ -18,6 +18,6 @@ def test_config_loads():
 def test_rules_list_shows_all():
     res = CliRunner().invoke(app, ["rules", "list"])
     assert res.exit_code == 0
-    assert "56 rules" in res.output and "DEP-005" in res.output and "TGT-ADF-003" in res.output
+    assert "61 rules" in res.output and "DEP-005" in res.output and "TGT-ADF-003" in res.output
     only = CliRunner().invoke(app, ["rules", "list", "--category", "dep", "--json"])
     assert only.exit_code == 0 and only.output.count('"id"') == 6

@@ -19,6 +19,7 @@ WAIT = re.compile(r"--wait\b|--atomic\b|waitForExecution", re.I)
 _SLOT_REMEDIATION = {
     "classic": "Deploy to the 'staging' slot (Deploy to Slot) then add an App Service Manage task with Action=Swap Slots.",
     "yaml": "Set deployToSlotOrASE: true / slotName: staging on the deploy task, then AzureAppServiceManage@0 Action: Swap Slots.",
+    "gha": "Set `slot-name: staging` on azure/webapps-deploy (or Azure/functions-action), then `az webapp deployment slot swap` in a following step.",
 }
 _AUTH_REMEDIATION = {"any": "Use an Azure Resource Manager service connection (workload identity); remove publish profiles and basic-auth credentials."}
 
@@ -28,9 +29,9 @@ def _slot_deploy(stage: Stage) -> bool:
         if not s.enabled:
             continue
         v = {k.lower(): val for k, val in s.inputs.items()}
-        if str(v.get("deploytoslotorase", "")).lower() == "true" and v.get("slotname"):
+        if str(v.get("deploytoslotorase", "")).lower() == "true" and (v.get("slotname") or v.get("slot-name")):
             return True
-        if v.get("slotname") or v.get("deployslot") or v.get("slot"):
+        if v.get("slotname") or v.get("slot-name") or v.get("deployslot") or v.get("slot"):
             return True
         if "slot-deploy" in s.capabilities:
             return True
@@ -149,6 +150,7 @@ def tgt_adf_003(ctx, policy: Policy, t) -> RuleResult:
     if not arm:
         return RuleResult.unknown("ARM deployment step not identified")
     missing = [s.name for s in arm if not (str(s.inputs.get("overrideParameters", "")).strip() or str(s.inputs.get("csmParametersFile", "")).strip()
+               or any(str(s.inputs.get(k, "")).strip() for k in ("parameters", "armTemplateParameters", "parametersFile"))  # VERIFY: input names of Azure/data-factory-deploy-action
                or "-factoryName" in (s.inline_script or "") or "-p " in (s.inline_script or ""))]
     if missing:
         return RuleResult.failed("no environment overrides on: " + ", ".join(missing), steps=missing)
@@ -160,7 +162,7 @@ def tgt_adf_003(ctx, policy: Policy, t) -> RuleResult:
       {"any": "Use 'Synapse workspace deployment@2' with operation validateDeploy (or a separate validate step)."},
       targets={"synapse"})
 def tgt_syn_001(ctx: RepoContext, policy: Policy, t) -> RuleResult:
-    task_steps = [s for s in t.stage.steps() if s.enabled and s.task and s.task.lower().startswith("synapse workspace deployment")]
+    task_steps = [s for s in t.stage.steps() if s.enabled and s.task and s.task.lower().startswith(("synapse workspace deployment", "azure/synapse-workspace-deployment"))]
     if not task_steps:
         return RuleResult.failed("Synapse is not deployed with the workspace deployment task")
     caps = caps_with_builds(ctx, t.pipeline)

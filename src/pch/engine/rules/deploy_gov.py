@@ -10,6 +10,7 @@ from pch.engine.registry import rule, rule_params
 from pch.model.findings import RuleResult
 from pch.model.pipeline import Pipeline
 from pch.model.repo import RepoContext
+from pch.normalize.gha import env_unreadable
 from pch.settings import Policy
 
 
@@ -21,7 +22,8 @@ def _manual(st):
     "DEP-001", "Production deployments require manual approval", "critical", "stage",
     "A human gate before production is the baseline change-management control.",
     {"classic": "Release definition > Production stage > Pre-deployment conditions > enable Pre-deployment approvals with named approvers.",
-     "yaml": "Environment > Approvals and checks > add an Approval check on the production environment."},
+     "yaml": "Environment > Approvals and checks > add an Approval check on the production environment.",
+     "gha": "Repository Settings > Environments > production > enable 'Required reviewers' (a team), and reference the environment from the deploy job."},
     tiers={"prod"},
 )
 def dep_001(ctx, policy: Policy, t) -> RuleResult:
@@ -36,7 +38,9 @@ def dep_001(ctx, policy: Policy, t) -> RuleResult:
     return RuleResult.failed("no manual pre-deployment approval on a production stage")
 
 
-def p_unknown(ctx: RepoContext, t) -> bool:
+def p_unknown(ctx: RepoContext, t, what: str = "all") -> bool:
+    if t.pipeline.platform == "gha":
+        return bool(t.stage.env_name) and env_unreadable(t.pipeline, t.stage, what)
     return t.pipeline.platform == "ado_yaml" and bool(t.stage.env_name) and t.stage.env_name not in ctx.environments
 
 
@@ -44,7 +48,8 @@ def p_unknown(ctx: RepoContext, t) -> bool:
     "DEP-002", "Requester cannot approve their own production deployment", "critical", "stage",
     "Separation of duties: the person who triggers a production release must not be its approver.",
     {"classic": "Pre-deployment approvals > untick 'The user requesting a release can approve it'.",
-     "yaml": "Approval check > tick 'Requester cannot approve their own deployments'."},
+     "yaml": "Approval check > tick 'Requester cannot approve their own deployments'.",
+     "gha": "Environment > Required reviewers > tick 'Prevent self-review'."},
     tiers={"prod"},
 )
 def dep_002(ctx, policy: Policy, t) -> RuleResult:
@@ -64,8 +69,10 @@ def dep_002(ctx, policy: Policy, t) -> RuleResult:
     "DEP-003", "Production deployments are gated by a ServiceNow change request", "critical", "stage",
     "Production changes must be backed by an approved ServiceNow CRQ.",
     {"classic": "Add a ServiceNow Change Management gate to the pre-deployment gates of the production stage.",
-     "yaml": "Add a ServiceNow check to the production environment, or a ServiceNow-DevOps task before deployment."},
+     "yaml": "Add a ServiceNow check to the production environment, or a ServiceNow-DevOps task before deployment.",
+     "gha": "Install the ServiceNow DevOps GitHub App as a custom deployment protection rule on the production environment, or call ServiceNow/servicenow-devops-change before the deploy job."},
     tiers={"prod"},
+    params={"servicenow_app_pattern": r"(?i)servicenow|snow"},
 )
 def dep_003(ctx, policy: Policy, t) -> RuleResult:
     st = t.stage
@@ -76,6 +83,8 @@ def dep_003(ctx, policy: Policy, t) -> RuleResult:
     found = [a for a in st.gates + st.pre_approvals + st.post_approvals if a.kind == "servicenow"]
     if found or "gate:servicenow" in st.capabilities():
         return RuleResult.passed("ServiceNow change gate present", gate=found[0].name if found else "task")
+    if p_unknown(ctx, t, "custom"):
+        return RuleResult.unknown("custom deployment protection rules of the environment could not be read")
     return RuleResult.failed("no ServiceNow CRQ gate/check on a production stage")
 
 
@@ -83,7 +92,8 @@ def dep_003(ctx, policy: Policy, t) -> RuleResult:
     "DEP-004", "Production depends on a lower environment (no direct-to-prod)", "high", "stage",
     "Changes must be promoted through dev/test/UAT before production.",
     {"classic": "Production stage > Pre-deployment conditions > trigger 'After stage' = UAT (not 'After release').",
-     "yaml": "Set dependsOn on the production stage to the UAT/test stage."},
+     "yaml": "Set dependsOn on the production stage to the UAT/test stage.",
+     "gha": "Add `needs: <test/uat deploy job>` to the production job (or trigger the production workflow with workflow_run from the lower-environment workflow)."},
     tiers={"prod"},
     params={"lower_tiers": ["dev", "test", "uat"]},
 )
@@ -92,9 +102,15 @@ def dep_004(ctx, policy: Policy, t) -> RuleResult:
     if not st.is_deploy:
         return RuleResult.na("not a deployment stage")
     anc = ancestors(p, st)
-    lower = [a.name for a in anc if a.env_tier in rule_params(policy, "DEP-004")["lower_tiers"]]
+    tiers = rule_params(policy, "DEP-004")["lower_tiers"]
+    lower = [a.name for a in anc if a.env_tier in tiers]
     if lower:
         return RuleResult.passed("depends on lower environment(s)", lower=lower)
+    if p.platform == "gha":  # promotion across workflows: this one runs after a workflow that deployed to a lower environment
+        upstream = [q.name for q in ctx.pipelines if q.platform == "gha" and q.name in (p.meta.get("workflow_run") or [])
+                    and any(s.is_deploy and s.env_tier in tiers for s in q.stages)]
+        if upstream:
+            return RuleResult.passed("runs after workflow(s) that deploy to a lower environment (workflow_run)", lower=upstream)
     deployish = [a.name for a in anc if a.is_deploy]
     if deployish:
         return RuleResult.warn("depends on stages whose environment tier is unknown", stages=deployish)
@@ -157,6 +173,8 @@ def dep_005(ctx: RepoContext, policy: Policy) -> RuleResult:
 )
 def dep_006(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
     need = policy.prod_retention_days
+    if p.platform == "gha":
+        return RuleResult.na("GitHub Actions run and artifact retention is a repository/organisation setting (default 90 days) that is not read; deployment history stays in the Deployments API")
     if p.platform == "ado_classic_release":
         days = [s.retention_days for s in prod_stages(p) if s.retention_days is not None]
         have = min(days) if days else None

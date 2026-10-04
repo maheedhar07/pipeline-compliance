@@ -1,7 +1,7 @@
 # Pipeline Compliance Hub
 
 A **report-only** CI/CD compliance dashboard, built as a **template** you import and extend. It scores the pipelines of every repository
-(Azure DevOps Classic build, Classic release and YAML; SonarQube, Aikido and ServiceNow as supporting sources) against a catalog of 56
+(Azure DevOps Classic build, Classic release and YAML; SonarQube, Aikido and ServiceNow as supporting sources) against a catalog of 61
 deterministic Python rules and serves the result as a server-rendered dashboard plus a JSON API. GitHub Actions support is planned (interface only).
 
 * **Report-only.** It never writes to Azure DevOps, GitHub, SonarQube, Aikido or ServiceNow (a transport-level guard, tested), and compliance is decided by Python rules, never by an AI.
@@ -224,7 +224,7 @@ ADO / Sonar / Aikido / ServiceNow (read-only HTTP, retry/backoff, 429 aware, 8 p
 canonical model (Pipeline > Stage > Job > Step, Approval, RepoFacts)    <- normalize/capabilities.yaml (task -> capability tags)
         |  target + environment-tier detection, repo scan, test-state classification
         v
-rule engine (56 rules, registry + @rule)  ->  findings  ->  scoring + waivers  ->  snapshot in SQLite/Postgres/Azure SQL
+rule engine (61 rules, registry + @rule)  ->  findings  ->  scoring + waivers  ->  snapshot in SQLite/Postgres/Azure SQL
         v
 FastAPI + Jinja + HTMX + Chart.js dashboard   and   /api/v1 JSON API
 ```

@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from pch.engine.registry import RuleMeta, all_rules
+from pch.engine.registry import RuleMeta, all_rules, is_content_rule
 from pch.model.findings import Finding, RuleResult, Severity, Status
 from pch.model.pipeline import Pipeline, Stage
 from pch.model.repo import RepoContext
@@ -97,6 +97,20 @@ def _call(meta: RuleMeta, ctx: RepoContext, policy: Policy, target: object | Non
         return RuleResult.unknown(f"rule error: {type(exc).__name__}: {exc}")
 
 
+def _hedge(meta: RuleMeta, ctx: RepoContext, p: Pipeline | None, res: RuleResult) -> RuleResult:
+    """A FAIL that rests on pipeline content we could not read is UNKNOWN (never a FAIL for something unseen)."""
+    if res.status != Status.FAIL or not is_content_rule(meta.id):
+        return res
+    why: list[str] = []
+    pipes = [p] if p is not None else ctx.pipelines
+    for q in pipes:
+        why += [str(x) for x in q.meta.get("unresolved") or []]
+    why += ctx.unreadable
+    if not why:
+        return res
+    return RuleResult.unknown(f"{res.message} (not concluded: pipeline content could not be read: {'; '.join(why[:3])})", **res.evidence)
+
+
 def evaluate_rule(meta: RuleMeta, ctx: RepoContext, policy: Policy) -> list[Finding]:
     """Findings of one rule. A rule disabled by policy is not evaluated at all (no findings, not scored)."""
     out: list[Finding] = []
@@ -105,14 +119,14 @@ def evaluate_rule(meta: RuleMeta, ctx: RepoContext, policy: Policy) -> list[Find
     sev = effective_severity(meta, policy)
     if meta.scope == "repo":
         if _repo_matches(meta, ctx):
-            res = _call(meta, ctx, policy, None)
+            res = _hedge(meta, ctx, None, _call(meta, ctx, policy, None))
             if res.status != Status.NOT_APPLICABLE:
                 out.append(_finding(meta, ctx, res, None, None, sev))
     elif meta.scope == "pipeline":
         for p in ctx.pipelines:
             if not _pipeline_matches(meta, p):
                 continue
-            res = _call(meta, ctx, policy, p)
+            res = _hedge(meta, ctx, p, _call(meta, ctx, policy, p))
             if res.status != Status.NOT_APPLICABLE:
                 out.append(_finding(meta, ctx, res, p, None, sev))
     else:
@@ -122,7 +136,7 @@ def evaluate_rule(meta: RuleMeta, ctx: RepoContext, policy: Policy) -> list[Find
             for st in p.stages:
                 if not _stage_matches(meta, st):
                     continue
-                res = _call(meta, ctx, policy, StageTarget(p, st))
+                res = _hedge(meta, ctx, p, _call(meta, ctx, policy, StageTarget(p, st)))
                 if res.status != Status.NOT_APPLICABLE:
                     out.append(_finding(meta, ctx, res, p, st, sev))
     return out

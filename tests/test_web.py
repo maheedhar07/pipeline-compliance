@@ -84,7 +84,7 @@ def test_repo_detail_page_and_json(client):
 
 def test_rules_catalog_and_drilldown(client):
     rules = client.get("/api/v1/rules").json()["rules"]
-    assert len(rules) == 56
+    assert len(rules) == 61
     failing = next(r for r in rules if r["fail"] > 0)
     page = client.get(f"/rules/{failing['id']}")
     assert page.status_code == 200 and failing["id"] in page.text and "How to fix" in page.text

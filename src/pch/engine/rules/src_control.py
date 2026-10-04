@@ -8,8 +8,9 @@ from typing import Any
 from pch.engine.helpers import branch_allowed
 from pch.engine.registry import rule, rule_params
 from pch.model.findings import RuleResult
-from pch.model.pipeline import Pipeline
+from pch.model.pipeline import PROTECTED_BRANCHES, Pipeline
 from pch.model.repo import BranchProtection, RepoContext
+from pch.normalize.gha import env_unreadable
 from pch.settings import Policy
 
 
@@ -142,7 +143,8 @@ def src_004(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
     "SRC-005", "Production deploys only artifacts from a protected branch", "high", "stage",
     "Without an artifact-branch filter or branch-control check, any branch build can be deployed to production.",
     {"classic": "Release definition > Artifact > Continuous deployment trigger > Build branch filters: include only main/release/*.",
-     "yaml": "Add a 'Branch control' check on the production environment allowing only refs/heads/main and release/*."},
+     "yaml": "Add a 'Branch control' check on the production environment allowing only refs/heads/main and release/*.",
+     "gha": "Environment > Deployment branches and tags: 'Protected branches only' or selected branches (main, release/*)."},
     tiers={"prod"},
 )
 def src_005(ctx, policy: Policy, t) -> RuleResult:
@@ -151,10 +153,14 @@ def src_005(ctx, policy: Policy, t) -> RuleResult:
         return RuleResult.na("not a deployment stage")
     if p.platform == "ado_yaml" and st.env_name and st.env_name not in ctx.environments:
         return RuleResult.unknown("environment checks were not collected")
+    if p.platform == "gha" and st.env_name and env_unreadable(p, st, "branch"):
+        return RuleResult.unknown("the environment's deployment branch policy could not be read")
     filters = st.branch_filters
+    if PROTECTED_BRANCHES in filters:
+        return RuleResult.passed("the environment only accepts deployments from protected branches", filters=filters)
     if not filters:
         return RuleResult.failed("no artifact branch filter / branch-control check: any branch can deploy to production", filters=[])
-    bad = [f for f in filters if not branch_allowed(f, policy.approved_branches) and not any(fnmatch.fnmatch(f.removeprefix("refs/heads/"), a) for a in policy.approved_branches)]
+    bad = [f for f in filters if not f.startswith("tag:") and not branch_allowed(f, policy.approved_branches) and not any(fnmatch.fnmatch(f.removeprefix("refs/heads/"), a) for a in policy.approved_branches)]
     if bad:
         return RuleResult.failed(f"branch filters allow non-protected branches: {bad}", filters=filters, not_approved=bad)
     return RuleResult.passed("only protected branches may deploy", filters=filters)
@@ -166,7 +172,7 @@ def src_005(ctx, policy: Policy, t) -> RuleResult:
     {"any": "Add a CODEOWNERS file covering azure-pipelines*.yml, or a Required reviewers policy with path filter /azure-pipelines*.yml."},
 )
 def src_006(ctx: RepoContext, policy: Policy) -> RuleResult:
-    has_yaml = bool(ctx.facts.pipeline_files) or any(p.platform == "ado_yaml" for p in ctx.pipelines)  # externally hosted: ADO YAML pipelines only
+    has_yaml = bool(ctx.facts.pipeline_files) or any(p.platform in ("ado_yaml", "gha") for p in ctx.pipelines)  # externally hosted: YAML pipelines only
     if not has_yaml:
         return RuleResult.na("no YAML pipeline files in the repo")
     if ctx.facts.facts_source == "unavailable":

@@ -234,6 +234,9 @@ class RepoContext(BaseModel):
     service_connections: dict[str, ServiceConnection] = Field(default_factory=dict)
     variable_groups: dict[str, VariableGroup] = Field(default_factory=dict)
     environments: dict[str, Environment] = Field(default_factory=dict)
+    # Pipeline sources that could not be (fully) read, e.g. a GitHub Actions workflow file or the workflow list. A rule that would FAIL for
+    # missing pipeline content answers UNKNOWN instead while this is non-empty (see engine.runner).
+    unreadable: list[str] = Field(default_factory=list)
     now: datetime = Field(default_factory=utcnow_naive)
 
     def build_pipelines(self) -> list[Pipeline]:

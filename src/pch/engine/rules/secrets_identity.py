@@ -39,6 +39,8 @@ def sec_001(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
     params={"prod_name_hints": ["prod"]},
 )
 def sec_002(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
+    if p.platform == "gha":
+        return RuleResult.na("GitHub Actions has no variable groups: secrets are repository / environment secrets (see SEC-001 for literal secrets in env)")
     prod = {s.name for s in p.stages if s.env_tier == "prod"}
     groups = [g for g in p.variable_groups if g.scope is None or g.scope in prod]
     if not groups:
@@ -61,9 +63,21 @@ def sec_002(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
 @rule(
     "SEC-003", "Service connections use workload identity federation", "high", "pipeline",
     "Service principal secrets expire, leak and are rarely rotated; federation removes the secret entirely.",
-    {"any": "Convert the Azure Resource Manager service connection to 'Workload identity federation' (Convert action in Service connections)."},
+    {"any": "Convert the Azure Resource Manager service connection to 'Workload identity federation' (Convert action in Service connections).",
+     "gha": "Use azure/login with client-id, tenant-id and subscription-id plus `permissions: id-token: write` (a federated credential), and remove creds / client-secret inputs and long-lived secrets."},
 )
 def sec_003(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
+    if p.platform == "gha":
+        logins = [s for s in p.all_steps() if s.enabled and ("auth:login" in s.capabilities or "auth:secret" in s.capabilities or "auth:oidc" in s.capabilities)]
+        if not logins:
+            return RuleResult.na("no cloud login steps")
+        secret = sorted({s.task or s.name for s in logins if "auth:secret" in s.capabilities})
+        if secret:
+            return RuleResult.failed("cloud login with a long-lived secret credential instead of OIDC: " + ", ".join(secret), steps=secret)
+        undecided = [s.task or s.name for s in logins if "auth:oidc" not in s.capabilities]
+        if undecided:
+            return RuleResult.unknown("cannot tell how these login steps authenticate (no `id-token: write` and no credential input): " + ", ".join(sorted(set(undecided))))
+        return RuleResult.passed("cloud logins use OIDC federation (id-token: write, no stored credential)")
     names = _all_connections(p)
     if not names:
         return RuleResult.na("no service connections used")
@@ -88,6 +102,8 @@ def sec_003(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
     {"any": "Service connection > Security: remove 'Grant access permission to all pipelines' and authorize only the specific pipelines."},
 )
 def sec_004(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
+    if p.platform == "gha":
+        return RuleResult.na("GitHub has no service connections: OIDC federated credentials are bound to repo/environment claims (see SEC-003)")
     names = _all_connections(p)
     if not names:
         return RuleResult.na("no service connections used")
@@ -113,6 +129,8 @@ def sec_004(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
     params={"fail_scope_levels": ["managementgroup", "management group"], "warn_scope_levels": ["subscription"]},
 )
 def sec_005(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
+    if p.platform == "gha":
+        return RuleResult.na("the scope of a GitHub OIDC credential is the role assignment of the federated identity in the cloud, which is not read")
     names = _prod_stage_connections(p)
     if not names:
         return RuleResult.na("no service connections in production stages")
