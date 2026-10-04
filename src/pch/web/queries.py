@@ -8,6 +8,8 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from pch.engine.migration import STATUS_LABEL as MIGRATION_LABEL
+from pch.engine.migration import migration_status
 from pch.engine.reasons import empty_reasons
 from pch.engine.registry import CATEGORY_NAMES, RuleMeta, all_rules
 from pch.model.findings import SEVERITY_ORDER
@@ -18,6 +20,7 @@ from pch.store.models import CollectionErrorRow, FindingRow, RepoResultRow, Scan
 STATUS_RANK = {"NON_COMPLIANT": 0, "AT_RISK": 1, "COMPLIANT": 2, "NOT_SCANNED": 3}
 FINDING_RANK = {"FAIL": 0, "WARN": 1, "UNKNOWN": 2, "WAIVED": 3, "PASS": 4, "NOT_APPLICABLE": 5}  # nosec B105 - status rank map, not a password
 SEV_RANK = {s.value: i for i, s in enumerate(SEVERITY_ORDER)}
+PLATFORM_BADGE = {"ado_yaml": "ADO YAML", "ado_classic_build": "ADO Classic", "ado_classic_release": "ADO Classic", "gha": "GitHub Actions"}
 PLATFORM_LABEL = {"ado_classic_build": "Classic build", "ado_classic_release": "Classic release", "ado_yaml": "YAML", "gha": "GitHub Actions"}
 TARGETS = ["functionapp", "webapp", "aks", "adf", "synapse", "sql", "iac"]
 TARGET_LABEL = {"functionapp": "Function App", "webapp": "Web App", "aks": "AKS", "adf": "Data Factory", "synapse": "Synapse", "sql": "SQL (dacpac)", "iac": "IaC"}
@@ -43,7 +46,7 @@ def project_of(repo_key: str) -> str:
 
 
 def platform_kinds(row: RepoResultRow) -> list[str]:
-    return sorted({("classic" if "classic" in p else "yaml") for p in row.platform_mix})
+    return sorted({("gha" if p == "gha" else "classic" if "classic" in p else "yaml") for p in row.platform_mix})
 
 
 def provider_of_row(r: RepoResultRow) -> str:
@@ -81,6 +84,7 @@ def row_dict(r: RepoResultRow) -> dict[str, Any]:
         "targets": r.targets, "test_state": r.test_state, "coverage": r.coverage, "sonar_gate": r.sonar_gate,
         "aikido_criticals": r.aikido_criticals, "score": r.score, "status": r.status, "unknowns": r.unknowns,
         "critical_fails": r.critical_fails, "high_fails": r.high_fails, "migration_score": r.migration_score,
+        "migration_status": migration_status(list(r.platform_mix)), "migration_label": MIGRATION_LABEL[migration_status(list(r.platform_mix))],
         "reasons": rs["items"], "reason_counts": {"fail": rs["fail"], "warn": rs["warn"], "unknown": rs["unknown"]},
         "why": rs["items"][:WHY_TOP], "why_more": max(0, len(rs["items"]) - WHY_TOP),
     }
@@ -358,7 +362,7 @@ def targets(s: Session, scan_id: str) -> dict[str, Any]:
 
 
 # ------------------------------------------------------------------ migration
-def migration(s: Session, scan_id: str) -> dict[str, Any]:
+def migration(s: Session, scan_id: str, state: str | None = None) -> dict[str, Any]:
     rows = store.repo_results(s, scan_id)
     plat: Counter[str] = Counter()
     for r in rows:
@@ -378,8 +382,19 @@ def migration(s: Session, scan_id: str) -> dict[str, Any]:
             if b.startswith("tasks without"):
                 for t in b.split(": ", 1)[1].split(", "):
                     task_gaps[t] += 1
+    row_dicts = [row_dict(r) for r in rows]
+    states = Counter(d["migration_status"] for d in row_dicts)
+    state = state if state in MIGRATION_LABEL else None
+    retire: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        for c in ((r.external or {}).get("migration") or {}).get("retire_candidates", []):
+            retire.setdefault(r.repo_key, []).append(c)
+    listed = [d | {"retire": retire.get(d["key"], [])} for d in row_dicts if state is None or d["migration_status"] == state]
+    listed.sort(key=lambda d: (d["project"], d["repo"]))
     ready = sorted([row_dict(r) for r in rows if r.migration_score is not None], key=lambda x: (x["migration_score"], x["repo"]))
     return {
+        "states": {k: states.get(k, 0) for k in MIGRATION_LABEL}, "state_labels": MIGRATION_LABEL, "state": state, "repos": listed[:300], "repos_more": max(0, len(listed) - 300),
+        "retire_total": sum(len(v) for v in retire.values()), "gha_total": plat.get("gha", 0),
         "platforms": {PLATFORM_LABEL.get(k, k): v for k, v in plat.items()}, "classic_total": sum(v for k, v in plat.items() if k.startswith("ado_classic")),
         "yaml_total": plat.get("ado_yaml", 0), "no_pipeline_repos": sum(1 for r in rows if not r.pipelines),
         "buckets": {k: buckets.get(k, 0) for k in ("0-24", "25-49", "50-74", "75-100")},
@@ -429,8 +444,10 @@ def repo_detail(s: Session, scan_id: str, project: str, repo: str) -> dict[str, 
         categories.append({"code": c, "name": CATEGORY_NAMES.get(c, "System"), "counts": dict(cc), "rate": round(100 * (cc["PASS"] + 0.5 * cc["WARN"]) / scored, 1) if scored else None, "findings": groups[c]})
     ext = r.external or {}
     facts = r.facts or {}
+    retire = {c["id"]: c["reason"] for c in (ext.get("migration") or {}).get("retire_candidates", [])}
+    pipelines = [p | {"badge": PLATFORM_BADGE.get(p["platform"], p["platform"]), "retire_reason": retire.get(p["id"])} for p in r.pipelines]
     return {"repo": row_dict(r) | {"reason": r.test_state_reason, "migration_blockers": r.migration_blockers}, "facts": facts,
-            "repo_checks_unavailable": facts.get("facts_source") == "unavailable", "repo_checks_reason": facts.get("facts_reason", ""), "pipelines": r.pipelines,
+            "repo_checks_unavailable": facts.get("facts_source") == "unavailable", "repo_checks_reason": facts.get("facts_reason", ""), "pipelines": pipelines,
             "categories": categories, "sonar": ext.get("sonar"), "aikido": ext.get("aikido"), "policies": ext.get("policies")}
 
 

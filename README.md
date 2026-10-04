@@ -329,6 +329,7 @@ JSON: `GET /api/v1/lineage` (same filters; `repos` with the nested documents, `o
 | 44 | `status` | Compliance status of the repo (`COMPLIANT`, `AT_RISK`, `NON_COMPLIANT`), repeated on every row of the repo. |
 | 45 | `score` | Compliance score 0-100 of the repo (empty when no rule applies). |
 | 46 | `reasons` | Why the repo is not compliant: its failing rules, most severe first, as `<RULE-ID> <short title>: <message>` separated by `; `. |
+| 47 | `platform` | Pipeline platform: `ado_yaml`, `ado_classic_build`, `ado_classic_release` or `gha` (GitHub Actions workflow). `pipeline_kind` is the lineage kind (`yaml`, `classic_build`, `gha`). |
 
 ## Extending
 

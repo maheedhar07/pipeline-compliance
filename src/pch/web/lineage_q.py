@@ -22,6 +22,7 @@ from pch.store.models import RepoResultRow
 from pch.web.queries import SEV_RANK, TARGET_LABEL, TARGETS, reasons_text, row_dict, rule_index
 
 TIERS = ["dev", "test", "uat", "prod", "unknown"]
+PIPELINE_PLATFORM = {"yaml": "ado_yaml", "classic_build": "ado_classic_build", "gha": "gha"}
 STATUS_ORDER = ["succeeded", "partial", "in_progress", "pending", "failed", "canceled", "never", "unknown"]
 ORPHAN_REPO_REASON = "GitHub repo known from scope.yaml or an Azure DevOps reference, but no Azure DevOps pipeline or release builds it (a GitHub repo named nowhere is invisible to this scan)"
 MAX_CHIPS = 8
@@ -110,6 +111,7 @@ def repo_doc(lin: RepoLineage, compliance: dict[str, Any] | None = None) -> dict
         "pipelines": len(lin.pipelines), "releases": len(lin.releases), "stages": len(lin.all_stages()), "targets": lin.targets, "tiers": lin.tiers, "has_prod": lin.has_prod,
         "empty": lin.is_empty, "chips": chips(lin), "more_chips": max(0, len(lin.all_stages()) - MAX_CHIPS),
         "yaml": sum(1 for p in lin.pipelines if p.kind == "yaml"), "classic": sum(1 for p in lin.pipelines if p.kind == "classic_build"),
+        "gha": sum(1 for p in lin.pipelines if p.kind == "gha"),
     }
     return d
 
@@ -202,6 +204,7 @@ COLUMNS: list[tuple[str, str, int]] = [
     ("last_deploy_status", "last_deploy_status", 16), ("last_deploy_version", "last_deploy_version", 18), ("last_deploy_artifact_version", "last_deploy_artifact_version", 20),
     ("last_deploy_time_utc", "last_deploy_time_utc", 18), ("last_deploy_by", "last_deploy_by", 20), ("last_deploy_url", "last_deploy_url", 40),
     ("status", "status", 14), ("score", "score", 8), ("reasons", "reasons", 80),  # repo compliance (G1), repeated on every row of the repo
+    ("platform", "platform", 18),  # G3: ado_yaml | ado_classic_build | ado_classic_release | gha
 ]
 DATE_COLUMNS = {"ci_last_run_time_utc", "last_deploy_time_utc"}
 HEADERS = [c[1] for c in COLUMNS]
@@ -219,7 +222,7 @@ def _status(d: LDeploy | None) -> str:
 def _pipeline_cols(p: LPipeline) -> dict[str, Any]:
     lr = p.last_run
     return {
-        "pipeline_kind": p.kind, "pipeline_id": p.id, "pipeline_name": p.name, "pipeline_url": p.url, "definition_path": p.definition_path, "yaml_repo": p.yaml_repo or "",
+        "platform": PIPELINE_PLATFORM[p.kind], "pipeline_kind": p.kind, "pipeline_id": p.id, "pipeline_name": p.name, "pipeline_url": p.url, "definition_path": p.definition_path, "yaml_repo": p.yaml_repo or "",
         "yaml_in_other_repo": "yes" if p.yaml_in_other_repo else "no", "defined_in_repo": p.adopted_from or "",
         "ci_trigger": p.trigger.ci_summary(), "pr_trigger": p.trigger.pr_summary(), "schedules": _j(p.trigger.schedules), "artifacts": _j(p.artifacts),
         "upstream_pipelines": _j([u.name + (f" ({u.detail})" if u.detail else "") for u in p.upstream]),
@@ -231,7 +234,7 @@ def _pipeline_cols(p: LPipeline) -> dict[str, Any]:
 def _release_cols(r: LRelease) -> dict[str, Any]:
     src = _j([f"{a.type}: {a.name}" + (f"@{a.branch}" if a.branch else "") + (" (primary)" if a.primary and len(r.sources) > 1 else "") for a in r.sources])
     trig = _j([("CD on " + (", ".join(r.cd_branches) if r.cd_branches else "any branch")) if r.cd_enabled else "no CD trigger", *[f"schedule {s}" for s in r.schedules]])
-    return {"release_kind": "classic_release", "release_id": r.id, "release_name": r.name, "release_url": r.url, "release_source": src, "release_trigger": trig}
+    return {"platform": "ado_classic_release", "release_kind": "classic_release", "release_id": r.id, "release_name": r.name, "release_url": r.url, "release_source": src, "release_trigger": trig}
 
 
 def _stage_cols(order: int, st: LStage) -> dict[str, Any]:

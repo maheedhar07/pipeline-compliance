@@ -59,7 +59,7 @@
   {% for p in d.pipelines %}
   <div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
     <div class="flex flex-wrap items-center gap-2">
-      <span class="rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-200">{{ 'YAML pipeline' if p.kind == 'yaml' else 'Classic build' }}</span>
+      <span class="rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-200">{{ 'GitHub Actions workflow' if p.kind == 'gha' else 'YAML pipeline' if p.kind == 'yaml' else 'Classic build' }}</span>
       <a class="font-medium text-indigo-700 hover:underline dark:text-indigo-300" href="{{ p.url | safe_url }}" target="_blank" rel="noopener noreferrer">{{ p.name }}</a>
       <span class="text-xs text-slate-500 dark:text-slate-400">id {{ p.id }}</span>
       {% if p.adopted_from %}<span class="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-900/40 dark:text-amber-200" title="The pipeline definition lives in another repository and builds this repository's code">defined in {{ p.adopted_from }}</span>{% endif %}
@@ -68,7 +68,7 @@
       {% if p.last_run %}<span class="ml-auto text-xs text-slate-500 dark:text-slate-400">last run {{ deploy_chip(p.last_run.status) }} {{ p.last_run.version or '' }} {{ dt(p.last_run.finished) }}{% if p.last_run.triggered_by %} · by {{ p.last_run.triggered_by }}{% endif %}</span>{% endif %}
     </div>
     <dl class="mt-2 grid grid-cols-[auto,1fr] gap-x-3 gap-y-0.5 text-xs">
-      <dt class="text-slate-500 dark:text-slate-400">{{ 'YAML file' if p.kind == 'yaml' else 'Folder' }}</dt><dd class="font-mono">{{ p.definition_path or '–' }}{% if p.yaml_repo %} <span class="font-sans text-slate-500 dark:text-slate-400">in {{ p.yaml_repo }}</span>{% endif %}</dd>
+      <dt class="text-slate-500 dark:text-slate-400">{{ 'Workflow file' if p.kind == 'gha' else 'YAML file' if p.kind == 'yaml' else 'Folder' }}</dt><dd class="font-mono">{{ p.definition_path or '–' }}{% if p.yaml_repo %} <span class="font-sans text-slate-500 dark:text-slate-400">in {{ p.yaml_repo }}</span>{% endif %}</dd>
       {% if p.code_repos %}<dt class="text-slate-500 dark:text-slate-400">Builds code from</dt><dd>{{ p.code_repos | join(', ') }}</dd>{% endif %}
       {% if p.template_repos %}<dt class="text-slate-500 dark:text-slate-400">Other repos used</dt><dd>{{ p.template_repos | join(', ') }}</dd>{% endif %}
       <dt class="text-slate-500 dark:text-slate-400">CI trigger</dt><dd>{{ ('CI off' if p.trigger.ci_enabled == false else (p.trigger.ci_branches | join(', ') or 'all branches') ~ (' (paths ' ~ (p.trigger.ci_paths | join(', ')) ~ ')' if p.trigger.ci_paths else '')) if p.trigger.ci_enabled is not none else 'unknown' }}</dd>

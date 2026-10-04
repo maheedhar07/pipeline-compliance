@@ -284,6 +284,8 @@ def build_repo_lineage(
     )
     out = RepoLineage(repo=lrepo, notes=list(notes or []))
     for p in pipelines:
+        if p.platform == "gha":
+            continue  # workflows are added by normalize.gha.build_lineage (they have no ADO definition or run records)
         if p.platform == "ado_classic_release":
             out.releases.append(build_release(p, rdefs.get(p.id, {}), deploys.get(f"{p.platform}:{p.id}"), conns, collected))
         else:
@@ -315,6 +317,8 @@ def link_lineages(lineages: list[RepoLineage]) -> None:
     for lin in lineages:
         for consumer in lin.pipelines:
             for link in consumer.upstream:
+                if link.kind == "workflow_run":
+                    continue  # resolved within the repository when the workflows were built (normalize.gha.build_lineage)
                 target = None
                 tproj = (link.project or lin.repo.project).casefold()
                 if link.kind == "classic_completion" and link.pipeline_id:

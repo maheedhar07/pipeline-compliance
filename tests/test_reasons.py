@@ -190,7 +190,7 @@ def test_lineage_rows_show_status_reasons_and_failing_rules(env):
 def test_lineage_csv_and_xlsx_carry_status_score_reasons(env):
     c, _ = env
     rows = rows_of(c.get("/lineage.csv"))
-    assert rows[0][-3:] == ["status", "score", "reasons"]
+    assert rows[0][-4:-1] == ["status", "score", "reasons"]
     col = {h: i for i, h in enumerate(rows[0])}
     repos = {r["repo"]: r for r in c.get("/api/v1/repos").json()["repos"]}
     seen = 0
@@ -206,7 +206,7 @@ def test_lineage_csv_and_xlsx_carry_status_score_reasons(env):
     flat = [str(v) for row in summary for v in row if v is not None]
     assert "Top reasons (failing rules, repositories affected)" in flat and "Repositories by compliance status" in flat
     head = [cell.value for cell in wb["Lineage"][1]]
-    assert head[-3:] == ["status", "score", "reasons"]
+    assert head[-4:-1] == ["status", "score", "reasons"]
 
 
 def test_reasons_are_escaped_everywhere(env):

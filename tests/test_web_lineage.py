@@ -166,7 +166,7 @@ def test_csv_columns_rows_and_headers(client):
     assert r.headers["cache-control"] == "no-store" and r.headers["x-content-type-options"] == "nosniff"
     assert r.headers["content-disposition"] == 'attachment; filename="pch-lineage-2026-10-01.csv"'
     rows = rows_of(r)
-    assert rows[0] == LQ.HEADERS and len(set(LQ.HEADERS)) == len(LQ.HEADERS) and len(LQ.HEADERS) == 46
+    assert rows[0] == LQ.HEADERS and len(set(LQ.HEADERS)) == len(LQ.HEADERS) and len(LQ.HEADERS) == 47
     assert all(len(x) == len(LQ.HEADERS) for x in rows)
     col = {h: i for i, h in enumerate(rows[0])}
     body = rows[1:]
@@ -223,7 +223,7 @@ def test_xlsx_workbook_structure(client):
     wb = openpyxl.load_workbook(io.BytesIO(r.content))
     assert wb.sheetnames == ["Summary", "Lineage", "Orphans"]
     ws = wb["Lineage"]
-    assert [c.value for c in ws[1]] == LQ.HEADERS and ws.freeze_panes == "A2" and ws.auto_filter.ref == f"A1:AT{ws.max_row}"
+    assert [c.value for c in ws[1]] == LQ.HEADERS and ws.freeze_panes == "A2" and ws.auto_filter.ref == f"A1:AU{ws.max_row}"
     assert ws.column_dimensions["B"].width == 34 and ws.column_dimensions["AM"].width == 18
     csv_rows = rows_of(client.get("/lineage.csv"))
     assert ws.max_row == len(csv_rows)

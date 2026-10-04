@@ -32,16 +32,18 @@ from pch.collectors.ado.service_conn import collect_service_connections
 from pch.collectors.ado.task_catalog import TaskCatalog, load_task_catalog
 from pch.collectors.ado.variable_groups import collect_variable_groups
 from pch.collectors.ado.yaml_pipeline import parse_yaml_pipeline
+from pch.collectors.github.actions import read_actions
 from pch.collectors.github.discovery import list_org_repos
 from pch.collectors.github.reader import RepoRead, read_repo
 from pch.collectors.redact import SECRET_NAME, value_looks_secret
-from pch.engine.migration import repo_readiness
+from pch.engine.migration import migration_summary, repo_readiness
 from pch.engine.reasons import compute_reasons
 from pch.engine.registry import all_rules, rule_params
 from pch.engine.runner import evaluate, policy_effects
 from pch.engine.scoring import apply_waivers, score_repo
 from pch.logging_setup import bind_scan, scrub
 from pch.model.findings import Finding, Severity, Status
+from pch.model.gha import ActionsRead
 from pch.model.lineage import LDeploy, LOrphan, RepoLineage
 from pch.model.pipeline import Pipeline
 from pch.model.repo import (
@@ -54,8 +56,11 @@ from pch.model.repo import (
     ServiceConnection,
     SnowFacts,
     SonarFacts,
+    TestState,
     VariableGroup,
 )
+from pch.normalize.gha import build_lineage as build_gha_lineage
+from pch.normalize.gha import build_pipelines as build_gha_pipelines
 from pch.normalize.lineage import (
     build_repo_lineage,
     is_deploy_stage,
@@ -259,6 +264,7 @@ class Scanner:
         facts: RepoFacts
         protection: BranchProtection | None = None
         gh: RepoRead | None = None
+        actions: ActionsRead | None = None
         if ref.external and self.src.github is not None and ref.provider in ("github", "github_enterprise"):
             gh = await read_repo(self.src.github, ref.name, known=self.gh_listing.get(ref.name.casefold()))
             facts, protection = gh.facts, gh.protection
@@ -270,6 +276,14 @@ class Scanner:
                 ref.url = gh.web_url
             if ref.owner is None and gh.owner:
                 ref.owner = gh.owner  # CODEOWNERS default rule; scope.yaml owner wins
+            if gh.default_branch:  # GitHub Actions: workflows, environments, runs, last deployments (read-only; failures are reasons, never FAIL)
+                try:
+                    actions = await read_actions(self.src.github, ref.name, gh.default_branch, now=cfg.now, run_days=cfg.run_days,
+                                                 known_paths=facts.pipeline_files, with_deployments=cfg.lineage)
+                    for msg in actions.errors:
+                        rerr("github", msg)
+                except Exception as e:  # noqa: BLE001 - never aborts the repo
+                    rerr("github", f"GitHub Actions not read: {e}")
         elif ref.external:
             facts = unavailable_facts(ref.provider)
         else:
@@ -326,9 +340,24 @@ class Scanner:
                     build_runs[p.id] = await collect_build_runs(ado, project, p, since, crq)
             except Exception as e:
                 rerr("ado", f"runs for {p.name}: {e}")
+        # 3a. GitHub Actions workflows join the pipelines (same rules; ADO run history above does not apply to them)
+        gha_pipes: list[Pipeline] = []
+        unreadable: list[str] = []
+        if actions is not None:
+            snow_pattern = rule_params(cfg.policy, "DEP-003")["servicenow_app_pattern"]
+            gha_pipes, unreadable = build_gha_pipelines(actions, project=project, repo=ref.name, tier_overrides=tier_over, snow_pattern=snow_pattern,
+                                                        repo_is_adf=adf_only, repo_is_synapse=facts.synapse and not facts.iac)
+            for p in gha_pipes:
+                p.repo, p.repo_id = ref.name, ref.id
+            pipelines.extend(gha_pipes)
+            for u in unreadable:
+                rerr("github", f"workflow content not usable: {u}")
         # 3b. lineage (what this repo produces and where it was last deployed); never fails the repo
         try:
-            self.lineages[ref.key] = await self.repo_lineage(pd, ref, pipelines, builds, releases, build_runs)
+            lin = await self.repo_lineage(pd, ref, pipelines, builds, releases, build_runs)
+            if gha_pipes and actions is not None:
+                lin.pipelines.extend(build_gha_lineage(gha_pipes, ref, actions.deployments, collected=cfg.lineage))
+            self.lineages[ref.key] = lin
         except Exception as e:  # noqa: BLE001 - fail open: the repo is scanned, its lineage is missing
             self.err("lineage", ref.key, e)
         # 4. Sonar
@@ -362,6 +391,8 @@ class Scanner:
         # 7. test state
         threshold = ref.coverage_threshold or cfg.policy.coverage_threshold
         state, reason, cov = classify_test_state(facts, pipelines, sonar, threshold)
+        if state == TestState.TESTS_NOT_RUN and (unreadable or any(p.meta.get("unresolved") for p in gha_pipes)):
+            state, reason = TestState.UNKNOWN, "tests exist but a pipeline that might run them could not be fully read (see the collection errors)"
         facts.test_state, facts.test_state_reason, facts.coverage = state, reason, cov
         # 8. rules
         if ref.external:  # ADO branch policies cover Azure Repos only; GitHub branch protection comes from the GitHub reader (ctx.protection)
@@ -372,7 +403,7 @@ class Scanner:
                 policies.available = False  # policies were not collected for this project
         ctx = RepoContext(
             repo=ref, pipelines=pipelines, facts=facts, policies=policies, protection=protection,
-            sonar=sonar, aikido=aikido, snow=snow, service_connections=pd.conns, variable_groups=pd.groups, environments=pd.envs, now=cfg.now,
+            sonar=sonar, aikido=aikido, snow=snow, service_connections=pd.conns, variable_groups=pd.groups, environments=pd.envs, unreadable=unreadable, now=cfg.now,
         )
         findings = evaluate(ctx, cfg.policy, self.rules)
         apply_waivers(findings, ref.key, cfg.policy, cfg.now.date())
@@ -578,6 +609,7 @@ class Scanner:
                         "repo": {"provider": ctx.repo.provider, "full_name": ctx.repo.full_name, "service_connection_id": ctx.repo.service_connection_id},
                         "policies": ctx.policies.model_dump(mode="json"),
                         "protection": ctx.protection.model_dump(mode="json") if ctx.protection else None,
+                        "migration": migration_summary(ctx.pipelines),
                         "reasons": compute_reasons(findings, self.rules),  # why the repo is not compliant (pages/exports read this)
                     },
                 ))

@@ -23,7 +23,7 @@
   {% if multi_host %}{{ sel('provider','Code hosted on', options.providers, filters.provider, options.provider_labels) }}{% endif %}
   {{ sel('status','Status', options.statuses, filters.status) }}
   {{ sel('test_state','Test state', options.test_states, filters.test_state) }}
-  {{ sel('platform','Pipelines', ['classic','yaml','none'], filters.platform) }}
+  {{ sel('platform','Pipelines', ['classic','yaml','gha','none'], filters.platform) }}
   {{ sel('target','Deploy target', options.targets, filters.target, TARGET_LABEL) }}
   {{ sel('sonar','Sonar gate', ['OK','WARN','ERROR','none'], filters.sonar) }}
   <label class="col-span-2 flex flex-col gap-0.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">Search repo / owner

@@ -157,7 +157,8 @@ async def _last_deployment(client: GitHubClient, full: str, env: str) -> GhDeplo
     return last
 
 
-async def read_actions(client: GitHubClient, full_name: str, branch: str, *, now: datetime, run_days: int = 90, known_paths: list[str] | None = None) -> ActionsRead:
+async def read_actions(client: GitHubClient, full_name: str, branch: str, *, now: datetime, run_days: int = 90, known_paths: list[str] | None = None,
+                       with_deployments: bool = True) -> ActionsRead:
     """Workflows (+ reusable ones), environments, runs and last deployments of ``org/repo`` at its default branch.
 
     ``known_paths`` = workflow files seen in the repository tree: used when the workflow listing itself is denied (the files stay readable with
@@ -240,7 +241,7 @@ async def read_actions(client: GitHubClient, full_name: str, branch: str, *, now
     if out.environments is None:
         for s in sources:
             names += [n for n in environment_names(s.text or "") if n not in names]
-    names = names[:MAX_ENVIRONMENTS]
+    names = names[:MAX_ENVIRONMENTS] if with_deployments else []
     deps = await asyncio.gather(*(_last_deployment(client, full, n) for n in names))
     for d in deps:
         out.deployments[d.environment.casefold()] = d

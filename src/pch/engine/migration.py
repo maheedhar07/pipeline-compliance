@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -59,11 +60,13 @@ def pipeline_readiness(p: Pipeline) -> tuple[int, list[str]]:
 
 
 def repo_readiness(ctx: RepoContext) -> tuple[int | None, list[str]]:
-    if not ctx.pipelines:
+    """Readiness of the Azure DevOps pipelines only: a GitHub Actions workflow is already migrated and does not enter the score."""
+    ado = [p for p in ctx.pipelines if p.platform != "gha"]
+    if not ado:
         return None, []
     scores: list[int] = []
     blockers: list[str] = []
-    for p in ctx.pipelines:
+    for p in ado:
         s, bl = pipeline_readiness(p)
         scores.append(s)
         blockers.extend(bl)
@@ -72,3 +75,51 @@ def repo_readiness(ctx: RepoContext) -> tuple[int | None, list[str]]:
         if item not in seen:
             seen.append(item)
     return round(sum(scores) / len(scores)), seen
+
+
+# --------------------------------------------------------------------------- migration status (ADO -> GitHub Actions, per repo)
+STATUS_LABEL = {"ado_only": "ADO only", "in_progress": "In progress (both)", "migrated": "Migrated (GHA only)", "none": "No pipelines"}
+
+
+def migration_status(platforms: list[str]) -> str:
+    """``ado_only`` / ``in_progress`` (ADO and GHA pipelines side by side) / ``migrated`` (GHA only) / ``none``."""
+    ado = any(x.startswith("ado_") for x in platforms)
+    gha = "gha" in platforms
+    return "in_progress" if ado and gha else "migrated" if gha else "ado_only" if ado else "none"
+
+
+def _deploys(p: Pipeline) -> list[tuple[str | None, str, set[str]]]:
+    return [(st.env_name, st.env_tier, set(st.deploy_targets)) for st in p.stages if st.is_deploy]
+
+
+def retire_candidates(pipelines: list[Pipeline]) -> list[dict[str, str]]:
+    """Azure DevOps pipelines that look superseded: a GitHub Actions workflow of the same repo deploys to the same environment name, or to the same
+    known tier with an overlapping deploy target. Only a hint (a human confirms before retiring)."""
+    gha = [(p, _deploys(p)) for p in pipelines if p.platform == "gha"]
+    out: list[dict[str, str]] = []
+    for p in pipelines:
+        if p.platform == "gha":
+            continue
+        mine = _deploys(p)
+        if not mine:
+            continue
+        for g, theirs in gha:
+            why = ""
+            for env, tier, targets in mine:
+                for env2, tier2, targets2 in theirs:
+                    if env and env2 and env.casefold() == env2.casefold():
+                        why = f"workflow '{g.name}' deploys to the same environment ({env2})"
+                    elif tier != "unknown" and tier == tier2 and targets & targets2 and not why:
+                        why = f"workflow '{g.name}' deploys to the same target ({', '.join(sorted(targets & targets2))}) in {tier}"
+                    if why and env and env2:
+                        break
+            if why:
+                out.append({"id": p.id, "name": p.name, "platform": p.platform, "reason": why})
+                break
+    return out
+
+
+def migration_summary(pipelines: list[Pipeline]) -> dict[str, Any]:
+    """Stored per repo in ``repo_results.external["migration"]``."""
+    st = migration_status(sorted({p.platform for p in pipelines}))
+    return {"status": st, "retire_candidates": retire_candidates(pipelines) if st == "in_progress" else []}

@@ -71,6 +71,7 @@ ProjectPath = Annotated[str, PathParam(max_length=200)]
 RepoPath = Annotated[str, PathParam(max_length=200)]  # routed with {repo:path}: GitHub-hosted repos are "org/repo"
 RulePath = Annotated[str, PathParam(max_length=64)]
 Short = Annotated[str | None, Query(max_length=8)]  # tiny enumerations from <select> (an empty value means "all"): normalised, never an error
+MigState = Annotated[str | None, Query(max_length=16)]  # migration status filter
 Flag = Annotated[str | None, Query(max_length=8)]
 LINEAGE_LIST_LIMIT = 500  # repos rendered on the list page (the exports contain every matching row)
 
@@ -284,12 +285,12 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
             return templates.TemplateResponse(request, "targets.html", ctx(request, s, scan, data=Q.targets(s, row.id), nav="targets"))
 
     @app.get("/migration", response_class=HTMLResponse)
-    def page_migration(request: Request, scan: ScanId = None):
+    def page_migration(request: Request, scan: ScanId = None, state: MigState = None):
         with session_scope(app.state.db_url) as s:
             row = Q.resolve_scan(s, scan)
             if not row:
                 return no_data(request)
-            return templates.TemplateResponse(request, "migration.html", ctx(request, s, scan, data=Q.migration(s, row.id), nav="migration"))
+            return templates.TemplateResponse(request, "migration.html", ctx(request, s, scan, data=Q.migration(s, row.id, state or None), nav="migration"))
 
     @app.get("/scans", response_class=HTMLResponse)
     def page_scans(request: Request, scan: ScanId = None, selected: ScanId = None):
@@ -437,8 +438,8 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
         return api(lambda s, r: Q.targets(s, r.id))(scan)
 
     @app.get("/api/v1/migration")
-    def api_migration(scan: ScanId = None):
-        return api(lambda s, r: Q.migration(s, r.id))(scan)
+    def api_migration(scan: ScanId = None, state: MigState = None):
+        return api(lambda s, r: Q.migration(s, r.id, state or None))(scan)
 
     @app.get("/api/v1/lineage")
     def api_lineage(scan: ScanId = None, project: Text = None, provider: Text = None, q: Text = None, target: Text = None, tier: Text = None,
