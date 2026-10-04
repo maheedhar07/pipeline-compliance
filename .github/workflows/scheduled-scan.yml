@@ -1,5 +1,5 @@
 # Scheduled `pch scan` (read-only) on GitHub Actions. OPT-IN: the job only runs when the repository variable
-# PCH_SCAN_ENABLED is exactly "true", so forks and the public template do nothing. Setup: README "Scheduling".
+# PCH_SCAN_ENABLED is exactly "true", so forks and the public template do nothing. Setup: docs/USING_IN_YOUR_ORG.md, phase 4.
 #
 # Change the schedule by editing the cron line below (UTC; GitHub may delay scheduled runs by several minutes).
 # Run it by hand: Actions -> Scheduled scan -> Run workflow.

@@ -1,4 +1,4 @@
-"""Process exit codes of the ``pch`` CLI (one place; documented in the README, "Operations")."""
+"""Process exit codes of the ``pch`` CLI (one place; documented in docs/USING_IN_YOUR_ORG.md, phase 4)."""
 
 from __future__ import annotations
 

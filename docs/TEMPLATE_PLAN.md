@@ -30,7 +30,7 @@ infrastructure seams are swappable by configuration, and which **fails safe** in
 
 ## Milestones
 
-Status: **T1-T7 are complete.** T7 also closed the residual risks the security review had accepted (https-only prod sources, scan timeout < lock window, response size cap, DB connect timeout) and added `CUSTOMIZING.md`, `IMPORT_CHECKLIST.md`, `THREAT_MODEL.md`, an expanded `DEPLOY_AZURE.md`, ADR-01..12 in `DECISIONS.md` and the docs-drift tests.
+Status: **T1-T7 are complete.** T7 also closed the residual risks the security review had accepted (https-only prod sources, scan timeout < lock window, response size cap, DB connect timeout) and added `CUSTOMIZING.md`, an import checklist (folded into `USING_IN_YOUR_ORG.md` and `DEPLOY_AZURE.md` in G5), `THREAT_MODEL.md`, an expanded `DEPLOY_AZURE.md`, ADR-01..12 in `DECISIONS.md` and the docs-drift tests.
 
 Each milestone ends with `ruff check . && mypy src && pytest`, a conventional commit, and `git push origin main`.
 
@@ -75,7 +75,7 @@ Each milestone ends with `ruff check . && mypy src && pytest`, a conventional co
 ### T7 — Template docs + independent security review (done)
 - `docs/CUSTOMIZING.md`: one recipe per seam (swap DB → Azure SQL, secrets, auth, storage, add collector, add rule).
 - `docs/DEPLOY_AZURE.md`: App Service + Easy Auth + managed identity + Key Vault references + Azure SQL + Blob + App Insights; least-privilege role assignments; go-live checklist.
-- `docs/THREAT_MODEL.md` (STRIDE-lite), `docs/IMPORT_CHECKLIST.md`, ADRs appended to `docs/DECISIONS.md`.
+- `docs/THREAT_MODEL.md` (STRIDE-lite), an import checklist (later folded into `docs/USING_IN_YOUR_ORG.md`), ADRs appended to `docs/DECISIONS.md`.
 - Independent security review of the whole T1–T6 diff; fix findings.
 
 ---
@@ -92,4 +92,4 @@ demo/mock data** — add or adjust only the one or two records needed to verify 
 | G2 | GitHub read-only reader (done, ADR-16) | Fine-grained PAT (default) or GitHub App. Repo discovery from the GitHub org; branch protection + rulesets, file tree (tests/Dockerfiles/IaC), CODEOWNERS. Replaces the UNKNOWNs from ADR-13 with real PASS/FAIL. |
 | G3 | GitHub Actions pipelines (done, ADR-17) | Workflows → canonical `Pipeline(platform="gha")`, environments + protection rules, deployments/runs, OIDC vs secrets, action SHA pinning. Rules + lineage cover GHA, so repos are covered as they migrate. |
 | G4 | Scheduling + richer UI (done, ADR-18) | Scheduled GitHub Actions workflow running `pch scan` (opt-in, OIDC, pinned). UI: visual lineage flow, richer overview (by project/owner, severity, top reasons, drill-down charts), richer repo page (category breakdown, fix-first list, trend), better tables (sticky headers, sort, pagination, column chooser, filter chips). |
-| G5 | Org playbook | Short `docs/USING_IN_YOUR_ORG.md` (ordered steps, commands, don'ts), compact `docs/AI_GUIDE.md` for AI-assisted work, README/CLAUDE.md pointers; prune duplication. |
+| G5 (done) | Org playbook | Short `docs/USING_IN_YOUR_ORG.md` (ordered steps, commands, don'ts), compact `docs/AI_GUIDE.md` for AI-assisted work, README/CLAUDE.md pointers; prune duplication. `IMPORT_CHECKLIST.md` was folded into the playbook (adoption path) and `DEPLOY_AZURE.md` (go-live gate, rollback); `DEPLOY_AZURE.md` is optional. |

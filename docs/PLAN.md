@@ -49,7 +49,7 @@ pipeline-compliance/
 │   │   ├── sonar.py
 │   │   ├── aikido.py
 │   │   ├── servicenow.py
-│   │   └── github/ (Phase 3 stub with interface only)
+│   │   └── github/ (read-only reader and GitHub Actions collection: G2, G3)
 │   ├── normalize/
 │   │   ├── capabilities.py   # task name/id → capability tags (catalog in capabilities.yaml)
 │   │   ├── capabilities.yaml
@@ -322,10 +322,10 @@ These payloads then flow through the **real** collectors (via respx or a file-ba
 | M9 (Phase 3) | GitHub Actions adapter (workflows, environments, rulesets, OIDC, SHA pinning) | fixture tests |
 | M10 (Phase 4) | Agent layer: MCP server exposing `list_findings`, `get_repo`, `explain_rule`; chat panel in dashboard | — |
 
-M0–M8 is the scope for the autonomous build. M9 and M10 are stubs or interfaces only.
+M0–M8 was the scope of the original autonomous build (historical). M9 is implemented (G2/G3, ADR-16/17; the template phases T1–T7 and G1–G5 are in `docs/TEMPLATE_PLAN.md`). M10 remains a stub (`pch/agent/`).
 
 ## 12. Security guardrails
 
 - Read-only tokens only. The tool never calls mutating endpoints. A `ReadOnlyTransport` guard rejects any non-GET request, except the documented POST to `pipelines/{id}/preview` (`previewRun: true`).
 - Secrets come only from env vars. `.env` is gitignored. Secret values are never persisted. Raw cache files get redacted before writing (variables where `isSecret`, and any `value` key under secret-looking names).
-- The dashboard has no auth in v1 and binds to localhost by default. Document putting it behind Entra ID with Azure App Service Easy Auth for a shared deployment.
+- Original v1 stance (superseded by T5, ADR-06): no auth and loopback only. Today `AUTH_MODE=none` is loopback-only and dev-only, and shared deployments use Easy Auth with Entra roles behind the fail-closed guard.
