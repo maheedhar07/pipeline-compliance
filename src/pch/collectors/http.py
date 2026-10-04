@@ -14,7 +14,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from pch.collectors.transport import ReadOnlyTransport
+from pch.collectors.transport import ReadOnlyTransport, SizeLimitTransport
 
 
 class HttpError(Exception):
@@ -59,8 +59,13 @@ class SourceClient:
         max_attempts: int = 4,
         backoff_base: float = 0.5,
         backoff_max: float = 20.0,
+        max_response_bytes: int | None = None,
     ):
         inner = transport or httpx.AsyncHTTPTransport(retries=1)
+        if max_response_bytes:
+            # Note: a RecordingTransport passed in buffers inside itself, so live wiring (pch.sources) applies the same
+            # cap to the network transport underneath it. This one covers every other transport.
+            inner = SizeLimitTransport(inner, max_response_bytes)
         guarded = inner if isinstance(inner, ReadOnlyTransport) else ReadOnlyTransport(inner)
         self.client = httpx.AsyncClient(
             base_url=base_url, transport=guarded, auth=auth, headers=headers, timeout=timeout, follow_redirects=True

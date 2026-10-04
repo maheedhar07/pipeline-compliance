@@ -6,7 +6,8 @@ import hashlib
 import json
 import logging
 import re
-from typing import Any
+from collections.abc import AsyncIterator
+from typing import Any, cast
 
 import httpx
 
@@ -40,6 +41,53 @@ def _check_allowed(request: httpx.Request) -> None:
                 raise MutationBlockedError("preview POST must carry previewRun=true")
         return
     raise MutationBlockedError(f"read-only guard: refusing {request.method} {request.url.path}")
+
+
+class ResponseTooLargeError(Exception):
+    """An upstream response exceeded ``HTTP_MAX_RESPONSE_MB``. Not an httpx error, so it is never retried."""
+
+
+class _CappedStream(httpx.AsyncByteStream):
+    def __init__(self, inner: httpx.AsyncByteStream, limit: int, url: str):
+        self.inner, self.limit, self.url, self.seen = inner, limit, url, 0
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        async for chunk in self.inner:
+            self.seen += len(chunk)
+            if self.seen > self.limit:
+                await self.inner.aclose()
+                raise ResponseTooLargeError(f"response from {self.url} exceeds the {self.limit // (1024 * 1024)} MB limit")
+            yield chunk
+
+    async def aclose(self) -> None:
+        await self.inner.aclose()
+
+
+class SizeLimitTransport(httpx.AsyncBaseTransport):
+    """Aborts responses larger than ``max_bytes``: early on Content-Length, else while the body streams.
+
+    Wrap the innermost (network) transport so a recorder above it never buffers more than the cap. The error
+    text names the host and path only (no query string).
+    """
+
+    def __init__(self, inner: httpx.AsyncBaseTransport, max_bytes: int):
+        self.inner = inner
+        self.max_bytes = max_bytes
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        response = await self.inner.handle_async_request(request)
+        where = f"{request.url.host}{request.url.path}"
+        declared = response.headers.get("content-length", "")
+        if declared.isdigit() and int(declared) > self.max_bytes:
+            await response.aclose()
+            raise ResponseTooLargeError(
+                f"response from {where} declares {declared} bytes, over the {self.max_bytes // (1024 * 1024)} MB limit"
+            )
+        response.stream = _CappedStream(cast(httpx.AsyncByteStream, response.stream), self.max_bytes, where)
+        return response
+
+    async def aclose(self) -> None:
+        await self.inner.aclose()
 
 
 class ReadOnlyTransport(httpx.AsyncBaseTransport):

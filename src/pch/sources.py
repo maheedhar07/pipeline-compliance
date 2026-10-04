@@ -11,7 +11,7 @@ from pch.collectors.ado.client import AdoClient
 from pch.collectors.aikido import AikidoClient
 from pch.collectors.servicenow import ServiceNowClient
 from pch.collectors.sonar import SonarClient
-from pch.collectors.transport import CacheReplayTransport, RecordingTransport
+from pch.collectors.transport import CacheReplayTransport, RecordingTransport, SizeLimitTransport
 from pch.demo import payloads as P
 from pch.demo.transport import AIKIDO_HOST, SNOW_HOST, SONAR_HOST, DemoTransport
 from pch.providers import ArtifactStore, SecretProvider, get_secret_provider, require_secret
@@ -63,7 +63,7 @@ def cache_sources(cache: ArtifactStore, settings: Settings, *, demo: bool = Fals
 
 def live_sources(settings: Settings, *, record_to: ArtifactStore | None = None, secrets: SecretProvider | None = None) -> Sources:
     """Live clients. Credentials come ONLY from the SecretProvider selected by SECRETS_PROVIDER (explicit, no mixing)."""
-    inner = httpx.AsyncHTTPTransport(retries=1)
+    inner = SizeLimitTransport(httpx.AsyncHTTPTransport(retries=1), settings.http_max_response_mb * 1024 * 1024)
     provider = secrets or get_secret_provider(settings)
     return _live(settings, _wrap(inner, record_to), {"concurrency": settings.concurrency, "timeout": settings.http_timeout}, provider)
 

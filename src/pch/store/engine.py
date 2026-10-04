@@ -16,6 +16,15 @@ def _is_memory(url: URL) -> bool:
     return not url.database or url.database == ":memory:"
 
 
+def connect_args_for(backend: str, connect_timeout_seconds: int) -> dict[str, Any]:
+    """Driver-level connect timeout per dialect (server dialects only)."""
+    if backend == "postgresql":
+        return {"connect_timeout": connect_timeout_seconds}
+    if backend == "mssql":
+        return {"timeout": connect_timeout_seconds}
+    return {}
+
+
 def build_engine(url: str | URL, settings: Settings | None = None) -> Engine:
     """Create an engine for ``url`` with per-dialect options from ``settings``. Does not connect."""
     s = settings or get_settings()
@@ -30,6 +39,12 @@ def build_engine(url: str | URL, settings: Settings | None = None) -> Engine:
         elif u.database:
             Path(u.database).parent.mkdir(parents=True, exist_ok=True)
     else:
+        # Bounded connection attempt so a hung server cannot park request threads. Parameter names verified against the
+        # drivers: psycopg ``connect_timeout`` (libpq, seconds); pyodbc.connect(..., timeout=) sets SQL_ATTR_LOGIN_TIMEOUT.
+        # Other dialects get no option (add theirs in connect_args_for).
+        timeout_args = connect_args_for(backend, s.db_connect_timeout_seconds)
+        if timeout_args:
+            kwargs["connect_args"] = timeout_args
         kwargs.update(
             pool_pre_ping=True,
             pool_size=s.db_pool_size,

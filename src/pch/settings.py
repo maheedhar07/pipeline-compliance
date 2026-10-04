@@ -65,6 +65,9 @@ class Settings(BaseSettings):
     db_max_overflow: int = Field(10, ge=0, le=200)
     db_pool_recycle: int = Field(1800, ge=-1)  # seconds; Azure SQL drops idle connections after ~30 min
     db_pool_timeout: float = Field(30.0, gt=0, le=600)
+    # Seconds to wait for a new server connection (psycopg ``connect_timeout``, pyodbc login ``timeout``). A hung DB must
+    # not hold a request thread forever. Ignored for SQLite.
+    db_connect_timeout_seconds: int = Field(15, ge=1, le=300)
     # Apply pending migrations automatically at startup. Off by default; sqlite in dev/test always
     # auto-migrates. In prod prefer `pch db upgrade` as an explicit deploy step.
     db_auto_migrate: bool = False
@@ -109,6 +112,9 @@ class Settings(BaseSettings):
     # --- collection tuning
     concurrency: int = Field(8, ge=1, le=64)
     http_timeout: float = Field(30.0, gt=0, le=300)
+    # Upper bound for ONE upstream response body (MB). Larger responses are aborted while streaming and become a normal
+    # collection error (the scan continues); Content-Length is checked up front.
+    http_max_response_mb: int = Field(50, ge=1, le=2048)
 
     # --- web server. Bind/auth policy is enforced by pch.web.guard.assert_safe_to_serve (fails closed).
     host: str = "127.0.0.1"
@@ -187,6 +193,26 @@ class Settings(BaseSettings):
         for u in (self.keyvault_url, self.artifact_blob_account_url):
             if u and not u.startswith("https://"):
                 raise ValueError("Azure endpoints must be https:// URLs")
+        if self.is_prod:
+            # Credentials travel to these hosts: never in clear text in prod.
+            plain = [
+                name
+                for name, u in (
+                    ("ADO_BASE_URL", self.ado_base_url),
+                    ("ADO_VSRM_URL", self.ado_vsrm_url),
+                    ("SONAR_URL", self.sonar_url),
+                    ("AIKIDO_URL", self.aikido_url),
+                    ("SERVICENOW_URL", self.servicenow_url),
+                    ("KEYVAULT_URL", self.keyvault_url),
+                    ("ARTIFACT_BLOB_ACCOUNT_URL", self.artifact_blob_account_url),
+                )
+                if u and not u.startswith("https://")
+            ]
+            if plain:
+                raise ValueError(f"APP_ENV=prod requires https:// for: {', '.join(plain)}")
+        if self.scan_timeout_minutes >= self.scan_lock_stale_minutes:
+            # Otherwise a second scan could take over the lock of a scan that is still legitimately running.
+            raise ValueError("SCAN_TIMEOUT_MINUTES must be smaller than SCAN_LOCK_STALE_MINUTES")
         return self
 
     @property
