@@ -12,7 +12,7 @@ its key is ``Project/org/repo``. Repos are de-duplicated case-insensitively on (
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
 
@@ -113,6 +113,7 @@ class Discovery:
     builds_by_repo: dict[tuple[str, str], list[dict[str, Any]]]
     releases_by_repo: dict[tuple[str, str], list[dict[str, Any]]]
     unlinked_releases: list[dict[str, Any]]
+    unlinked_builds: list[tuple[dict[str, Any], str]] = field(default_factory=list)  # (raw definition, reason): no resolvable repository
 
 
 def discover(ado_repos: list[dict[str, Any]], build_defs: list[dict[str, Any]], release_defs: list[dict[str, Any]]) -> Discovery:
@@ -125,6 +126,7 @@ def discover(ado_repos: list[dict[str, Any]], build_defs: list[dict[str, Any]], 
         entries[e.link_key] = e
     builds_by_repo: dict[tuple[str, str], list[dict[str, Any]]] = {}
     build_repo: dict[str, tuple[str, str]] = {}
+    unlinked_builds: list[tuple[dict[str, Any], str]] = []
     for b in sorted(build_defs, key=lambda d: int(d["id"]) if str(d.get("id", "")).isdigit() else 0):
         repo = b.get("repository") or {}
         ext = _from_repository_block(repo)
@@ -137,6 +139,7 @@ def discover(ado_repos: list[dict[str, Any]], build_defs: list[dict[str, Any]], 
         elif repo.get("id") and provider_of(repo.get("type")) in (None, "azure_repos"):
             key = ("azure_repos", str(repo["id"]).casefold())
         else:
+            unlinked_builds.append((b, f"build definition has no resolvable repository (type {repo.get('type') or 'unknown'}, name {str(repo.get('name') or repo.get('id') or 'none')[:80]})"))
             continue
         builds_by_repo.setdefault(key, []).append(b)
         build_repo[str(b["id"])] = key
@@ -161,4 +164,7 @@ def discover(ado_repos: list[dict[str, Any]], build_defs: list[dict[str, Any]], 
             unlinked.append(rel)
         else:
             releases_by_repo.setdefault(rkey, []).append(rel)
-    return Discovery(list(entries.values()), builds_by_repo, releases_by_repo, unlinked)
+    for key, bs in builds_by_repo.items():  # Azure Repos id that is not in this project's repository list (deleted, other project, no access)
+        if key not in entries:
+            unlinked_builds.extend((b, "repository not found in this project (deleted, in another project or not visible)") for b in bs)
+    return Discovery(list(entries.values()), builds_by_repo, releases_by_repo, unlinked, unlinked_builds)

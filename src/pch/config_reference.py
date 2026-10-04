@@ -72,6 +72,11 @@ FIELD_DOCS: dict[str, list[tuple[str, str]]] = {
         ("http_timeout", "Per-request timeout in seconds (>0, <=300)."),
         ("http_max_response_mb", "Largest single upstream response body in MB (1-2048). Larger responses are aborted while streaming and recorded as a collection error."),
     ],
+    "Lineage and export": [
+        ("lineage_enabled", "Collect the last deployment per stage/environment for the Lineage tab (two extra read-only calls per release definition, one per YAML environment). `false`: stages show as unknown."),
+        ("lineage_deployments_top", "Deployments / environment records requested per lookup (10-1000). A stage missing from the page gets a targeted lookup before it is shown as never deployed."),
+        ("export_max_rows", "Largest CSV/Excel lineage export in rows (1-5000000). A bigger export is refused with HTTP 413: narrow the filters."),
+    ],
     "Web server": [
         ("host", "Bind address. Non-loopback needs an authenticated mode (see guard rules in README)."),
         ("port", "Listen port (1-65535)."),

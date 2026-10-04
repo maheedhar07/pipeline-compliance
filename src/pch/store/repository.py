@@ -10,7 +10,7 @@ from typing import Any, TypeVar
 from sqlalchemy import ColumnElement, delete, insert, select, update
 from sqlalchemy.orm import Session
 
-from pch.store.models import Base, CollectionErrorRow, FindingRow, RepoResultRow, ScanRow
+from pch.store.models import Base, CollectionErrorRow, FindingRow, LineageRow, RepoResultRow, ScanRow
 from pch.timeutil import utcnow
 
 log = logging.getLogger("pch.store")
@@ -64,8 +64,12 @@ def collection_errors(s: Session, scan_id: str) -> list[CollectionErrorRow]:
     return list(s.scalars(select(CollectionErrorRow).where(CollectionErrorRow.scan_id == scan_id)))
 
 
+def lineage_rows(s: Session, scan_id: str) -> list[LineageRow]:
+    return list(s.scalars(select(LineageRow).where(LineageRow.scan_id == scan_id)))
+
+
 def delete_scan(s: Session, scan_id: str) -> None:
-    for model in (FindingRow, RepoResultRow, CollectionErrorRow):
+    for model in (FindingRow, RepoResultRow, CollectionErrorRow, LineageRow):
         s.execute(delete(model).where(model.scan_id == scan_id))
     s.execute(delete(ScanRow).where(ScanRow.id == scan_id))
 

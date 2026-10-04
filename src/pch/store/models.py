@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Float, ForeignKey, Index, Integer, Unicode, UnicodeText
+from sqlalchemy import JSON, Boolean, Float, ForeignKey, Index, Integer, Unicode, UnicodeText
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from pch.store.types import UTCDateTime
@@ -82,6 +82,27 @@ class FindingRow(Base):
     link: Mapped[str | None] = mapped_column(UnicodeText, nullable=True)
     waiver: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     original_status: Mapped[str | None] = mapped_column(Unicode(16), nullable=True)
+
+
+class LineageRow(Base):
+    """Per-scan lineage: ONE JSON document per repo (``kind="repo"``) or per project's unlinked items (``kind="orphan"``).
+
+    The scalar columns exist only so list pages can be filtered without parsing the document; everything else is in ``doc``
+    (``pch.model.lineage.RepoLineage`` / a list of ``LOrphan``). Filtering by target/tier happens in Python (no JSON-path SQL)."""
+
+    __tablename__ = "lineage"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scan_id: Mapped[str] = mapped_column(ForeignKey("scans.id"), index=True)
+    repo_key: Mapped[str] = mapped_column(Unicode(300), index=True)
+    kind: Mapped[str] = mapped_column(Unicode(16), default="repo")  # repo | orphan
+    project: Mapped[str] = mapped_column(Unicode(200), index=True)
+    provider: Mapped[str] = mapped_column(Unicode(24), default="azure_repos")
+    has_prod: Mapped[bool] = mapped_column(Boolean, default=False)  # a prod stage whose last deployment succeeded
+    n_pipelines: Mapped[int] = mapped_column(Integer, default=0)
+    n_releases: Mapped[int] = mapped_column(Integer, default=0)
+    targets: Mapped[str] = mapped_column(Unicode(300), default="")  # ",aks,sql," (delimited; matched in Python)
+    tiers: Mapped[str] = mapped_column(Unicode(100), default="")
+    doc: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
 class CollectionErrorRow(Base):

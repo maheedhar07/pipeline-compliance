@@ -84,6 +84,10 @@ Settings are environment variables (or a `.env` file; copy `.env.example`). Inva
 | `CONCURRENCY` | `8` | Parallel requests per source (1-64). |
 | `HTTP_TIMEOUT` | `30` | Per-request timeout in seconds (>0, <=300). |
 | `HTTP_MAX_RESPONSE_MB` | `50` | Largest single upstream response body in MB (1-2048). Larger responses are aborted while streaming and recorded as a collection error. |
+| **Lineage and export** | | |
+| `LINEAGE_ENABLED` | `true` | Collect the last deployment per stage/environment for the Lineage tab (two extra read-only calls per release definition, one per YAML environment). `false`: stages show as unknown. |
+| `LINEAGE_DEPLOYMENTS_TOP` | `200` | Deployments / environment records requested per lookup (10-1000). A stage missing from the page gets a targeted lookup before it is shown as never deployed. |
+| `EXPORT_MAX_ROWS` | `200000` | Largest CSV/Excel lineage export in rows (1-5000000). A bigger export is refused with HTTP 413: narrow the filters. |
 | **Web server** | | |
 | `HOST` | `127.0.0.1` | Bind address. Non-loopback needs an authenticated mode (see guard rules in README). |
 | `PORT` | `8000` | Listen port (1-65535). |

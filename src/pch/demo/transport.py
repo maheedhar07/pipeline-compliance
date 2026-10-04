@@ -129,6 +129,10 @@ class DemoTransport(httpx.AsyncBaseTransport):
             return _page(pr["variable_groups"], req)
         if api == "distributedtask/environments":
             return _page(pr["environments"], req)
+        em = re.match(r"^distributedtask/environments/(\d+)/environmentdeploymentrecords$", api)
+        if em:  # lineage (L2): last deployments of YAML environments
+            recs = pr.get("env_records", {}).get(em.group(1), [])
+            return _json({"count": len(recs), "value": recs[: int(q.get("top") or len(recs))]})
         if api == "distributedtask/taskgroups":
             return _json({"count": 0, "value": pr["taskgroups"]})
         if api == "pipelines/checks/configurations":
@@ -146,8 +150,22 @@ class DemoTransport(httpx.AsyncBaseTransport):
         dm = re.match(r"^definitions/(\d+)$", api)
         if dm:
             return _json(pr["release_defs"][dm.group(1)])
+        q = req.url.params
         if api == "deployments":
-            return _page(pr["deployments"].get(req.url.params["definitionId"], []), req)
+            if "minStartedTime" in q:  # run statistics / CRQ correlation (prod deployments of the last 90 days)
+                return _page(pr["deployments"].get(q["definitionId"], []), req)
+            items = pr.get("lineage_deployments", {}).get(q["definitionId"], [])  # lineage (L2): every environment, newest first
+            if q.get("definitionEnvironmentId"):
+                items = [d for d in items if str(d["definitionEnvironmentId"]) == q["definitionEnvironmentId"]]
+            items = sorted(items, key=lambda d: d["startedOn"], reverse=True)
+            return _json({"count": len(items), "value": items[: int(q.get("$top") or len(items))]})
+        if api == "releases":
+            items = pr.get("lineage_releases", {}).get(q["definitionId"], [])
+            return _json({"count": len(items), "value": sorted(items, key=lambda r: r["createdOn"], reverse=True)[: int(q.get("$top") or len(items))]})
+        rm = re.match(r"^releases/(\d+)$", api)
+        if rm:
+            hit = next((r for lst in pr.get("lineage_releases", {}).values() for r in lst if str(r["id"]) == rm.group(1)), None)
+            return _json(hit) if hit else _json({"message": "release not found"}, 404)
         return _json({}, 404)
 
     # ------------------------------------------------------------------ Sonar

@@ -11,13 +11,14 @@ from datetime import UTC, datetime, timedelta, timezone
 import pytest
 from alembic.autogenerate import compare_metadata
 from alembic.runtime.migration import MigrationContext
-from sqlalchemy import func, inspect, select, text
+from sqlalchemy import func, insert, inspect, select, text
 from typer.testing import CliRunner
 
 from pch.cli import app
 from pch.demo.generator import generate_world
 from pch.demo.transport import parse_world_time
 from pch.orchestrator import ScanConfig, Scanner
+from pch.retention import delete_scan_rows
 from pch.settings import Policy, Scope, Settings
 from pch.sources import demo_sources
 from pch.store import locks, migrate
@@ -31,7 +32,7 @@ from pch.store.db import (
     reset_engines,
     session_scope,
 )
-from pch.store.models import Base, CollectionErrorRow, FindingRow, RepoResultRow
+from pch.store.models import Base, CollectionErrorRow, FindingRow, LineageRow, RepoResultRow, ScanRow
 from pch.timeutil import utcnow
 
 runner = CliRunner()
@@ -93,6 +94,28 @@ def test_upgrade_empty_to_head_and_downgrade_base(raw_url):
     assert migrate.db_state(eng).at_head
 
 
+def test_upgrade_from_0001_with_existing_data_keeps_it_and_adds_lineage(raw_url):
+    """An existing database (revision 0001, with a scan and repo results) upgrades to head without touching its data."""
+    eng = get_raw_engine(raw_url)
+    migrate.upgrade(eng, "0001")
+    assert migrate.db_state(eng).current == "0001" and "lineage" not in tables(eng)
+    with eng.begin() as c:
+        c.execute(insert(ScanRow.__table__), [dict(id="old-1", started_at=datetime(2026, 9, 1, 12, 0, 0), mode="live", status="complete", repos_total=1, repos_failed=0, findings_total=0, summary={})])
+        c.execute(insert(RepoResultRow.__table__), [dict(scan_id="old-1", repo_key="P/r", project="P", repo="r", url="", platform_mix=[], targets=["aks"], test_state="NO_TESTS", test_state_reason="",
+                                                         status="AT_RISK", unknowns=0, critical_fails=0, high_fails=0, migration_blockers=[], facts={}, pipelines=[], rule_status={}, external_summary={})])
+    migrate.upgrade(eng)
+    assert migrate.db_state(eng).at_head and "lineage" in tables(eng)
+    with session_scope(raw_url) as s:
+        assert store.get_scan(s, "old-1").status == "complete"
+        assert store.repo_result(s, "old-1", "P/r").targets == ["aks"]
+        assert store.lineage_rows(s, "old-1") == []  # pre-lineage scans simply have no lineage
+        s.add(LineageRow(scan_id="old-1", repo_key="P/r", project="P", doc={"repo": {"key": "P/r"}}))
+    migrate.downgrade(eng, "0001")
+    assert "lineage" not in tables(eng)
+    with session_scope(raw_url) as s:  # downgrade drops only the lineage table
+        assert store.repo_result(s, "old-1", "P/r") is not None
+
+
 def test_models_and_migrations_in_sync(url):
     """Autogenerate against the models must produce NO diff."""
     with get_raw_engine(url).connect() as conn:
@@ -125,6 +148,34 @@ def test_demo_scan_roundtrip(url):
         assert len(rows) == 12 and all(isinstance(r.facts, dict) and isinstance(r.pipelines, list) for r in rows)
         assert len(store.findings(s, "portable-demo")) == res.findings
         assert store.latest_scan(s).id == "portable-demo"
+
+
+def test_lineage_roundtrip_unicode_and_delete(url):
+    """Lineage documents (JSON incl. unicode and ISO dates) round-trip; a scan's lineage is deleted with it, chunked."""
+    from pch.model.lineage import LDeploy, LPipeline, LRepo, LStage, RepoLineage
+    from pch.orchestrator import lineage_row_dicts
+
+    lins = {}
+    for i in range(450):  # 450 rows x 12 columns: more bound parameters than SQL Server allows in one statement
+        key = f"Pröjekt/org/répo-{i}"
+        lins[key] = RepoLineage(repo=LRepo(key=key, project="Pröjekt", name=f"org/répo-{i}", provider="github"), pipelines=[LPipeline(
+            id=str(i), name="日本語-ci", kind="yaml", stages=[LStage(name="Prod", env_tier="prod", last_deploy=LDeploy(status="succeeded", version="v✓", finished=datetime(2026, 10, 1, 8, 9, 30)))])])
+    with session_scope(url) as s:
+        store.create_scan(s, "lin1", "demo")
+        store.create_scan(s, "lin2", "demo")
+        store.insert_rows(s, LineageRow, lineage_row_dicts("lin1", lins, {"Pröjekt": []}))
+        store.insert_rows(s, LineageRow, lineage_row_dicts("lin2", {k: lins[k] for k in list(lins)[:3]}, {}))
+    with session_scope(url) as s:
+        rows = store.lineage_rows(s, "lin1")
+        assert len(rows) == 450 and all(r.kind == "repo" and r.has_prod and r.provider == "github" and r.tiers == ",prod," for r in rows)
+        back = RepoLineage.model_validate(next(r for r in rows if r.repo_key.endswith("répo-7")).doc)
+        assert back.pipelines[0].name == "日本語-ci" and back.pipelines[0].stages[0].last_deploy.finished == datetime(2026, 10, 1, 8, 9, 30)
+    delete_scan_rows(url, "lin1", chunk=100)
+    with session_scope(url) as s:
+        assert store.lineage_rows(s, "lin1") == [] and len(store.lineage_rows(s, "lin2")) == 3
+        store.delete_scan(s, "lin2")
+    with session_scope(url) as s:
+        assert s.scalar(select(func.count()).select_from(LineageRow)) == 0
 
 
 # ------------------------------------------------------------------ types

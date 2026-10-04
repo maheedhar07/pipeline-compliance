@@ -116,6 +116,11 @@ class Settings(BaseSettings):
     # collection error (the scan continues); Content-Length is checked up front.
     http_max_response_mb: int = Field(50, ge=1, le=2048)
 
+    # --- lineage (L2): extra read-only lookups of the last deployment per stage; and the size limit of CSV/Excel exports
+    lineage_enabled: bool = True
+    lineage_deployments_top: int = Field(200, ge=10, le=1000)
+    export_max_rows: int = Field(200_000, ge=1, le=5_000_000)
+
     # --- web server. Bind/auth policy is enforced by pch.web.guard.assert_safe_to_serve (fails closed).
     host: str = "127.0.0.1"
     port: int = Field(8000, ge=1, le=65535)  # env PORT (App Service sets PORT / WEBSITES_PORT for containers)

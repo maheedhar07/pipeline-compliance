@@ -17,7 +17,13 @@ from typing import Any
 
 from pch.collectors.ado.classic_build import normalize_build_definition
 from pch.collectors.ado.classic_release import normalize_release_definition
+from pch.collectors.ado.deployments import (
+    EnvRecordCache,
+    collect_release_deployments,
+    collect_yaml_deployments,
+)
 from pch.collectors.ado.environments import apply_environment_checks, collect_environments
+from pch.collectors.ado.lineage_meta import YamlMeta, parse_yaml_meta
 from pch.collectors.ado.repo_discovery import Discovery, RepoEntry, discover
 from pch.collectors.ado.repo_policies import collect_policy_configurations, policies_for_repo
 from pch.collectors.ado.runs import collect_build_runs, collect_release_runs
@@ -32,6 +38,7 @@ from pch.engine.runner import evaluate
 from pch.engine.scoring import apply_waivers, score_repo
 from pch.logging_setup import bind_scan, scrub
 from pch.model.findings import Finding, Severity, Status
+from pch.model.lineage import LDeploy, LOrphan, RepoLineage
 from pch.model.pipeline import Pipeline
 from pch.model.repo import (
     AikidoFacts,
@@ -44,6 +51,13 @@ from pch.model.repo import (
     SonarFacts,
     VariableGroup,
 )
+from pch.normalize.lineage import (
+    build_repo_lineage,
+    is_deploy_stage,
+    link_lineages,
+    orphan_build,
+    orphan_release,
+)
 from pch.normalize.target_detect import enrich_pipeline
 from pch.repo_scan.external import infer_external_kind, unavailable_facts
 from pch.repo_scan.files import fetch_contents, fetch_file, fetch_tree, select_content_paths
@@ -53,7 +67,7 @@ from pch.settings import Policy, Scope
 from pch.sources import Sources
 from pch.store import repository as store
 from pch.store.db import session_scope
-from pch.store.models import CollectionErrorRow, FindingRow, RepoResultRow
+from pch.store.models import CollectionErrorRow, FindingRow, LineageRow, RepoResultRow
 from pch.timeutil import utcnow, utcnow_naive
 
 log = logging.getLogger("pch.scan")
@@ -70,6 +84,8 @@ class ScanConfig:
     run_days: int = 90
     stale_after: timedelta = timedelta(hours=6)  # `running` scans older than this are orphans of a crashed process
     timeout_s: float | None = None  # overall limit for one scan (SCAN_TIMEOUT_MINUTES); None = unlimited
+    lineage: bool = True  # collect the last deployment per stage (LINEAGE_ENABLED); False: stages are "unknown"
+    lineage_top: int = 200  # deployments / environment records per lookup (LINEAGE_DEPLOYMENTS_TOP)
 
 
 @dataclass
@@ -118,6 +134,10 @@ class Scanner:
         self.catalog = TaskCatalog()
         self.aikido_data: tuple[list, list] | None = None
         self.rules = all_rules()
+        self.yaml_meta: dict[str, YamlMeta] = {}  # "<project>:<definition id>" -> triggers/resources parsed from the expanded YAML
+        self.lineages: dict[str, RepoLineage] = {}  # repo key -> lineage
+        self.orphans: dict[str, list[LOrphan]] = {}  # project -> unlinked pipelines / releases
+        self.env_records = EnvRecordCache(sources.ado, cfg.lineage_top)
 
     def err(self, source: str, subject: str, exc: BaseException | str) -> None:
         msg = scrub(f"{type(exc).__name__}: {exc}" if isinstance(exc, BaseException) else exc)  # persisted: never a secret
@@ -234,14 +254,20 @@ class Scanner:
                 facts.kind, facts.has_app_code = inferred, False
         # 3. run history
         since = cfg.now - timedelta(days=cfg.run_days)
+        build_runs: dict[str, list[dict[str, Any]]] = {}
         for p in pipelines:
             try:
                 if p.platform == "ado_classic_release":
                     await collect_release_runs(ado, project, p, since)
                 else:
-                    await collect_build_runs(ado, project, p, since)
+                    build_runs[p.id] = await collect_build_runs(ado, project, p, since)
             except Exception as e:
                 rerr("ado", f"runs for {p.name}: {e}")
+        # 3b. lineage (what this repo produces and where it was last deployed); never fails the repo
+        try:
+            self.lineages[ref.key] = await self.repo_lineage(pd, ref, pipelines, builds, releases, build_runs)
+        except Exception as e:  # noqa: BLE001 - fail open: the repo is scanned, its lineage is missing
+            self.err("lineage", ref.key, e)
         # 4. Sonar
         sonar: SonarFacts | None = None
         if self.src.sonar is not None and facts.kind not in ("docs",):
@@ -308,7 +334,52 @@ class Scanner:
             text = await fetch_file(ado, project, ref.id, branch, fname)
         if not text:
             raise RuntimeError("YAML definition could not be retrieved")
+        meta = parse_yaml_meta(text, external_pr_default=ref.external)
+        if meta is not None:
+            self.yaml_meta[f"{project}:{d['id']}"] = meta
         return parse_yaml_pipeline(text, d, project, base_web, raw_ref=f"pipeline/{d['id']}")
+
+    async def repo_lineage(self, pd: _ProjectData, ref: RepoRef, pipelines: list[Pipeline], builds: list[dict[str, Any]], releases: list[dict[str, Any]],
+                           build_runs: dict[str, list[dict[str, Any]]]) -> RepoLineage:
+        """Collect the last deployment per stage (read-only) and assemble the repo's lineage document."""
+        ado, project, cfg = self.src.ado, pd.name, self.cfg
+        deploys: dict[str, dict[str, LDeploy]] = {}
+        notes: list[str] = []
+
+        def lerr(msg: str) -> None:
+            self.err("ado", f"{ref.key}: lineage", msg)
+
+        rel_raw = {str(d.get("id")): d for d in releases}
+        env_ids = {name: e.id for name, e in pd.envs.items()}
+
+        async def classic(p: Pipeline) -> None:
+            raw_envs = rel_raw.get(p.id, {}).get("environments") or []
+            ids = {str(e["name"]): str(e["id"]) for e in raw_envs if e.get("name") and e.get("id") is not None}
+            try:
+                deploys[f"{p.platform}:{p.id}"] = await collect_release_deployments(ado, project, p.id, ids, cfg.lineage_top, lerr)
+            except Exception as e:  # noqa: BLE001
+                lerr(f"release {p.name}: last deployments not collected: {type(e).__name__}: {e}")
+                notes.append(f"last deployments of release '{p.name}' could not be collected")
+
+        async def yaml(p: Pipeline) -> None:
+            stage_envs = {st.name: st.env_name for st in p.stages if is_deploy_stage(st) and st.env_name}
+            if not stage_envs:
+                return
+            deploys[f"{p.platform}:{p.id}"] = await collect_yaml_deployments(ado, project, p.id, stage_envs, env_ids, self.env_records, build_runs.get(p.id, []), lerr)
+
+        if cfg.lineage:
+            jobs = [classic(p) if p.platform == "ado_classic_release" else yaml(p) for p in pipelines if p.platform in ("ado_classic_release", "ado_yaml")]
+            await asyncio.gather(*jobs)
+        meta = {p.id: m for p in pipelines if (m := self.yaml_meta.get(f"{project}:{p.id}")) is not None}
+        return build_repo_lineage(ref, pipelines, builds, releases, meta, deploys, build_runs, pd.conns, collected=cfg.lineage, notes=notes)
+
+    def collect_orphans(self, pd: _ProjectData) -> None:
+        base_web = self.src.ado.web_url(pd.name, "")
+        known = {str(b.get("id")) for b in pd.build_defs}
+        items = [orphan_build(b, pd.name, base_web, why) for b, why in pd.disc.unlinked_builds]
+        items += [orphan_release(r, pd.name, base_web, known) for r in pd.disc.unlinked_releases]
+        if items:
+            self.orphans[pd.name] = items
 
     # ------------------------------------------------------------------ whole scan
     async def run(self, scan_id: str) -> ScanResult:
@@ -395,6 +466,12 @@ class Scanner:
             return out
 
         results = await asyncio.gather(*(one(j) for j in jobs))
+        for pd in pdatas:
+            self.collect_orphans(pd)
+        try:
+            link_lineages(sorted(self.lineages.values(), key=lambda lin: lin.repo.key))
+        except Exception as e:  # noqa: BLE001 - downstream/adoption links are an enrichment
+            self.err("lineage", "linking pipelines across repositories", e)
         return self.persist(scan_id, results, t0)
 
     # ------------------------------------------------------------------ persistence
@@ -445,6 +522,7 @@ class Scanner:
                         link=f.link, waiver=f.waiver.model_dump(mode="json") if f.waiver else None,
                         original_status=f.original_status.value if f.original_status else None,
                     ))
+            store.insert_rows(s, LineageRow, lineage_row_dicts(scan_id, self.lineages, self.orphans))
             for source, subject, msg in self.errors:
                 s.add(CollectionErrorRow(scan_id=scan_id, source=source, subject=subject, message=msg))
             row = store.get_scan(s, scan_id)
@@ -458,6 +536,25 @@ class Scanner:
                 row.duration_s = round(duration, 2)
                 row.summary = {"status_counts": dict(counts), "category_fails": dict(cat_fail), "errors": len(self.errors)}
         return ScanResult(scan_id, len(results), n_findings, len(self.errors), round(duration, 2), dict(counts))
+
+
+def lineage_row_dicts(scan_id: str, lineages: dict[str, RepoLineage], orphans: dict[str, list[LOrphan]]) -> list[dict[str, Any]]:
+    """Rows for the ``lineage`` table: one per repo, one per project that has unlinked items."""
+    rows: list[dict[str, Any]] = []
+    for key in sorted(lineages):
+        lin = lineages[key]
+        rows.append({
+            "scan_id": scan_id, "repo_key": key, "kind": "repo", "project": lin.repo.project, "provider": lin.repo.provider, "has_prod": lin.has_prod,
+            "n_pipelines": len(lin.pipelines), "n_releases": len(lin.releases), "targets": "," + ",".join(lin.targets) + ",", "tiers": "," + ",".join(lin.tiers) + ",",
+            "doc": lin.model_dump(mode="json"),
+        })
+    for project in sorted(p for p in orphans if orphans[p]):
+        rows.append({
+            "scan_id": scan_id, "repo_key": f"{project}/(unlinked)", "kind": "orphan", "project": project, "provider": "azure_repos", "has_prod": False,
+            "n_pipelines": sum(1 for o in orphans[project] if o.type == "pipeline"), "n_releases": sum(1 for o in orphans[project] if o.type == "release"),
+            "targets": ",", "tiers": ",", "doc": {"orphans": [o.model_dump(mode="json") for o in orphans[project]]},
+        })
+    return rows
 
 
 def _jsonable(d: dict[str, Any]) -> dict[str, Any]:

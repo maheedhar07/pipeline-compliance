@@ -1,0 +1,9 @@
+{
+  "count": 2,
+  "value": [
+    {"id": 12, "name": "Release-12", "artifacts": [
+      {"alias": "_build", "type": "Build", "isPrimary": true, "definitionReference": {"definition": {"id": "12", "name": "payments-api-CI"}, "version": {"id": "5012", "name": "20261001.3"}}}]},
+    {"id": 11, "name": "Release-11", "artifacts": [
+      {"alias": "_build", "type": "Build", "isPrimary": true, "definitionReference": {"definition": {"id": "12", "name": "payments-api-CI"}, "version": {"id": "5011", "name": "20260930.2"}}}]}
+  ]
+}

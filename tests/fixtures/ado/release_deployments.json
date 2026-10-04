@@ -1,0 +1,42 @@
+{
+  "count": 3,
+  "value": [
+    {
+      "id": 902,
+      "release": {"id": 12, "name": "Release-12", "_links": {}},
+      "releaseDefinition": {"id": 31, "name": "orders-func-CD"},
+      "releaseEnvironment": {"id": 801, "name": "Dev"},
+      "definitionEnvironmentId": 1,
+      "attempt": 1,
+      "deploymentStatus": "succeeded",
+      "operationStatus": "PhaseSucceeded",
+      "requestedFor": {"displayName": "Ava Chen", "uniqueName": "ava.chen@contoso.com", "id": "u-1"},
+      "requestedBy": {"displayName": "Microsoft.VisualStudio.Services.ReleaseManagement", "uniqueName": "svc@contoso.com"},
+      "queuedOn": "2026-10-01T08:00:00.0Z",
+      "startedOn": "2026-10-01T08:01:00.0Z",
+      "completedOn": "2026-10-01T08:09:30.0Z"
+    },
+    {
+      "id": 901,
+      "release": {"id": 11, "name": "Release-11"},
+      "releaseEnvironment": {"id": 801, "name": "Dev"},
+      "definitionEnvironmentId": 1,
+      "deploymentStatus": "succeeded",
+      "operationStatus": "PhaseSucceeded",
+      "requestedFor": {"displayName": "Liam Okafor", "uniqueName": "liam@contoso.com"},
+      "startedOn": "2026-09-30T08:01:00.0Z",
+      "completedOn": "2026-09-30T08:09:00.0Z"
+    },
+    {
+      "id": 903,
+      "release": {"id": 11, "name": "Release-11"},
+      "releaseEnvironment": {"id": 802, "name": "UAT"},
+      "definitionEnvironmentId": 2,
+      "deploymentStatus": "failed",
+      "operationStatus": "PhaseFailed",
+      "requestedBy": {"displayName": "ava.chen@contoso.com", "uniqueName": "ava.chen@contoso.com"},
+      "startedOn": "2026-09-30T10:00:00.0Z",
+      "completedOn": "2026-09-30T10:04:00.0Z"
+    }
+  ]
+}

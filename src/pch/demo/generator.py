@@ -7,6 +7,7 @@ moves traits smoothly instead of reshuffling the whole estate.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import random
 import zlib
@@ -474,6 +475,9 @@ class WorldBuilder:
             "snow": {"changes": []}, "scope_repos": [],
         }
         self.aikido_id = 5000
+        self.lin_id = 700000  # separate id space for lineage data, so the pre-lineage world is byte-identical
+        self.specs: dict[str, RepoSpec] = {}  # repo key -> spec
+        self.pipe_of: dict[str, tuple[int, str]] = {}  # repo key -> (build definition id, "classic" | "yaml")
 
     def rid(self) -> int:
         self.next_id += 1
@@ -487,6 +491,7 @@ class WorldBuilder:
             "repos": [], "build_defs": {}, "release_defs": {}, "policies": [], "endpoints": [], "perms": {},
             "variable_groups": [], "environments": [], "env_checks": {}, "builds": {}, "deployments": {},
             "yaml": {}, "yaml_preview_fail": [], "faulty_defs": [], "items": {}, "files": {}, "taskgroups": [],
+            "lineage_deployments": {}, "lineage_releases": {}, "env_records": {},  # lineage (L2): last deployments
         }
         eid_n = 0
         for tier in ("dev", "test", "uat", "prod"):
@@ -521,6 +526,7 @@ class WorldBuilder:
     # ---- one repo
     def add_repo(self, s: RepoSpec) -> None:
         pr = self.project(s.project)
+        self.specs[s.key] = s
         paths, contents = repo_files(s)
         if not s.github:  # GitHub-hosted code is NOT in Azure Repos: ADO only knows it through the pipelines that build it
             pr["repos"].append({"id": s.repo_id, "name": s.name, "project": {"name": s.project}, "defaultBranch": f"refs/heads/{s.default_branch}",
@@ -535,6 +541,7 @@ class WorldBuilder:
             if s.style == "classic":
                 if not s.gh_artifact:
                     build_id = self.classic_build(pr, s)
+                    self.pipe_of[s.key] = (build_id, "classic")
                 if s.kind in DEPLOY_KINDS:
                     self.classic_release(pr, s, build_id)
             else:
@@ -643,6 +650,7 @@ class WorldBuilder:
         }
         pr["release_defs"][did] = defn
         self.runs(pr, s, did, "release")
+        self.release_lineage(pr, s, did, defn)
 
     # ---- yaml pipeline
     def yaml_pipeline(self, pr: dict[str, Any], s: RepoSpec) -> None:
@@ -682,6 +690,7 @@ class WorldBuilder:
         }
         pr["build_defs"][did] = defn
         pr["yaml"][did] = text
+        self.pipe_of[s.key] = (did, "yaml")
         if s.has("preview_fails"):
             pr["yaml_preview_fail"].append(did)
             if not s.github:  # the Items-API fallback exists for Azure Repos only
@@ -704,6 +713,136 @@ class WorldBuilder:
                                    "settings": {"displayName": "ServiceNow CRQ check", "definitionRef": {"name": "ServiceNow-DevOps-Change"}, "inputs": {"url": "https://contoso.service-now.com/api/sn_devops/change"}}})
             pr["env_checks"][eid] = checks
         self.runs(pr, s, did, "yaml", prod_env=env_defs[-1][0] if env_defs and env_defs[-1][1] == "Prod" else None)
+        self.yaml_lineage(pr, s, did, env_defs)
+
+    # ---- lineage (L2): last deployments, downstream triggers, templates repos, orphans. Own RNG and id space: nothing above changes.
+    def lid(self) -> int:
+        self.lin_id += 1
+        return self.lin_id
+
+    def release_lineage(self, pr: dict[str, Any], s: RepoSpec, did: int, defn: dict[str, Any]) -> None:
+        """Releases + deployments of EVERY environment: succeeded / failed / in progress / partially succeeded / never deployed."""
+        rng = random.Random(f"{s.seed}:{s.idx}:lin:{did}")  # nosec B311 - deterministic demo data, not security-sensitive
+        envs = defn["environments"]
+        n_rel = 3 + rng.randrange(3)
+        roll = rng.random()
+        n = len(envs)
+        reach = -1 if roll < 0.10 else (rng.randrange(n) if roll < 0.30 else n - 1)  # last environment ever reached
+        last_status = rng.choices(["succeeded", "failed", "inProgress", "partiallySucceeded"], [55, 22, 15, 8])[0] if reach >= 0 else "succeeded"
+        art = defn["artifacts"][0]
+        releases: list[dict[str, Any]] = []
+        for j in range(n_rel):
+            rid = self.lid()
+            when = self.now - timedelta(days=(n_rel - j) * 3 + rng.randrange(3), hours=rng.randrange(20))
+            if art["type"] == "GitHub":
+                sha = hashlib.sha1(f"{s.key}:{j}".encode()).hexdigest()  # nosec B324 - fake commit id
+                version = {"id": sha, "name": sha[:7]}
+            else:
+                version = {"id": str(5000 + j), "name": f"{when:%Y%m%d}.{j + 1}"}
+            a = json.loads(json.dumps(art))
+            a["definitionReference"]["version"] = version
+            releases.append({"id": rid, "name": f"Release-{j + 1}", "artifacts": [a], "createdOn": iso(when), "when": when})
+        deployments: list[dict[str, Any]] = []
+        for k, env in enumerate(envs):
+            if k > reach:
+                continue
+            newest_rel = max(0, n_rel - 1 - k) if reach >= 0 else 0
+            for j in range(newest_rel + 1):
+                rel = releases[j]
+                status = "succeeded"
+                op = "PhaseSucceeded"
+                if j == newest_rel and k == reach:
+                    status = last_status
+                    op = {"succeeded": "PhaseSucceeded", "failed": "PhaseFailed", "inProgress": "PhaseInProgress", "partiallySucceeded": "PhasePartiallySucceeded"}[status]
+                start = rel["when"] + timedelta(hours=2 * k + 1)
+                dep = {"id": self.lid(), "release": {"id": rel["id"], "name": rel["name"]}, "releaseEnvironment": {"id": env["id"], "name": env["name"]},
+                       "definitionEnvironmentId": env["id"], "attempt": 1, "deploymentStatus": status, "operationStatus": op,
+                       "requestedFor": self.author(s), "requestedBy": {"displayName": "Microsoft.VisualStudio.Services.ReleaseManagement", "uniqueName": "svc-release@contoso.com"},
+                       "queuedOn": iso(start - timedelta(minutes=2)), "startedOn": iso(start)}
+                if status != "inProgress":
+                    dep["completedOn"] = iso(start + timedelta(minutes=9))
+                deployments.append(dep)
+        pr["lineage_releases"][did] = [{k: v for k, v in r.items() if k != "when"} for r in releases]
+        pr["lineage_deployments"][did] = deployments
+
+    def yaml_lineage(self, pr: dict[str, Any], s: RepoSpec, did: int, env_defs: list[tuple[str, str]]) -> None:
+        """Environment deployment records of a YAML pipeline, tied to the pipeline's completed builds (+ a decoy from another pipeline)."""
+        if not env_defs:
+            return
+        rng = random.Random(f"{s.seed}:{s.idx}:envrec:{did}")  # nosec B311 - deterministic demo data, not security-sensitive
+        builds = sorted(pr["builds"].get(did, []), key=lambda b: b["finishTime"])
+        env_id = {e["name"]: e["id"] for e in pr["environments"]}
+        records: dict[int, list[dict[str, Any]]] = {env_id[e]: [] for e, _ in env_defs}
+        for b in builds:
+            depth = rng.choices(range(len(env_defs) + 1), [2] + [3] * (len(env_defs) - 1) + [8])[0]  # how many environments this run reached
+            fin = b["finishTime"]
+            for k, (env, tier) in enumerate(env_defs[:depth]):
+                result = "failed" if (k == depth - 1 and b["result"] != "succeeded") else "succeeded"
+                records[env_id[env]].append({"id": self.lid(), "environmentId": env_id[env], "definition": {"id": did, "name": s.name}, "stageName": YAML_LABEL[tier],
+                                             "jobName": f"deploy_{tier.lower()}", "owner": {"id": b["id"], "name": b["buildNumber"]}, "result": result,
+                                             "queueTime": fin, "startTime": fin, "finishTime": fin})
+        if env_defs and rng.random() < 0.15:  # a run that is deploying right now (not among the completed builds)
+            env, tier = env_defs[0]
+            records[env_id[env]].append({"id": self.lid(), "environmentId": env_id[env], "definition": {"id": did, "name": s.name}, "stageName": YAML_LABEL[tier],
+                                         "jobName": f"deploy_{tier.lower()}", "owner": {"id": self.lid(), "name": f"{self.now:%Y%m%d}.99"}, "result": None,
+                                         "queueTime": iso(self.now), "startTime": iso(self.now)})
+        for e, _ in env_defs:  # records of another pipeline in the same environment must not be mistaken for ours
+            records[env_id[e]].append({"id": self.lid(), "environmentId": env_id[e], "definition": {"id": 999999, "name": "shared-ops"}, "stageName": "Deploy",
+                                       "owner": {"id": 1, "name": "20200101.1"}, "result": "failed", "queueTime": iso(self.now), "startTime": iso(self.now), "finishTime": iso(self.now)})
+        for eid, recs in records.items():
+            pr["env_records"][eid] = recs
+
+    def link_pipelines(self) -> None:
+        """Two pipelines whose YAML lives in another repo, then downstream triggers (YAML ``resources.pipelines``, classic build completion)."""
+        templated: set[tuple[str, int]] = set()
+        for pname, pr in self.world["ado"].items():
+            if len(templated) >= 2:
+                break
+            yaml_specs = [sp for sp in self.specs.values() if sp.project == pname and sp.style == "yaml" and self.pipe_of.get(sp.key, (0, ""))[1] == "yaml"]
+            libs = [sp for sp in yaml_specs if sp.kind == "lib"]
+            # Azure Repos apps: a GitHub repo whose only pipeline moves elsewhere would no longer be discoverable (ADR-14, known limit)
+            apps = sorted((sp for sp in yaml_specs if sp.kind in ("functionapp", "webapp") and self.pipe_of[sp.key][0] not in pr["yaml_preview_fail"]), key=lambda sp: sp.github)
+            apps = [sp for sp in apps if not sp.github]
+            if not libs or not apps:
+                continue
+            tmpl, app = libs[0], apps[0]  # the app's pipeline is defined in the project's "common" repo and checks the app out from there
+            did = self.pipe_of[app.key][0]
+            defn = pr["build_defs"][did]
+            defn["repository"] = tmpl.repository_block()
+            defn["process"]["yamlFilename"] = f"pipelines/{app.name}.yml"
+            rtype, rname = ("github", app.repo_name) if app.github else ("git", f"{pname}/{app.name}")
+            job = "      - job: build\n        pool:\n          vmImage: ubuntu-latest\n        steps:\n"
+            text = pr["yaml"][did].replace(job, job + "          - checkout: app\n", 1)
+            pr["yaml"][did] = f"resources:\n  repositories:\n    - repository: app\n      type: {rtype}\n      name: {rname}\n      ref: refs/heads/{app.default_branch}\n" + text
+            templated.add((pname, did))
+        for pname, pr in self.world["ado"].items():
+            defs = [(d, did) for did, d in sorted(pr["build_defs"].items(), key=lambda kv: int(kv[0]))]
+            ys = [(d, did) for d, did in defs if (d.get("process") or {}).get("type") == 2 and (pname, did) not in templated]
+            for i in range(0, len(ys) - 1, 6):  # consumer = the next YAML pipeline of the project
+                (prod, _), (_, cid) = ys[i], ys[i + 1]
+                pr["yaml"][cid] = pr["yaml"][cid].replace(
+                    "\nvariables:", f"\nresources:\n  pipelines:\n    - pipeline: upstream\n      source: {prod['name']}\n      trigger:\n        branches:\n          include:\n            - main\nvariables:", 1)
+            cl = [d for d, did in defs if (d.get("process") or {}).get("type") == 1 and did not in pr["faulty_defs"]]
+            for i in range(0, len(cl) - 1, 9):
+                cl[i + 1]["triggers"].append({"triggerType": "buildCompletion", "definition": {"id": str(cl[i]["id"]), "name": cl[i]["name"]}, "requiresSuccessfulBuild": True})
+
+    def add_orphans(self) -> None:
+        """Pipelines with no resolvable repository and releases without a linked build (shown in the Orphans section)."""
+        projects = list(self.world["ado"])
+        if not projects:
+            return
+        for pname in projects[:2]:
+            pr = self.world["ado"][pname]
+            for repo in ({"id": "", "name": "", "type": "TfsGit"}, {"id": "00000000-gone-0000", "name": "retired-repo", "type": "TfsGit"}):
+                bid = self.rid()
+                pr["build_defs"][bid] = {"id": bid, "name": f"legacy-{'nightly' if not repo['id'] else 'retired'}-job", "path": f"\\{pname}\\legacy", "type": "build", "project": {"name": pname},
+                                         "repository": repo, "process": {"type": 1, "phases": []}, "queue": {"pool": {"name": "Azure Pipelines", "isHosted": True}}, "variables": {},
+                                         "triggers": [], "retentionRules": [], "authoredBy": {"displayName": "Ava Chen"}, "_links": P.web_link(pname, "build", bid)}
+        for pname, artifacts in ((projects[min(1, len(projects) - 1)], []), (projects[-1], [{"alias": "acr", "type": "AzureContainerRepository", "isPrimary": True, "definitionReference": {"definition": {"id": "contosoacr/old-image", "name": "old-image"}}}])):
+            pr = self.world["ado"][pname]
+            rid = self.rid()
+            pr["release_defs"][rid] = {"id": rid, "name": f"manual-hotfix-{'cd' if not artifacts else 'image'}", "path": f"\\{pname}", "artifacts": artifacts, "triggers": [], "environments": [],
+                                       "variables": {}, "variableGroups": [], "modifiedBy": {"displayName": "Noor Haddad", "uniqueName": "noor.haddad@contoso.com"}, "_links": P.web_link(pname, "release", rid)}
 
     # ---- run history + CRQs
     def runs(self, pr: dict[str, Any], s: RepoSpec, did: int, kind: str, prod_env: str | None = None) -> None:
@@ -731,7 +870,7 @@ class WorldBuilder:
             else:
                 b = {"id": self.rid(), "buildNumber": f"{fin:%Y%m%d}.{i + 1}", "status": "completed", "result": "succeeded" if ok else "failed",
                      "finishTime": iso(fin), "sourceBranch": f"refs/heads/{s.default_branch}", "definition": {"id": did},
-                     "requestedFor": self.author(s), "tags": [], "parameters": "{}"}
+                     "requestedFor": self.author(s), "tags": [], "parameters": "{}", "sourceVersion": hashlib.sha1(f"{did}:{i}".encode()).hexdigest()}  # nosec B324 - fake commit id
                 if kind == "yaml" and has_prod and ok:
                     crq = self.crq_for(s, rng, fin, ok)
                     if crq:
@@ -832,6 +971,8 @@ def generate_world(seed: int = 42, repos: int = 280, quality_shift: float = 0.0,
     for idx, (project, kind) in enumerate(build_plan(repos)):
         spec = make_spec(seed, idx, project, kind, quality_shift, used)
         wb.add_repo(spec)
+    wb.link_pipelines()
+    wb.add_orphans()
     # a deliberately disabled / empty repo exercises collection-error tolerance
     wb.world["meta"]["projects"] = list(wb.world["ado"])
     wb.world["meta"]["github_share"] = GITHUB_SHARE

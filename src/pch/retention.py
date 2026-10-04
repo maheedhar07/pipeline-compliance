@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from pch.providers import ArtifactStore
 from pch.store import repository as store
 from pch.store.db import session_scope
-from pch.store.models import CollectionErrorRow, FindingRow, RepoResultRow, ScanRow
+from pch.store.models import CollectionErrorRow, FindingRow, LineageRow, RepoResultRow, ScanRow
 from pch.timeutil import utcnow
 
 log = logging.getLogger("pch.retention")
@@ -86,7 +86,7 @@ def delete_scan_rows(url: str, scan_id: str, chunk: int = CHUNK) -> int:
     """Delete one scan's rows in a single transaction (children in chunks, then ``delete_scan``). Returns rows removed."""
     total = 0
     with session_scope(url) as s:
-        for model in (FindingRow, RepoResultRow, CollectionErrorRow):
+        for model in (FindingRow, RepoResultRow, CollectionErrorRow, LineageRow):
             while True:
                 ids = list(s.scalars(select(model.id).where(model.scan_id == scan_id).limit(chunk)))
                 if not ids:

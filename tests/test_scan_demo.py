@@ -62,7 +62,7 @@ def test_world_shape_280():
     assert 0.55 < len(github) / 280 < 0.75 and len(azure) > 60 and len(discovered) > 250
     assert all(r.url.startswith("https://github.com/") and not r.url.endswith(".git") and r.service_connection_id for r in github)
     assert not any("/" in r["name"] for p in w["ado"].values() for r in p["repos"])  # Azure Repos names never look like org/repo
-    assert sum(1 for p in w["ado"].values() for d in p["release_defs"].values() if d["artifacts"][0]["type"] == "GitHub") >= 5
+    assert sum(1 for p in w["ado"].values() for d in p["release_defs"].values() if d["artifacts"] and d["artifacts"][0]["type"] == "GitHub") >= 5
     kinds = {"classic": 0, "yaml": 0}
     for pr in w["ado"].values():
         for d in pr["build_defs"].values():
@@ -226,7 +226,8 @@ def test_demo_github_estate_is_scanned_through_real_collectors(world, tmp_path):
         assert len(gh) > len(az) > 5 and all("/" in r.repo and r.url.startswith("https://github.com/") for r in gh)
         assert not any("/" in r.repo for r in az)
         errs = [e.message for e in store.collection_errors(s, "gh")]
-        assert not any("not linked" in m for m in errs)  # releases consuming GitHub repos (directly or via a build) are linked
+        # releases consuming GitHub repos (directly or via a build) are linked; only the deliberate demo orphans (L2) are not
+        assert sum("not linked" in m for m in errs) <= 2  # the two deliberate demo orphans, nothing else
         assert any(p["platform"] == "ado_classic_release" for r in gh for p in r.pipelines)
         assert any(p["platform"] == "ado_yaml" for r in gh for p in r.pipelines) and any(p["platform"] == "ado_classic_build" for r in gh for p in r.pipelines)
         assert all(r.facts["facts_source"] == "unavailable" for r in gh) and all(r.facts["facts_source"] == "ado_items" for r in az)

@@ -321,7 +321,8 @@ def scan(
                 scan_id = f"{now:%Y%m%d-%H%M%S}-demo"
                 record = PrefixedStore(artifacts, scan_id) if cache else None
                 src = demo_sources(w, record_to=record)
-                cfg = ScanConfig(scope=scope, policy=policy, db_url=db_url, mode="demo", now=now, stale_after=stale, timeout_s=timeout_s)
+                cfg = ScanConfig(scope=scope, policy=policy, db_url=db_url, mode="demo", now=now, stale_after=stale, timeout_s=timeout_s,
+                                  lineage=settings.lineage_enabled, lineage_top=settings.lineage_deployments_top)
                 typer.echo(f"Scanning demo estate {scan_id} ...", err=True)
                 try:
                     res = await Scanner(src, cfg, progress).run(scan_id)
@@ -338,7 +339,8 @@ def scan(
             scan_id = f"{now:%Y%m%d-%H%M%S}-live"
             src = live_sources(settings, record_to=PrefixedStore(artifacts, scan_id) if cache is not False else None)
             mode = "live"
-        cfg = ScanConfig(scope=scope, policy=policy, db_url=db_url, mode=mode, now=now, stale_after=stale, timeout_s=timeout_s)
+        cfg = ScanConfig(scope=scope, policy=policy, db_url=db_url, mode=mode, now=now, stale_after=stale, timeout_s=timeout_s,
+                         lineage=settings.lineage_enabled, lineage_top=settings.lineage_deployments_top)
         try:
             res = await Scanner(src, cfg, progress).run(scan_id)
         finally:

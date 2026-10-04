@@ -55,7 +55,8 @@ def stats_from_builds(builds: list[dict[str, Any]]) -> tuple[RunStats, RunSummar
     return st, last
 
 
-async def collect_build_runs(client: AdoClient, project: str, p: Pipeline, since: datetime) -> None:
+async def collect_build_runs(client: AdoClient, project: str, p: Pipeline, since: datetime) -> list[dict[str, Any]]:
+    """Collect completed builds (run stats, last run, prod deployments). Returns the raw items for the lineage view."""
     items = await client.paged(
         project, "_apis/build/builds",
         {"definitions": p.id, "minTime": since.strftime("%Y-%m-%dT%H:%M:%SZ"), "statusFilter": "completed", "$top": 200},
@@ -78,6 +79,7 @@ async def collect_build_runs(client: AdoClient, project: str, p: Pipeline, since
                     requested_by=(b.get("requestedFor") or {}).get("uniqueName"),
                 )
             )
+    return items
 
 
 async def collect_release_runs(client: AdoClient, project: str, p: Pipeline, since: datetime) -> None:
