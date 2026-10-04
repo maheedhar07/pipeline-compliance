@@ -1,0 +1,8 @@
+{"total_count": 6, "workflows": [
+ {"id": 101, "name": "CI", "path": ".github/workflows/ci.yml", "state": "active", "html_url": "https://github.com/contoso-payments/billing-api/blob/main/.github/workflows/ci.yml"},
+ {"id": 102, "name": "Deploy", "path": ".github/workflows/deploy.yml", "state": "active", "html_url": "https://github.com/contoso-payments/billing-api/blob/main/.github/workflows/deploy.yml"},
+ {"id": 103, "name": "Insecure", "path": ".github/workflows/insecure.yml", "state": "disabled_manually", "html_url": ""},
+ {"id": 104, "name": "Release", "path": ".github/workflows/caller.yml", "state": "active", "html_url": ""},
+ {"id": 105, "name": "Reusable tests", "path": ".github/workflows/tests.yml", "state": "active", "html_url": ""},
+ {"id": 106, "name": "CodeQL", "path": "dynamic/github-code-scanning/codeql", "state": "active", "html_url": ""}
+]}

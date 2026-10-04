@@ -1,0 +1,14 @@
+name: Release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+jobs:
+  test:
+    uses: ./.github/workflows/tests.yml
+  scan:
+    uses: contoso-platform/workflows/.github/workflows/scan.yml@0123456789abcdef0123456789abcdef01234567
+    secrets: inherit
+  missing:
+    uses: contoso-platform/private-workflows/.github/workflows/gone.yml@v1

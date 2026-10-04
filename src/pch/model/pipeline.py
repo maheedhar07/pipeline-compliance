@@ -9,6 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 Platform = Literal["ado_classic_build", "ado_classic_release", "ado_yaml", "gha"]
+PROTECTED_BRANCHES = "<protected branches>"  # branch_filters sentinel: a GitHub environment that only accepts deployments from protected branches
 EnvTier = Literal["dev", "test", "uat", "prod", "unknown"]
 TARGETS = ("functionapp", "webapp", "aks", "adf", "synapse", "sql", "iac", "other")
 
@@ -43,6 +44,9 @@ class Step(BaseModel):
     inline_script: str | None = None
     marketplace: bool = False
     deprecated: bool = False
+    # GitHub Actions: how `uses: owner/repo@ref` is pinned. sha = full commit SHA (or image digest), tag = version tag, branch = moving ref,
+    # local = `./path` in the same repo, docker = `docker://...`. None for run steps and for every other platform.
+    ref_kind: Literal["sha", "tag", "branch", "local", "docker"] | None = None
 
     @property
     def always_false(self) -> bool:
@@ -76,6 +80,10 @@ class Job(BaseModel):
     pool: str | None = None
     self_hosted: bool | None = None
     steps: list[Step] = Field(default_factory=list)
+    # GitHub Actions job facts (None elsewhere): the job's own `permissions` (scope -> level, or "read-all" / "write-all"; None = not declared)
+    # and the reusable workflow it calls (`uses:` at job level).
+    permissions: dict[str, str] | str | None = None
+    uses_workflow: str | None = None
 
 
 class Stage(BaseModel):
@@ -159,6 +167,9 @@ class Pipeline(BaseModel):
     artifact_branch_filters: list[str] = Field(default_factory=list)
     raw_ref: str = ""
     notes: list[str] = Field(default_factory=list)
+    # Platform-specific facts that rules read. GitHub Actions: path, state, events, permissions (top level), callable_only, unresolved (reasons),
+    # public_trigger, workflow_run, env_unknown. Never secret values.
+    meta: dict[str, Any] = Field(default_factory=dict)
 
     def all_steps(self) -> list[Step]:
         return [s for st in self.stages for s in st.steps()]
@@ -171,6 +182,10 @@ class Pipeline(BaseModel):
 
     def stage(self, name: str) -> Stage | None:
         return next((s for s in self.stages if s.name == name), None)
+
+    @property
+    def is_gha(self) -> bool:
+        return self.platform == "gha"
 
     @property
     def is_classic(self) -> bool:

@@ -1,0 +1,57 @@
+name: Deploy
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  deploy-test:
+    runs-on: ubuntu-latest
+    environment: test
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: app
+      - uses: azure/login@a65d910e8af852a8061c627c456678983e180302 # v2.2.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - uses: azure/webapps-deploy@de617f46172a906d0e4946d2385314258b0a80f7 # v3.0.1
+        with:
+          app-name: billing-test
+          package: app
+      - name: Smoke test
+        run: curl --fail https://billing-test.azurewebsites.net/health
+  deploy-prod:
+    needs: deploy-test
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://billing.example.com
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: app
+      - uses: azure/login@a65d910e8af852a8061c627c456678983e180302 # v2.2.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - uses: azure/webapps-deploy@de617f46172a906d0e4946d2385314258b0a80f7 # v3.0.1
+        with:
+          app-name: billing-prod
+          slot-name: staging
+          package: app
+      - name: Swap
+        run: az webapp deployment slot swap -g rg -n billing-prod --slot staging
+      - name: Smoke test
+        run: curl --fail https://billing.example.com/health

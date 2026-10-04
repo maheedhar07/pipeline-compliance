@@ -1,0 +1,8 @@
+name: Scan
+on:
+  workflow_call:
+jobs:
+  sonar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: SonarSource/sonarqube-quality-gate-action@v1

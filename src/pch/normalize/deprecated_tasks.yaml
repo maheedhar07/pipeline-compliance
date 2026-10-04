@@ -18,3 +18,29 @@ deprecated:
   - {task: Maven, below_major: 3, replacement: "Maven@3"}
   - {task: ArchiveFiles, below_major: 2, replacement: "ArchiveFiles@2"}
   - {task: NodeTool, below_major: 0, replacement: "NodeTool@0"}
+
+# GitHub Actions: `uses: owner/repo@vN` whose major is below `below_major` runs on a retired Node runtime or is archived/superseded.
+# A SHA- or branch-pinned reference carries no major version, so it is never flagged here (see SUP-006 for pinning).
+# # VERIFY: majors move on; check each action's releases page before relying on a row.
+deprecated_actions:
+  - {task: actions/checkout, below_major: 4, replacement: "actions/checkout@v4"}
+  - {task: actions/setup-node, below_major: 4, replacement: "actions/setup-node@v4"}
+  - {task: actions/setup-python, below_major: 5, replacement: "actions/setup-python@v5"}
+  - {task: actions/setup-dotnet, below_major: 4, replacement: "actions/setup-dotnet@v4"}
+  - {task: actions/setup-java, below_major: 4, replacement: "actions/setup-java@v4"}
+  - {task: actions/setup-go, below_major: 5, replacement: "actions/setup-go@v5"}
+  - {task: actions/cache, below_major: 4, replacement: "actions/cache@v4"}
+  - {task: actions/upload-artifact, below_major: 4, replacement: "actions/upload-artifact@v4"}
+  - {task: actions/download-artifact, below_major: 4, replacement: "actions/download-artifact@v4"}
+  - {task: actions/github-script, below_major: 7, replacement: "actions/github-script@v7"}
+  - {task: actions/create-release, below_major: 99, replacement: "gh release create / softprops/action-gh-release"}
+  - {task: actions/upload-release-asset, below_major: 99, replacement: "gh release upload / softprops/action-gh-release"}
+  - {task: azure/login, below_major: 2, replacement: "azure/login@v2"}
+  - {task: azure/webapps-deploy, below_major: 3, replacement: "azure/webapps-deploy@v3"}
+  - {task: azure/arm-deploy, below_major: 2, replacement: "azure/arm-deploy@v2"}
+  - {task: azure/k8s-deploy, below_major: 5, replacement: "azure/k8s-deploy@v5"}
+  - {task: docker/build-push-action, below_major: 5, replacement: "docker/build-push-action@v6"}
+  - {task: docker/login-action, below_major: 3, replacement: "docker/login-action@v3"}
+  - {task: docker/setup-buildx-action, below_major: 3, replacement: "docker/setup-buildx-action@v3"}
+  - {task: SonarSource/sonarcloud-github-action, below_major: 99, replacement: "SonarSource/sonarqube-scan-action"}
+  - {task: SonarSource/sonarqube-scan-action, below_major: 4, replacement: "SonarSource/sonarqube-scan-action@v5"}

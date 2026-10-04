@@ -137,6 +137,8 @@ scripts:
   - {pattern: '(?i)\b(syft|cyclonedx|sbom-tool|anchore)\b|\bsbom\b', caps: [sbom]}
   - {pattern: '(?i)sqlpackage.*(DeployReport|/Action:Script)|/Action:DeployReport', caps: [dacpac-report]}
   - {pattern: '(?i)\bSynapse\b.*\b(validate)\b', caps: [validate:synapse]}
+  - {pattern: '(?i)\baz\s+login\b[^\n]*--service-principal[^\n]*(\s-p\s|--password)', caps: [auth:secret]}
+  - {pattern: '(?i)\baz\s+login\b[^\n]*(--federated-token|--identity)', caps: [auth:oidc]}
 
 step_names:
   - {pattern: '(?i)smoke|health[ _-]?check|post[ _-]?deploy(ment)?[ _-]?(test|verif|check)|sanity[ _-]?test', caps: [smoke-test]}

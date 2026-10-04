@@ -1,0 +1,24 @@
+name: Insecure
+on:
+  pull_request_target:
+  issue_comment:
+    types: [created]
+permissions: write-all
+jobs:
+  pr:
+    runs-on: [self-hosted, linux]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Greet
+        run: echo "Title ${{ github.event.pull_request.title }} from ${{ github.head_ref }}"
+      - uses: SonarSource/sonarqube-scan-action@main
+        continue-on-error: true
+      - name: Test
+        run: npm test
+        env:
+          API_KEY: abc123literal

@@ -1,0 +1,74 @@
+# GitHub Actions: `uses: owner/repo[/path]@ref` -> capability tags. DATA, not code. Same schema as capabilities.yaml (loaded and merged by
+# normalize/capabilities.py): keys are "<owner/repo[/path]>@*" (case-insensitive, * is a glob that also spans slashes); the value is a list of
+# caps, or specs {when: {inputs.<with-key>: value, inputs.<with-key>~: regex}, caps: [...], else: [...]}. `inputs` are the step's `with:` values.
+# Inline `run:` scripts use the `scripts:` and `step_names:` sections of capabilities.yaml (shared with Azure Pipelines).
+# # VERIFY: action names and input names change between majors; confirm the ones you rely on against the actions' own README.
+
+defaults:
+  "azure/k8s-deploy": {action: deploy}
+
+tasks:
+  # --- source / artifacts
+  "actions/checkout@*":                 [source-checkout]
+  "actions/upload-artifact@*":          [artifact:publish]
+  "actions/download-artifact@*":        [artifact:download]
+  # --- cloud login (the OIDC / secret decision is made by the normaliser from `permissions: id-token` and the inputs)
+  "azure/login@*":                      [auth:login]
+  "aws-actions/configure-aws-credentials@*": [auth:login]
+  "google-github-actions/auth@*":       [auth:login]
+  # --- code quality / security
+  "SonarSource/sonarqube-scan-action@*":
+    - [sast:sonar, sonar:prepare, sonar:analyze]
+    - {when: {"inputs.args~": "sonar\\.qualitygate\\.wait\\s*[=:]\\s*true"}, caps: [sonar:publish]}
+  "SonarSource/sonarcloud-github-action@*":
+    - [sast:sonar, sonar:prepare, sonar:analyze]
+    - {when: {"inputs.args~": "sonar\\.qualitygate\\.wait\\s*[=:]\\s*true"}, caps: [sonar:publish]}
+  "SonarSource/sonarqube-quality-gate-action@*": [sonar:publish, sonar:gate-breaker]
+  "github/codeql-action/*@*":           [sast:codeql, sast:ghas]
+  "actions/dependency-review-action@*": [security-scan:dependency-review]
+  "aikidosec/*@*":                      [security-scan:aikido]
+  "gitleaks/gitleaks-action@*":         [security-scan:secrets]
+  "aquasecurity/trivy-action@*":        [security-scan:trivy]
+  "snyk/actions/*@*":                   [security-scan:snyk]
+  # --- tests and their reports
+  "dorny/test-reporter@*":              [test-results-publish]
+  "EnricoMi/publish-unit-test-result-action@*": [test-results-publish]
+  "mikepenz/action-junit-report@*":     [test-results-publish]
+  "test-summary/action@*":              [test-results-publish]
+  "codecov/codecov-action@*":           [coverage-publish]
+  "coverallsapp/github-action@*":       [coverage-publish]
+  "5monkeys/cobertura-action@*":        [coverage-publish]
+  "irongut/CodeCoverageSummary@*":      [coverage-publish]
+  # --- build / containers
+  "docker/build-push-action@*":
+    - [build, container:build]
+    - {when: {"inputs.push~": "(?i)^true$"}, caps: [container:push]}
+    - {when: {"inputs.sbom~": "(?i)^(true|generator=.+)$"}, caps: [sbom]}
+  "helm/chart-testing-action@*":        [lint:k8s]
+  # --- deploy targets
+  "azure/webapps-deploy@*":             [deploy:webapp]
+  "Azure/functions-action@*":           [deploy:functionapp]
+  "Azure/functions-container-action@*": [deploy:functionapp]
+  "azure/k8s-deploy@*":
+    - {when: {"inputs.action~": "(?i)^(deploy|promote|reject)$"}, caps: [deploy:aks, rollout-status]}
+  "azure/k8s-lint@*":                   [lint:k8s]
+  "azure/arm-deploy@*":
+    - {when: {"inputs.deploymentMode~": "(?i)^validat"}, caps: [whatif], else: [deploy:iac]}
+  "Azure/bicep-deploy@*":
+    - {when: {"inputs.operation~": "(?i)^whatif$"}, caps: [whatif], else: [deploy:iac]}
+  "azure/sql-action@*":                 [deploy:sql]
+  "Azure/Synapse-workspace-deployment@*":
+    - {when: {"inputs.operation~": "(?i)^(deploy|validateDeploy)$"}, caps: [deploy:synapse]}
+    - {when: {"inputs.operation~": "(?i)^(validate|validateDeploy)$"}, caps: [validate:synapse]}
+  "Azure/data-factory-deploy-action@*": [deploy:adf]
+  "Azure/data-factory-validate-action@*": [validate:adf]
+  "azure/cli@*":                        [azcli]
+  "azure/powershell@*":                 [azps]
+  # --- gates / change management
+  "ServiceNow/servicenow-devops-change@*": [gate:servicenow]
+  # --- supply chain
+  "anchore/sbom-action@*":              [sbom]
+  "microsoft/sbom-action@*":            [sbom]
+  "advanced-security/sbom-generator-action@*": [sbom]
+  "CycloneDX/gh-*-generate-sbom@*":     [sbom]
+  "actions/attest-sbom@*":              [sbom]

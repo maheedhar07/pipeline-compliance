@@ -20,7 +20,7 @@ DEPLOY_STATUS_LABEL: dict[str, str] = {
     "succeeded": "succeeded", "partial": "partially succeeded", "failed": "failed", "in_progress": "in progress", "pending": "pending approval/queued",
     "canceled": "canceled", "never": "never deployed", "unknown": "unknown (not collected)",
 }
-KINDS_PIPELINE = ("yaml", "classic_build")
+KINDS_PIPELINE = ("yaml", "classic_build", "gha")
 
 
 class LDeploy(BaseModel):
@@ -87,7 +87,7 @@ class LTrigger(BaseModel):
 class LLink(BaseModel):
     """A pipeline-to-pipeline edge (upstream: what this consumes; downstream: who consumes this)."""
 
-    kind: Literal["yaml_resource", "classic_completion"]
+    kind: Literal["yaml_resource", "classic_completion", "workflow_run"]
     name: str
     pipeline_id: str | None = None
     project: str | None = None
@@ -99,7 +99,7 @@ class LLink(BaseModel):
 class LPipeline(BaseModel):
     id: str
     name: str
-    kind: Literal["yaml", "classic_build"]
+    kind: Literal["yaml", "classic_build", "gha"]
     url: str = ""
     definition_path: str = ""  # YAML file name, or the classic folder path
     yaml_repo: str | None = None  # where the YAML file lives (YAML only)

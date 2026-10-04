@@ -37,15 +37,16 @@ def _split_key(key: str) -> tuple[str, str]:
 @lru_cache
 def load_catalog(path: str | None = None) -> CapabilityCatalog:
     raw = yaml.safe_load(Path(path or DATA_DIR / "capabilities.yaml").read_text()) or {}
+    gha = yaml.safe_load((DATA_DIR / "gha_capabilities.yaml").read_text()) or {}  # GitHub Actions: same schema, merged (action names contain "/")
     cat = CapabilityCatalog()
-    for key, spec in (raw.get("tasks") or {}).items():
+    for key, spec in {**(raw.get("tasks") or {}), **(gha.get("tasks") or {})}.items():
         name, ver = _split_key(key)
         cat.tasks.append((name, ver, spec))
-    cat.defaults = {k.lower(): v for k, v in (raw.get("defaults") or {}).items()}
+    cat.defaults = {k.lower(): v for k, v in {**(raw.get("defaults") or {}), **(gha.get("defaults") or {})}.items()}
     cat.scripts = [(re.compile(i["pattern"]), list(i["caps"])) for i in raw.get("scripts") or []]
     cat.step_names = [(re.compile(i["pattern"]), list(i["caps"])) for i in raw.get("step_names") or []]
     dep = yaml.safe_load((DATA_DIR / "deprecated_tasks.yaml").read_text()) or {}
-    cat.deprecated = {d["task"].lower(): d for d in dep.get("deprecated", [])}
+    cat.deprecated = {d["task"].lower(): d for d in [*dep.get("deprecated", []), *dep.get("deprecated_actions", [])]}
     return cat
 
 
@@ -137,10 +138,10 @@ def classify_step(step: Step, cat: CapabilityCatalog | None = None) -> Step:
         dep = cat.deprecated.get(name.lower())
         if dep is not None:
             try:
-                step.deprecated = ver is not None and int(str(ver).split(".")[0]) < int(dep["below_major"])
+                step.deprecated = ver is not None and int(str(ver).lstrip("vV").split(".")[0]) < int(dep["below_major"])
             except ValueError:
                 step.deprecated = False
-        if "servicenow" in name.lower():
+        if "servicenow" in name.lower() and "/" not in name:  # ADO task names; GitHub actions are mapped in gha_capabilities.yaml
             caps.add("gate:servicenow")
     script = inline_script_of(step)
     if script:

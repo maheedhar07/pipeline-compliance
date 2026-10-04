@@ -1,0 +1,8 @@
+{"total_count": 2, "environments": [
+ {"id": 1, "name": "test", "protection_rules": [], "deployment_branch_policy": null},
+ {"id": 2, "name": "production", "protection_rules": [
+   {"id": 10, "type": "required_reviewers", "prevent_self_review": true, "reviewers": [{"type": "Team", "reviewer": {"slug": "payments-approvers"}}, {"type": "User", "reviewer": {"login": "alice"}}]},
+   {"id": 11, "type": "wait_timer", "wait_timer": 15},
+   {"id": 12, "type": "branch_policy"}],
+  "deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true}}
+]}
