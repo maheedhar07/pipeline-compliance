@@ -34,6 +34,7 @@ from pch.collectors.ado.variable_groups import collect_variable_groups
 from pch.collectors.ado.yaml_pipeline import parse_yaml_pipeline
 from pch.collectors.redact import SECRET_NAME, value_looks_secret
 from pch.engine.migration import repo_readiness
+from pch.engine.reasons import compute_reasons
 from pch.engine.registry import all_rules, rule_params
 from pch.engine.runner import evaluate, policy_effects
 from pch.engine.scoring import apply_waivers, score_repo
@@ -520,6 +521,7 @@ class Scanner:
                         "snow_available": ctx.snow.available,
                         "repo": {"provider": ctx.repo.provider, "full_name": ctx.repo.full_name, "service_connection_id": ctx.repo.service_connection_id},
                         "policies": ctx.policies.model_dump(mode="json"),
+                        "reasons": compute_reasons(findings, self.rules),  # why the repo is not compliant (pages/exports read this)
                     },
                 ))
                 for f in findings:

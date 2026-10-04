@@ -14,10 +14,12 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from pch.engine.reasons import short_title
 from pch.model.lineage import DEPLOY_STATUS_LABEL, LDeploy, LPipeline, LRelease, LStage, RepoLineage
 from pch.model.repo import PROVIDER_LABEL
 from pch.store import repository as store
-from pch.web.queries import TARGET_LABEL, TARGETS
+from pch.store.models import RepoResultRow
+from pch.web.queries import SEV_RANK, TARGET_LABEL, TARGETS, reasons_text, row_dict, rule_index
 
 TIERS = ["dev", "test", "uat", "prod", "unknown"]
 STATUS_ORDER = ["succeeded", "partial", "in_progress", "pending", "failed", "canceled", "never", "unknown"]
@@ -29,6 +31,7 @@ MAX_CHIPS = 8
 class LRow:
     key: str
     lin: RepoLineage
+    compliance: dict[str, Any] | None = None  # status / score / reasons of the repo (from repo_results); None if the repo has no result row
 
 
 @dataclass
@@ -38,15 +41,22 @@ class LineageData:
     has_data: bool  # the scan has lineage rows at all (False for scans made before L2)
 
 
+def compliance_of(r: RepoResultRow) -> dict[str, Any]:
+    """Compliance summary shown next to a repo in lineage (status, score, reasons) and written to the exports."""
+    d = row_dict(r)
+    return {"status": d["status"], "score": d["score"], "reasons": d["reasons"], "counts": d["reason_counts"], "why": d["why"], "why_more": d["why_more"]}
+
+
 def load(s: Session, scan_id: str) -> LineageData:
     rows: list[LRow] = []
     orphans: list[dict[str, Any]] = []
     stored = store.lineage_rows(s, scan_id)
+    comp = {r.repo_key: compliance_of(r) for r in store.repo_results(s, scan_id)}
     for r in stored:
         if r.kind == "orphan":
             orphans.extend(dict(o) for o in (r.doc or {}).get("orphans", []))
         else:
-            rows.append(LRow(r.repo_key, RepoLineage.model_validate(r.doc)))
+            rows.append(LRow(r.repo_key, RepoLineage.model_validate(r.doc), comp.get(r.repo_key)))
     rows.sort(key=lambda x: (x.lin.repo.project.lower(), x.lin.repo.name.lower()))
     return LineageData(rows, orphans, bool(stored))
 
@@ -93,8 +103,9 @@ def chips(lin: RepoLineage) -> list[dict[str, str]]:
     return [{"name": st.name, "tier": st.env_tier, "status": st.last_deploy.status} for st in stages][:MAX_CHIPS]
 
 
-def repo_doc(lin: RepoLineage) -> dict[str, Any]:
+def repo_doc(lin: RepoLineage, compliance: dict[str, Any] | None = None) -> dict[str, Any]:
     d = lin.model_dump(mode="json")
+    d["compliance"] = compliance
     d["summary"] = {
         "pipelines": len(lin.pipelines), "releases": len(lin.releases), "stages": len(lin.all_stages()), "targets": lin.targets, "tiers": lin.tiers, "has_prod": lin.has_prod,
         "empty": lin.is_empty, "chips": chips(lin), "more_chips": max(0, len(lin.all_stages()) - MAX_CHIPS),
@@ -138,15 +149,41 @@ def options(data: LineageData) -> dict[str, Any]:
 def lineage_page(s: Session, scan_id: str, **filters: Any) -> dict[str, Any]:
     full = load(s, scan_id)
     data = apply_filters(full, **filters)
-    return {"has_data": full.has_data, "repos": [repo_doc(r.lin) for r in data.rows], "orphans": orphan_items(data), "summary": summary(data), "options": options(full)}
+    return {"has_data": full.has_data, "repos": [repo_doc(r.lin, r.compliance) for r in data.rows], "orphans": orphan_items(data), "summary": summary(data), "options": options(full)}
 
 
 def lineage_repo(s: Session, scan_id: str, project: str, repo: str) -> dict[str, Any] | None:
     key = f"{project}/{repo}"
     for r in store.lineage_rows(s, scan_id):
         if r.kind == "repo" and r.repo_key == key:
-            return repo_doc(RepoLineage.model_validate(r.doc))
+            rr = store.repo_result(s, scan_id, key)
+            d = repo_doc(RepoLineage.model_validate(r.doc), compliance_of(rr) if rr else None)
+            attach_failing(d, s, scan_id, key)
+            return d
     return None
+
+
+def attach_failing(d: dict[str, Any], s: Session, scan_id: str, key: str) -> None:
+    """Put the failing rules of each pipeline / release (``failing``) and of each of its stages onto the lineage document.
+
+    Findings carry ``pipeline_id`` / ``pipeline_name`` / ``stage``; ids of builds and releases can coincide, so both are matched."""
+    pipe_fail: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
+    stage_fail: dict[tuple[str, str, str], dict[str, dict[str, Any]]] = {}
+    for f in store.findings(s, scan_id, repo_key=key):
+        if f.status != "FAIL" or f.pipeline_id is None:
+            continue
+        item = {"rule_id": f.rule_id, "severity": f.severity, "message": f.message, "label": f"{f.rule_id} {short_title(rule_index()[f.rule_id].title) if f.rule_id in rule_index() else ''}".strip()}
+        target = stage_fail.setdefault((f.pipeline_id, f.pipeline_name or "", f.stage), {}) if f.stage else pipe_fail.setdefault((f.pipeline_id, f.pipeline_name or ""), {})
+        target.setdefault(f.rule_id, item)
+
+    def order(items: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+        return sorted(items.values(), key=lambda i: (SEV_RANK.get(i["severity"], 9), i["rule_id"]))
+
+    for p in [*d["pipelines"], *d["releases"]]:
+        own = pipe_fail.get((p["id"], p["name"]), {})
+        p["failing"] = order(own)
+        for st in p.get("stages", []):
+            st["failing"] = order(stage_fail.get((p["id"], p["name"], st["name"]), {}))
 
 
 # --------------------------------------------------------------------------- flat export (CSV / Excel)
@@ -164,6 +201,7 @@ COLUMNS: list[tuple[str, str, int]] = [
     ("deploy_targets", "deploy_targets", 18), ("target_resources", "target_resources", 40), ("service_connections", "service_connections", 28), ("approvals_gates", "approvals_gates", 36),
     ("last_deploy_status", "last_deploy_status", 16), ("last_deploy_version", "last_deploy_version", 18), ("last_deploy_artifact_version", "last_deploy_artifact_version", 20),
     ("last_deploy_time_utc", "last_deploy_time_utc", 18), ("last_deploy_by", "last_deploy_by", 20), ("last_deploy_url", "last_deploy_url", 40),
+    ("status", "status", 14), ("score", "score", 8), ("reasons", "reasons", 80),  # repo compliance (G1), repeated on every row of the repo
 ]
 DATE_COLUMNS = {"ci_last_run_time_utc", "last_deploy_time_utc"}
 HEADERS = [c[1] for c in COLUMNS]
@@ -207,8 +245,10 @@ def _stage_cols(order: int, st: LStage) -> dict[str, Any]:
     }
 
 
-def flat_rows(lins: list[RepoLineage]) -> Iterator[list[Any]]:
-    """One row per repo -> pipeline -> release/deploy-stage path. A repo without pipelines/releases still gets a row."""
+def flat_rows(lins: list[RepoLineage], compliance: dict[str, dict[str, Any] | None] | None = None) -> Iterator[list[Any]]:
+    """One row per repo -> pipeline -> release/deploy-stage path. A repo without pipelines/releases still gets a row.
+
+    ``compliance`` (repo key -> status/score/reasons, as on the page) fills the repo-level ``status``, ``score``, ``reasons`` columns."""
 
     def row(base: dict[str, Any], *parts: dict[str, Any]) -> list[Any]:
         merged: dict[str, Any] = {**base}
@@ -218,7 +258,9 @@ def flat_rows(lins: list[RepoLineage]) -> Iterator[list[Any]]:
 
     for lin in lins:
         rp = lin.repo
-        base = {"project": rp.project, "repo": rp.name, "provider": rp.provider, "default_branch": rp.default_branch, "repo_service_connection": rp.service_connection or ""}
+        c = (compliance or {}).get(rp.key) or {}
+        base = {"project": rp.project, "repo": rp.name, "provider": rp.provider, "default_branch": rp.default_branch, "repo_service_connection": rp.service_connection or "",
+                "status": c.get("status", ""), "score": c.get("score"), "reasons": reasons_text(c.get("reasons") or [])}
         if lin.is_empty:
             yield row(base)
             continue
@@ -261,11 +303,20 @@ def summary_rows(scan: Any, data: LineageData, filters: dict[str, Any], n_rows: 
         ["#", "Pipeline Compliance Hub: lineage export (read-only report)"],
         ["Scan", scan.id], ["Scan started (UTC)", scan.started_at.replace(tzinfo=None)], ["Scan mode", scan.mode], ["Generated (UTC)", generated],
         ["Filters", filter_text(filters)], ["Rows in the Lineage sheet", n_rows], ["Orphans (unlinked pipelines/releases)", sm["orphans"]],
-        ["Source", "Azure DevOps only. GitHub repos without Azure DevOps pipelines are invisible. People: display name of whoever triggered the last deployment only."],
+        ["Source", "Azure DevOps pipelines for GitHub code. GitHub repos without Azure DevOps pipelines are invisible. People: display name of whoever triggered the last deployment only."],
         [], ["#", "Totals"],
         ["Repositories", sm["repos"]], ["Pipelines (CI/build)", sm["pipelines"]], ["Classic releases", sm["releases"]], ["Stages / environments", sm["stages"]],
         ["Repos with a successful prod deployment", sm["with_prod"]], ["Repos without any pipeline or release", sm["empty_repos"]],
     ]
+    by_status = Counter((r.compliance or {}).get("status", "NOT_SCANNED") for r in data.rows)
+    top: Counter[str] = Counter()
+    label: dict[str, str] = {}
+    for r in data.rows:
+        for i in (r.compliance or {}).get("reasons", []):
+            top[i["rule_id"]] += 1
+            label.setdefault(i["rule_id"], i["label"])
+    out += [[], ["#", "Repositories by compliance status"], *[[k.replace("_", " ").lower(), by_status[k]] for k in ("NON_COMPLIANT", "AT_RISK", "COMPLIANT", "NOT_SCANNED") if by_status[k]]]
+    out += [[], ["#", "Top reasons (failing rules, repositories affected)"], *[[label[rid], n] for rid, n in sorted(top.items(), key=lambda kv: (-kv[1], kv[0]))[:15]]]
     for title, key in (("Repositories by project", "by_project"), ("Repositories by code host", "by_provider"), ("Repositories by deploy target", "by_target"),
                        ("Stages by environment tier", "by_tier"), ("Stages by last deployment status", "by_status")):
         out += [[], ["#", title], *[[k, v] for k, v in sm[key].items()]]

@@ -299,6 +299,9 @@ JSON: `GET /api/v1/lineage` (same filters; `repos` with the nested documents, `o
 | 41 | `last_deploy_time_utc` | Completion (else start) time, UTC (real Excel date). |
 | 42 | `last_deploy_by` | Display name of whoever triggered it (never an e-mail/UPN). |
 | 43 | `last_deploy_url` | Link to the release / run. |
+| 44 | `status` | Compliance status of the repo (`COMPLIANT`, `AT_RISK`, `NON_COMPLIANT`), repeated on every row of the repo. |
+| 45 | `score` | Compliance score 0-100 of the repo (empty when no rule applies). |
+| 46 | `reasons` | Why the repo is not compliant: its failing rules, most severe first, as `<RULE-ID> <short title>: <message>` separated by `; `. |
 
 ## Extending
 

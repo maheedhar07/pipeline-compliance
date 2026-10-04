@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import provider_badge, deploy_chip %}
+{% from "_macros.html" import provider_badge, deploy_chip, status_badge, sev_badge %}
 {% block title %}{{ d.repo.name }} lineage · Pipeline Compliance Hub{% endblock %}
 {% block content %}
 <nav class="mb-2 text-xs text-slate-500"><a class="hover:underline" href="{{ u('/lineage') }}">Lineage</a> / <a class="hover:underline" href="{{ u('/lineage', project=d.repo.project) }}">{{ d.repo.project }}</a> / {{ d.repo.name }}</nav>
@@ -12,5 +12,13 @@
     <a class="text-indigo-600 hover:underline dark:text-indigo-300" href="{{ u('/api/v1/lineage/' ~ d.repo.project ~ '/' ~ d.repo.name) }}">JSON</a>
   </div>
 </div>
+{% if d.compliance %}
+<section class="mb-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-800" aria-label="Compliance of this repository">
+  <div class="flex flex-wrap items-center gap-2">{{ status_badge(d.compliance.status) }}{% if d.compliance.score is not none %}<span class="tnum font-semibold">{{ '%.0f' | format(d.compliance.score) }}</span><span class="text-slate-500">/ 100</span>{% endif %}
+    <a class="ml-auto text-indigo-600 hover:underline dark:text-indigo-300" href="{{ u('/repos/' ~ d.repo.project ~ '/' ~ d.repo.name) }}">all findings</a></div>
+  {% if d.compliance.reasons %}<ul class="mt-1 space-y-0.5">{% for i in d.compliance.reasons[:5] %}<li>{{ sev_badge(i.severity) }} <a class="font-mono font-semibold text-indigo-700 hover:underline dark:text-indigo-300" href="{{ u('/rules/' ~ i.rule_id) }}">{{ i.rule_id }}</a> {{ i.title }}: {{ i.message }}</li>{% endfor %}</ul>
+  {% if d.compliance.reasons | length > 5 %}<p class="mt-0.5 text-slate-500">+{{ d.compliance.reasons | length - 5 }} more on the compliance page.</p>{% endif %}{% endif %}
+</section>
+{% endif %}
 {% include "_lineage_chain.html" %}
 {% endblock %}

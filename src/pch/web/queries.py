@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from pch.engine.reasons import empty_reasons
 from pch.engine.registry import CATEGORY_NAMES, RuleMeta, all_rules
 from pch.model.findings import SEVERITY_ORDER
 from pch.model.repo import PROVIDER_LABEL
@@ -60,9 +61,19 @@ def multi_host(s: Session, scan: ScanRow | None) -> bool:
     return len(prov) > 1
 
 
+WHY_TOP = 3  # reasons shown in compact tables
+
+
+def reasons_of_row(r: RepoResultRow) -> dict[str, Any]:
+    """The persisted ``{"items", "fail", "warn", "unknown"}`` (scans made before G1 have none: empty)."""
+    got = (r.external or {}).get("reasons")
+    return got if isinstance(got, dict) and "items" in got else empty_reasons()
+
+
 def row_dict(r: RepoResultRow) -> dict[str, Any]:
     kinds = platform_kinds(r)
     prov = provider_of_row(r)
+    rs = reasons_of_row(r)
     return {
         "key": r.repo_key, "project": r.project, "repo": r.repo, "owner": r.owner, "url": r.url,
         "provider": prov, "provider_label": PROVIDER_LABEL.get(prov, prov),
@@ -70,14 +81,19 @@ def row_dict(r: RepoResultRow) -> dict[str, Any]:
         "targets": r.targets, "test_state": r.test_state, "coverage": r.coverage, "sonar_gate": r.sonar_gate,
         "aikido_criticals": r.aikido_criticals, "score": r.score, "status": r.status, "unknowns": r.unknowns,
         "critical_fails": r.critical_fails, "high_fails": r.high_fails, "migration_score": r.migration_score,
+        "reasons": rs["items"], "reason_counts": {"fail": rs["fail"], "warn": rs["warn"], "unknown": rs["unknown"]},
+        "why": rs["items"][:WHY_TOP], "why_more": max(0, len(rs["items"]) - WHY_TOP),
     }
 
 
 # ------------------------------------------------------------------ repos
 def repos(s: Session, scan_id: str, *, project: str | None = None, status: str | None = None, test_state: str | None = None,
           platform: str | None = None, target: str | None = None, sonar: str | None = None, q: str | None = None,
-          provider: str | None = None, sort: str = "status", direction: str = "asc") -> list[dict[str, Any]]:
-    rows = [row_dict(r) for r in store.repo_results(s, scan_id)]
+          provider: str | None = None, rule: str | None = None, sort: str = "status", direction: str = "asc") -> list[dict[str, Any]]:
+    results = store.repo_results(s, scan_id)
+    if rule:  # repos where this rule fails (the "Top reasons" drill-down)
+        results = [r for r in results if (r.rule_status or {}).get(rule) == "FAIL"]
+    rows = [row_dict(r) for r in results]
 
     def keep(r: dict[str, Any]) -> bool:
         if project and r["project"] != project:
@@ -114,14 +130,19 @@ def repos(s: Session, scan_id: str, *, project: str | None = None, status: str |
     return rows
 
 
+def reasons_text(items: list[dict[str, Any]]) -> str:
+    """Semicolon-separated reasons for CSV/XLSX cells (``<RULE-ID> <short title>: <message>``)."""
+    return "; ".join(i["text"] for i in items)
+
+
 def csv_rows(rows: list[dict[str, Any]]) -> list[list[Any]]:
-    head = ["project", "repo", "provider", "owner", "platforms", "targets", "test_state", "coverage", "sonar_gate", "aikido_criticals", "score", "status", "critical_fails", "high_fails", "unknowns", "migration_score"]
+    head = ["project", "repo", "provider", "owner", "platforms", "targets", "test_state", "coverage", "sonar_gate", "aikido_criticals", "score", "status", "critical_fails", "high_fails", "unknowns", "migration_score", "reasons"]
     out: list[list[Any]] = [head]
     for r in rows:
         out.append([r["project"], r["repo"], r["provider"], r["owner"] or "", "+".join(r["platforms"]), "+".join(r["targets"]), r["test_state"],
                     "" if r["coverage"] is None else round(r["coverage"], 1), r["sonar_gate"] or "", "" if r["aikido_criticals"] is None else r["aikido_criticals"],
                     "" if r["score"] is None else r["score"], r["status"], r["critical_fails"], r["high_fails"], r["unknowns"],
-                    "" if r["migration_score"] is None else r["migration_score"]])
+                    "" if r["migration_score"] is None else r["migration_score"], reasons_text(r["reasons"])])
     return out
 
 
@@ -236,8 +257,28 @@ def trend(s: Session) -> list[dict[str, Any]]:
     return out
 
 
+def top_reasons(rows: list[dict[str, Any]], limit: int = 10) -> list[dict[str, Any]]:
+    """Most common failing rules across repos: ``{rule_id, label, severity, repos}`` (drill-down: /repos?rule=ID, /findings?rule=ID)."""
+    cnt: Counter[str] = Counter()
+    first: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        for i in r["reasons"]:
+            cnt[i["rule_id"]] += 1
+            first.setdefault(i["rule_id"], i)
+    ranked = sorted(cnt.items(), key=lambda kv: (-kv[1], SEV_RANK.get(first[kv[0]]["severity"], 9), kv[0]))[:limit]
+    return [{"rule_id": rid, "label": first[rid]["label"], "title": first[rid]["title"], "severity": first[rid]["severity"], "repos": n} for rid, n in ranked]
+
+
+def noncompliant_list(rows: list[dict[str, Any]], limit: int = 15) -> list[dict[str, Any]]:
+    """The worst NON_COMPLIANT repos (lowest score first) with their top reasons."""
+    bad = [r for r in rows if r["status"] == "NON_COMPLIANT"]
+    bad.sort(key=lambda r: (r["score"] if r["score"] is not None else 101, r["project"], r["repo"]))
+    return [{k: r[k] for k in ("key", "project", "repo", "score", "status", "why", "why_more")} for r in bad[:limit]]
+
+
 def overview(s: Session, scan_id: str) -> dict[str, Any]:
     rows = store.repo_results(s, scan_id)
+    row_dicts = [row_dict(r) for r in rows]
     total = len(rows) or 1
     status_counts = Counter(r.status for r in rows)
     crit = s.scalar(select(func.count()).select_from(FindingRow).where(FindingRow.scan_id == scan_id, FindingRow.severity == "critical", FindingRow.status == "FAIL")) or 0
@@ -268,6 +309,7 @@ def overview(s: Session, scan_id: str) -> dict[str, Any]:
         },
         "status_counts": {k: status_counts.get(k, 0) for k in ("COMPLIANT", "AT_RISK", "NON_COMPLIANT")}, "not_scanned": status_counts.get("NOT_SCANNED", 0),
         "top_rules": top, "heatmap": heat, "projects": projects, "trend": trend(s),
+        "top_reasons": top_reasons(row_dicts), "noncompliant": noncompliant_list(row_dicts),
     }
 
 

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import provider_badge, deploy_chip %}
+{% from "_macros.html" import provider_badge, deploy_chip, status_badge %}
 {% block title %}Lineage · Pipeline Compliance Hub{% endblock %}
 {% block content %}
 <div class="mb-3 flex flex-wrap items-baseline gap-3">
@@ -54,6 +54,10 @@
       <summary class="flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 hover:bg-slate-50 dark:hover:bg-slate-700/40">
         <span class="font-medium">{{ rp.name }}</span>{% if multi_host %}{{ provider_badge(rp.provider, rp.provider_label) }}{% endif %}
         <span class="text-xs text-slate-500 dark:text-slate-400">{{ rp.project }}</span>
+        {% set cp = r.compliance %}
+        {% if cp %}<a href="{{ u('/repos/' ~ rp.project ~ '/' ~ rp.name) }}" title="Compliance of this repository">{{ status_badge(cp.status) }}</a>
+        {% if cp.score is not none %}<span class="tnum text-[11px] text-slate-500 dark:text-slate-400">{{ '%.0f' | format(cp.score) }}</span>{% endif %}
+        {% if cp.status in ('AT_RISK', 'NON_COMPLIANT') and cp.why %}<span class="text-[11px] text-red-700 dark:text-red-300" title="{% for w in cp.why %}{{ w.text }}{{ ' | ' if not loop.last }}{% endfor %}">why: {% for w in cp.why %}{{ w.rule_id }}{{ ', ' if not loop.last }}{% endfor %}{% if cp.why_more %} +{{ cp.why_more }} more{% endif %}</span>{% endif %}{% endif %}
         {% set sy = r.summary %}
         <span class="text-xs text-slate-600 dark:text-slate-300">
           {% if sy.empty %}<span class="text-slate-400">no pipelines</span>{% else %}{{ sy.pipelines }} pipeline{{ '' if sy.pipelines == 1 else 's' }} → {{ sy.releases }} release{{ '' if sy.releases == 1 else 's' }}{% endif %}</span>

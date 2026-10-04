@@ -1,6 +1,9 @@
 {# The full lineage chain of ONE repo (d = a lineage document from lineage_q.repo_doc). Included by the repo page and the lazy list fragment. #}
 {% from "_macros.html" import provider_badge, deploy_chip %}
 {% macro dt(v) %}{{ v[:16] | replace('T', ' ') ~ ' UTC' if v else '' }}{% endmacro %}
+{% macro failing_chips(items) -%}
+{%- for f in items or [] %}<a href="{{ u('/rules/' ~ f.rule_id) }}" class="mr-1 inline-block rounded bg-red-100 px-1 text-[11px] text-red-800 hover:bg-red-200 dark:bg-red-900/40 dark:text-red-200" title="{{ f.message }}">{{ f.rule_id }}</a>{% endfor -%}
+{%- endmacro %}
 {% macro stage_table(stages) %}
 <div class="overflow-x-auto">
 <table class="mt-1 w-full text-xs">
@@ -9,7 +12,7 @@
   {% for st in stages %}
   <tr>
     <td class="tnum py-1 pr-2 text-slate-400">{{ loop.index }}</td>
-    <td class="py-1 pr-2 font-medium">{{ st.name }}{% if st.env_name and st.env_name != st.name %}<div class="font-normal text-slate-500 dark:text-slate-400">env {{ st.env_name }}</div>{% endif %}{% if st.depends_on %}<div class="font-normal text-slate-400">after {{ st.depends_on | join(', ') }}</div>{% endif %}</td>
+    <td class="py-1 pr-2 font-medium">{{ st.name }}{% if st.env_name and st.env_name != st.name %}<div class="font-normal text-slate-500 dark:text-slate-400">env {{ st.env_name }}</div>{% endif %}{% if st.depends_on %}<div class="font-normal text-slate-400">after {{ st.depends_on | join(', ') }}</div>{% endif %}{% if st.failing %}<div class="mt-0.5 font-normal"><span class="text-[10px] uppercase text-slate-500 dark:text-slate-400">failing:</span> {{ failing_chips(st.failing) }}</div>{% endif %}</td>
     <td class="py-1 pr-2">{{ st.env_tier }}</td>
     <td class="py-1 pr-2">{% for t in st.targets %}<div><span class="rounded bg-slate-100 px-1 dark:bg-slate-700">{{ TARGET_LABEL.get(t.kind, t.kind) }}</span>{% if t.name %} <span class="font-mono">{{ t.name }}</span>{% endif %}{% if t.detail %} <span class="text-slate-500 dark:text-slate-400">({{ t.detail }})</span>{% endif %}</div>{% else %}–{% endfor %}</td>
     <td class="py-1 pr-2">{{ st.service_connections | join(', ') or '–' }}</td>
@@ -30,6 +33,7 @@
     <span class="rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-violet-800 dark:bg-violet-900/40 dark:text-violet-200">Release</span>
     <a class="font-medium text-indigo-700 hover:underline dark:text-indigo-300" href="{{ rel.url | safe_url }}" target="_blank" rel="noopener noreferrer">{{ rel.name }}</a>
     {% if rel.adopted_from %}<span class="text-[11px] text-slate-500 dark:text-slate-400">defined with {{ rel.adopted_from }}</span>{% endif %}
+    {% if rel.failing %}<span class="text-[11px]"><span class="uppercase text-slate-500 dark:text-slate-400">failing:</span> {{ failing_chips(rel.failing) }}</span>{% endif %}
     <span class="text-xs text-slate-500 dark:text-slate-400">{% if rel.cd_enabled %}continuous deployment{% if rel.cd_branches %} on {{ rel.cd_branches | join(', ') }}{% endif %}{% else %}no CD trigger (manual){% endif %}{% for sc in rel.schedules %} · schedule {{ sc }}{% endfor %}</span>
   </div>
   <div class="mt-0.5 text-xs text-slate-600 dark:text-slate-300">Artifact source:
@@ -60,6 +64,7 @@
       <span class="text-xs text-slate-500 dark:text-slate-400">id {{ p.id }}</span>
       {% if p.adopted_from %}<span class="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-900/40 dark:text-amber-200" title="The pipeline definition lives in another repository and builds this repository's code">defined in {{ p.adopted_from }}</span>{% endif %}
       {% if p.yaml_in_other_repo and not p.adopted_from %}<span class="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-900/40 dark:text-amber-200" title="The YAML file lives in a different repository than the code it builds">YAML in another repo</span>{% endif %}
+      {% if p.failing %}<span class="text-[11px]"><span class="uppercase text-slate-500 dark:text-slate-400">failing:</span> {{ failing_chips(p.failing) }}</span>{% endif %}
       {% if p.last_run %}<span class="ml-auto text-xs text-slate-500 dark:text-slate-400">last run {{ deploy_chip(p.last_run.status) }} {{ p.last_run.version or '' }} {{ dt(p.last_run.finished) }}{% if p.last_run.triggered_by %} · by {{ p.last_run.triggered_by }}{% endif %}</span>{% endif %}
     </div>
     <dl class="mt-2 grid grid-cols-[auto,1fr] gap-x-3 gap-y-0.5 text-xs">

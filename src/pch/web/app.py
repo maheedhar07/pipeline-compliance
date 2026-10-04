@@ -193,18 +193,19 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
                 return no_data(request)
             return templates.TemplateResponse(request, "overview.html", ctx(request, s, scan, data=Q.overview(s, row.id), nav="overview"))
 
-    def repo_filters(project, status, test_state, platform, target, sonar, q, provider=None):
-        return {"project": project, "status": status, "test_state": test_state, "platform": platform, "target": target, "sonar": sonar, "q": q, "provider": provider}
+    def repo_filters(project, status, test_state, platform, target, sonar, q, provider=None, rule=None):
+        return {"project": project, "status": status, "test_state": test_state, "platform": platform, "target": target, "sonar": sonar, "q": q, "provider": provider,
+                "rule": rule}
 
     @app.get("/repos", response_class=HTMLResponse)
     def page_repos(request: Request, scan: ScanId = None, project: Text = None, status: Text = None, test_state: Text = None,
                    platform: Text = None, target: Text = None, sonar: Text = None, q: Text = None, provider: Text = None,
-                   sort: SortKey = "status", dir: Direction = "asc"):
+                   rule: Text = None, sort: SortKey = "status", dir: Direction = "asc"):
         with session_scope(app.state.db_url) as s:
             row = Q.resolve_scan(s, scan)
             if not row:
                 return no_data(request)
-            filters = repo_filters(project, status, test_state, platform, target, sonar, q, provider)
+            filters = repo_filters(project, status, test_state, platform, target, sonar, q, provider, rule)
             rows = Q.repos(s, row.id, sort=sort, direction=dir, **filters)
             return templates.TemplateResponse(request, "repos.html", ctx(
                 request, s, scan, rows=rows, filters=filters, sort=sort, dir=dir, options=Q.filter_options(s, row.id), nav="repos",
@@ -213,12 +214,12 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
     @app.get("/repos.csv", response_class=PlainTextResponse)
     def repos_csv(scan: ScanId = None, project: Text = None, status: Text = None, test_state: Text = None,
                   platform: Text = None, target: Text = None, sonar: Text = None, q: Text = None, provider: Text = None,
-                  sort: SortKey = "status", dir: Direction = "asc"):
+                  rule: Text = None, sort: SortKey = "status", dir: Direction = "asc"):
         with session_scope(app.state.db_url) as s:
             row = Q.resolve_scan(s, scan)
             if not row:
                 raise HTTPException(404, "no scans yet")
-            rows = Q.repos(s, row.id, sort=sort, direction=dir, **repo_filters(project, status, test_state, platform, target, sonar, q, provider))
+            rows = Q.repos(s, row.id, sort=sort, direction=dir, **repo_filters(project, status, test_state, platform, target, sonar, q, provider, rule))
         buf = io.StringIO()
         csv.writer(buf).writerows([[csv_cell(c) for c in r] for r in Q.csv_rows(rows)])
         return PlainTextResponse(buf.getvalue(), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=repos.csv"})
@@ -346,15 +347,16 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
             raise HTTPException(404, "this scan has no lineage data (it was made before the Lineage tab existed)")
         data = LQ.apply_filters(full, **lineage_kwargs(f))
         lins = [r.lin for r in data.rows]
+        comp = {r.key: r.compliance for r in data.rows}
         limit = s_.export_max_rows
-        n = sum(1 for _ in itertools.islice(LQ.flat_rows(lins), limit + 1))
+        n = sum(1 for _ in itertools.islice(LQ.flat_rows(lins, comp), limit + 1))
         if n > limit:
             raise HTTPException(413, f"The export would contain more than {limit} rows (EXPORT_MAX_ROWS). Narrow the filters (project, provider, search) and try again.")
         headers = {"Content-Disposition": f'attachment; filename="{export_name(meta.started_at, f.get("project"), ext)}"'}
         if ext == "csv":
-            return StreamingResponse(X.csv_lines(LQ.HEADERS, LQ.flat_rows(lins)), media_type="text/csv; charset=utf-8", headers=headers)
+            return StreamingResponse(X.csv_lines(LQ.HEADERS, LQ.flat_rows(lins, comp)), media_type="text/csv; charset=utf-8", headers=headers)
         shown_filters = {k: v for k, v in f.items() if v}
-        body = X.build_xlsx(LQ.COLUMNS, LQ.flat_rows(lins), LQ.summary_rows(meta, data, shown_filters, n, utcnow_naive()), LQ.ORPHAN_COLUMNS, LQ.orphan_rows(LQ.orphan_items(data)))
+        body = X.build_xlsx(LQ.COLUMNS, LQ.flat_rows(lins, comp), LQ.summary_rows(meta, data, shown_filters, n, utcnow_naive()), LQ.ORPHAN_COLUMNS, LQ.orphan_rows(LQ.orphan_items(data)))
         return Response(body, media_type=X.XLSX_MIME, headers=headers)
 
     @app.get("/lineage.csv")
@@ -405,8 +407,8 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
     @app.get("/api/v1/repos")
     def api_repos(scan: ScanId = None, project: Text = None, status: Text = None, test_state: Text = None,
                   platform: Text = None, target: Text = None, sonar: Text = None, q: Text = None, provider: Text = None,
-                  sort: SortKey = "status", dir: Direction = "asc"):
-        return api(lambda s, r: {"repos": Q.repos(s, r.id, sort=sort, direction=dir, **repo_filters(project, status, test_state, platform, target, sonar, q, provider))})(scan)
+                  rule: Text = None, sort: SortKey = "status", dir: Direction = "asc"):
+        return api(lambda s, r: {"repos": Q.repos(s, r.id, sort=sort, direction=dir, **repo_filters(project, status, test_state, platform, target, sonar, q, provider, rule))})(scan)
 
     @app.get("/api/v1/repos/{project}/{repo:path}")
     def api_repo(project: ProjectPath, repo: RepoPath, scan: ScanId = None):

@@ -19,6 +19,25 @@
   </div>
 </div>
 
+{% set rc = r.reason_counts %}
+{% if r.status != 'COMPLIANT' or r.reasons %}
+<section class="mb-3 rounded-lg border {{ 'border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-900/20' if r.status == 'NON_COMPLIANT' else ('border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-900/20' if r.status == 'AT_RISK' else 'border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800') }} px-3 py-2" aria-label="Why this repo is {{ r.status | replace('_', ' ') | lower }}">
+  <h2 class="text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">Why this repo is {{ r.status | replace('_', ' ') | lower }}</h2>
+  {% if r.reasons %}
+  <ul class="mt-1 space-y-1 text-xs">
+    {% for i in r.reasons %}
+    <li class="flex flex-wrap items-baseline gap-x-2">{{ sev_badge(i.severity) }}
+      <a class="font-mono font-semibold text-indigo-700 hover:underline dark:text-indigo-300" href="{{ u('/rules/' ~ i.rule_id) }}">{{ i.rule_id }}</a>
+      <span class="font-medium">{{ i.title }}</span><span class="text-slate-700 dark:text-slate-200">{{ i.message }}</span>
+      {% if i.count > 1 %}<span class="text-slate-500 dark:text-slate-400">({{ i.count }} pipelines/stages)</span>{% endif %}</li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="mt-1 text-xs text-slate-600 dark:text-slate-300">No single rule fails; the overall score is below the compliance threshold.</p>
+  {% endif %}
+  <p class="mt-1 text-[11px] text-slate-500 dark:text-slate-400">{{ rc.fail }} failing rule(s) · {{ rc.warn }} warning(s) · {{ rc.unknown }} unknown (not scored). Findings are listed below by category.</p>
+</section>
+{% endif %}
 {% if d.repo_checks_unavailable %}
 <div class="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-100" role="note">
   <b>Repo-level checks unavailable: GitHub reader not configured.</b> {{ d.repo_checks_reason }}. Branch protection, CODEOWNERS and test detection show as UNKNOWN (never as failures); pipeline, release, environment, Sonar, Aikido and ServiceNow checks are evaluated normally.

@@ -1,5 +1,6 @@
 {% extends "base.html" %}
-{% from "_macros.html" import kpi, heat_class %}
+{% from "_macros.html" import kpi, heat_class, sev_badge %}
+{% from "_macros.html" import why_cell with context %}
 {% block title %}Overview · Pipeline Compliance Hub{% endblock %}
 {% block content %}
 {% set k = data.kpis %}
@@ -34,6 +35,37 @@
   <div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
     <h2 class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Top 10 failing rules (repos)</h2>
     <div class="h-64"><canvas id="toprules" aria-label="Top failing rules" role="img"></canvas></div>
+  </div>
+</section>
+
+<section class="mt-4 grid gap-3 lg:grid-cols-2" aria-label="Why repositories are not compliant">
+  <div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
+    <h2 class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Top reasons <span class="font-normal normal-case">(most common failing rules, repos affected)</span></h2>
+    <table class="w-full text-xs">
+      <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+      {% for t in data.top_reasons %}
+      <tr><td class="py-1 pr-2">{{ sev_badge(t.severity) }}</td>
+          <td class="py-1 pr-2"><a class="hover:underline" href="{{ u('/findings', rule=t.rule_id, status='FAIL') }}" title="Failing findings of {{ t.rule_id }}">{{ t.label }}</a></td>
+          <td class="tnum py-1 text-right"><a class="font-semibold text-red-600 hover:underline dark:text-red-400" href="{{ u('/repos', rule=t.rule_id) }}" title="Repositories where {{ t.rule_id }} fails">{{ t.repos }} repo{{ '' if t.repos == 1 else 's' }}</a></td></tr>
+      {% else %}
+      <tr><td class="py-4 text-center text-slate-500">No failing rules.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
+    <h2 class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Non-compliant repositories <span class="font-normal normal-case">(lowest score first; <a class="underline" href="{{ u('/repos', status='NON_COMPLIANT') }}">all {{ data.status_counts.NON_COMPLIANT }}</a>)</span></h2>
+    <table class="w-full text-xs">
+      <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+      {% for r in data.noncompliant %}
+      <tr class="align-top"><td class="py-1 pr-2 font-medium"><a class="text-indigo-700 hover:underline dark:text-indigo-300" href="{{ u('/repos/' ~ r.project ~ '/' ~ r.repo) }}">{{ r.repo }}</a><div class="font-normal text-slate-500 dark:text-slate-400">{{ r.project }}</div></td>
+          <td class="tnum py-1 pr-2 text-right">{{ '%.0f' | format(r.score) if r.score is not none else '–' }}</td>
+          <td class="py-1">{{ why_cell(r) }}</td></tr>
+      {% else %}
+      <tr><td class="py-4 text-center text-slate-500">No non-compliant repositories.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
   </div>
 </section>
 
