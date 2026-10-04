@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import status_badge, sev_badge, bar %}
+{% from "_macros.html" import status_badge, sev_badge, provider_badge, bar %}
 {% block title %}{{ d.rule.id }} · Pipeline Compliance Hub{% endblock %}
 {% block content %}
 {% set r = d.rule %}{% set st = d.stats %}
@@ -26,7 +26,7 @@
     <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
     {% for f in d.findings %}
     <tr class="align-top"><td class="px-2 py-1">{{ status_badge(f.status) }}</td>
-      <td class="py-1"><a class="text-indigo-700 hover:underline dark:text-indigo-300" href="{{ u('/repos/' ~ f.repo_key) }}">{{ f.repo_key }}</a></td>
+      <td class="py-1"><a class="text-indigo-700 hover:underline dark:text-indigo-300" href="{{ u('/repos/' ~ f.repo_key) }}">{{ f.repo_key }}</a> {{ provider_badge(f.provider, {'azure_repos':'Azure Repos','github':'GitHub','github_enterprise':'GitHub Enterprise','other_git':'Other Git'}.get(f.provider, f.provider)) }}</td>
       <td class="py-1 text-xs">{{ f.pipeline_name or '–' }}{% if f.stage %} / {{ f.stage }}{% endif %}</td>
       <td class="py-1 pr-2 text-xs">{{ f.message }}</td>
       <td class="py-1 text-xs">{% if f.evidence %}<details><summary class="cursor-pointer text-slate-500">show</summary><pre class="evidence rounded bg-slate-100 p-2 dark:bg-slate-900">{{ f.evidence | tojson(indent=1) }}</pre></details>{% endif %}</td></tr>

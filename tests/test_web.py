@@ -196,3 +196,8 @@ def test_github_repos_have_unknown_not_fail_for_repo_level_checks(client):
     assert unk > 50
     assert not any(r["test_state"] == "NO_TESTS" for r in rows.values())
     assert any(r["test_state"] == "UNKNOWN" for r in rows.values())
+
+
+def test_rule_drilldown_shows_provider_badge_for_github_repos(client):
+    page = client.get("/rules/SRC-001")
+    assert page.status_code == 200 and ">GitHub</span>" in page.text and "UNKNOWN" in page.text
