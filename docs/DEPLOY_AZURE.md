@@ -1,32 +1,211 @@
-# Deploying to Azure App Service (stub; T7 expands this)
+# Azure App Service runbook
 
-Target: Azure App Service (Linux, container). Only the web-security settings are documented here.
+Ordered runbook to run the dashboard on **Azure App Service for Containers (Linux)** with Entra ID sign-in (Easy Auth), Azure SQL, Key Vault and Blob, and the scan as a separate scheduled job.
+All `az` snippets are **examples**: confirm flags with `az <command> --help` for your CLI version, run them with an identity that may create resources, and adapt names, SKUs, networking and tags to your landing zone.
+They create and configure resources of *this app's own infrastructure*; nothing here writes to Azure DevOps, GitHub, SonarQube, Aikido or ServiceNow (the app is report-only).
+Items tagged **# VERIFY** are platform behaviors the code assumes and that must be confirmed on the real service (full list: `SECURITY_REVIEW.md`, "VERIFY markers and go-live checklist"). Do not add Bicep or Terraform here: your org's IaC repo is the place for it (see the last section).
 
-## App settings (container environment)
+```
+Browser --> App Service front end (Easy Auth, Entra) --> Web App (container: pch serve) --UAMI--> Azure SQL (Entra-only)
+                                                              |                                  ^
+                                                              +-- Key Vault references ----------+---- scan job (pch scan, own UAMI) --> ADO/Sonar/Aikido/ServiceNow (read-only)
+                                                                                                      +--> Blob (raw cache)
+ ACR (image by digest) --> pulled with managed identity       App Insights / Log Analytics <-- logs + traces
+```
 
-| Setting | Value | Notes |
+## 1. Resources
+
+| # | Resource | Notes |
 |---|---|---|
-| `APP_ENV` | `prod` | Enables HSTS, disables `/api/docs` + `/openapi.json`, makes `ALLOWED_HOSTS` mandatory, forbids `AUTH_MODE=none`. |
+| 1 | Resource group | One per environment |
+| 2 | User-assigned managed identities | `id-pch-web` (web app), `id-pch-scan` (scan job), `id-pch-deploy` (release pipeline: migrations, push). Separate identities keep roles least-privilege |
+| 3 | Azure Container Registry | Admin user disabled; pulls by managed identity |
+| 4 | Log Analytics workspace + Application Insights | Workspace-based; optional (`azure-monitor` extra) |
+| 5 | Key Vault | **RBAC** permission model; holds source credentials and the App Insights connection string |
+| 6 | Storage account + container | Raw scan cache (optional); **shared key access disabled**, Entra auth only |
+| 7 | Azure SQL server + database | **Microsoft Entra-only authentication**; an Entra group is the admin |
+| 8 | App Service plan | Linux; Premium v3 or Standard (health check needs >= 2 instances in production) |
+| 9 | Web App for Containers | Image from ACR by digest; `id-pch-web` assigned; Authentication (Easy Auth) on |
+| 10 | Scheduler for `pch scan` | ADO scheduled pipeline, Container Apps Job or WebJob (section 9) |
+| 11 | Entra app registration + enterprise app | Easy Auth client and the app role (section 7) |
+
+Networking (private endpoints for SQL / Key Vault / Storage, VNet integration for the web app, restricted inbound access) depends on your landing zone and is not scripted here. If you use private endpoints, confirm that the front end remains the only ingress to the container (**# VERIFY**).
+
+## 2. Create the resources (examples)
+
+```bash
+# --- variables (example values)
+RG=rg-pch-prod; LOC=westeurope; SUB=<subscription-id>
+APP=pch-prod-web                      # <APP>.azurewebsites.net
+PLAN=plan-pch-prod; ACR=<globally-unique-acr-name>; KV=kv-pch-prod; SA=<globallyuniquestorage>; SQLSRV=sql-pch-prod; SQLDB=pch
+ENTRA_ADMIN_GROUP=<group-name>; ENTRA_ADMIN_GROUP_OID=<group-object-id>
+
+az group create -n $RG -l $LOC
+
+# --- identities
+for id in id-pch-web id-pch-scan id-pch-deploy; do az identity create -g $RG -n $id -l $LOC; done
+WEB_ID=$(az identity show -g $RG -n id-pch-web --query id -o tsv)
+WEB_PRINCIPAL=$(az identity show -g $RG -n id-pch-web --query principalId -o tsv)
+WEB_CLIENT=$(az identity show -g $RG -n id-pch-web --query clientId -o tsv)
+SCAN_PRINCIPAL=$(az identity show -g $RG -n id-pch-scan --query principalId -o tsv)
+SCAN_CLIENT=$(az identity show -g $RG -n id-pch-scan --query clientId -o tsv)
+
+# --- registry (no admin user), monitoring
+az acr create -g $RG -n $ACR --sku Standard --admin-enabled false
+az monitor log-analytics workspace create -g $RG -n log-pch-prod -l $LOC
+az monitor app-insights component create -g $RG -a appi-pch-prod -l $LOC --workspace log-pch-prod   # may need: az extension add -n application-insights
+
+# --- Key Vault (RBAC) and Storage (no shared key)
+az keyvault create -g $RG -n $KV -l $LOC --enable-rbac-authorization true
+az storage account create -g $RG -n $SA -l $LOC --sku Standard_LRS --allow-shared-key-access false --min-tls-version TLS1_2 --allow-blob-public-access false
+az storage container create --account-name $SA -n pch-raw --auth-mode login
+
+# --- Azure SQL, Entra-only authentication
+az sql server create -g $RG -n $SQLSRV -l $LOC --enable-ad-only-auth \
+  --external-admin-principal-type Group --external-admin-name "$ENTRA_ADMIN_GROUP" --external-admin-sid $ENTRA_ADMIN_GROUP_OID
+az sql db create -g $RG -s $SQLSRV -n $SQLDB --service-objective S1 --backup-storage-redundancy Local   # choose tier/redundancy per your policy
+
+# --- plan and web app (container, identity, ACR pull by managed identity)
+az appservice plan create -g $RG -n $PLAN --is-linux --sku P1v3 --number-of-workers 2
+az webapp create -g $RG -p $PLAN -n $APP --container-image-name $ACR.azurecr.io/pch@sha256:<digest> --assign-identity $WEB_ID
+az webapp config set -g $RG -n $APP --generic-configurations '{"acrUseManagedIdentityCreds": true, "acrUserManagedIdentityID": "'$WEB_CLIENT'"}'
+az webapp update -g $RG -n $APP --set httpsOnly=true keyVaultReferenceIdentity=$WEB_ID                    # # VERIFY: property names for Key Vault references with a user-assigned identity
+az webapp update -g $RG -n $APP --client-affinity-enabled false
+az webapp config set -g $RG -n $APP --min-tls-version 1.2 --ftps-state Disabled
+```
+
+The first `az webapp create` points at an image that must already exist, so do section 4 (build and push an image) first, or create the app and set the image afterwards with
+`az webapp config container set -g $RG -n $APP --container-image-name $ACR.azurecr.io/pch@sha256:<digest> --container-registry-url https://$ACR.azurecr.io`.
+Deploy by **digest** (immutable) so a rollback is "redeploy the previous digest". # VERIFY: the digest form is accepted as the container image name.
+
+## 3. Role assignments (least privilege)
+
+| Principal | Scope | Role | Why |
+|---|---|---|---|
+| `id-pch-web` | ACR | **AcrPull** | Pull the image |
+| `id-pch-web` | Key Vault | **Key Vault Secrets User** | Resolve Key Vault references (the App Insights connection string) |
+| `id-pch-web` | Azure SQL database | contained user, **`db_datareader`** | The dashboard only reads |
+| `id-pch-scan` | ACR | **AcrPull** | Job image pull |
+| `id-pch-scan` | Key Vault | **Key Vault Secrets User** | Source credentials (references or `azure_keyvault` provider) |
+| `id-pch-scan` | Storage container `pch-raw` | **Storage Blob Data Contributor** | Scan writes, prune deletes the raw cache |
+| `id-pch-scan` | Azure SQL database | contained user, **`db_datareader`, `db_datawriter`** | Scan results, scan lock, prune |
+| `id-pch-deploy` | Azure SQL database | contained user, **`db_ddladmin`** (+ `db_datareader`, `db_datawriter` for the `alembic_version` table) | `pch db upgrade` only |
+| `id-pch-deploy` | ACR | **AcrPush** | Push images |
+| `id-pch-deploy` | Web App | **Website Contributor** | Update the container image / settings |
+| You (operators) | Resource group | Reader; Entra admin group for SQL | Break-glass is your org's process |
+
+Examples:
+
+```bash
+ACR_ID=$(az acr show -g $RG -n $ACR --query id -o tsv); KV_ID=$(az keyvault show -g $RG -n $KV --query id -o tsv)
+SA_CONTAINER=$(az storage account show -g $RG -n $SA --query id -o tsv)/blobServices/default/containers/pch-raw
+az role assignment create --assignee-object-id $WEB_PRINCIPAL  --assignee-principal-type ServicePrincipal --role AcrPull --scope $ACR_ID
+az role assignment create --assignee-object-id $WEB_PRINCIPAL  --assignee-principal-type ServicePrincipal --role "Key Vault Secrets User" --scope $KV_ID
+az role assignment create --assignee-object-id $SCAN_PRINCIPAL --assignee-principal-type ServicePrincipal --role AcrPull --scope $ACR_ID
+az role assignment create --assignee-object-id $SCAN_PRINCIPAL --assignee-principal-type ServicePrincipal --role "Key Vault Secrets User" --scope $KV_ID
+az role assignment create --assignee-object-id $SCAN_PRINCIPAL --assignee-principal-type ServicePrincipal --role "Storage Blob Data Contributor" --scope $SA_CONTAINER
+```
+
+Database users (connect to the database as a member of the Entra admin group, e.g. with `sqlcmd -G` or Azure Data Studio; the name is the managed identity's **name**):
+
+```sql
+CREATE USER [id-pch-web]    FROM EXTERNAL PROVIDER;  ALTER ROLE db_datareader ADD MEMBER [id-pch-web];
+CREATE USER [id-pch-scan]   FROM EXTERNAL PROVIDER;  ALTER ROLE db_datareader ADD MEMBER [id-pch-scan];  ALTER ROLE db_datawriter ADD MEMBER [id-pch-scan];
+CREATE USER [id-pch-deploy] FROM EXTERNAL PROVIDER;  ALTER ROLE db_ddladmin  ADD MEMBER [id-pch-deploy]; ALTER ROLE db_datareader ADD MEMBER [id-pch-deploy]; ALTER ROLE db_datawriter ADD MEMBER [id-pch-deploy];
+```
+
+Source systems (ADO, Sonar, Aikido, ServiceNow): create **read-only** tokens/users (ADO PAT scopes are listed in the README) and store them in Key Vault (`ado-pat`, `sonar-token`, `aikido-client-secret`, `servicenow-password`). The web app needs none of them.
+The database role set above is the intended minimum; confirm `db_ddladmin` is sufficient for your migrations in staging (**# VERIFY**).
+
+## 4. Build and push the image
+
+```bash
+docker build --build-arg PCH_LOCKFILE=requirements-azure.lock -t $ACR.azurecr.io/pch:$(git rev-parse --short HEAD) .
+az acr login -n $ACR && docker push $ACR.azurecr.io/pch:$(git rev-parse --short HEAD)
+az acr repository show -n $ACR --image pch:$(git rev-parse --short HEAD) --query digest -o tsv      # use this sha256 for deployment
+```
+
+`requirements-azure.lock` contains every extra. The provided Dockerfile does **not** install the Microsoft ODBC Driver 18, which `DB_AUTH=azure_ad` (pyodbc) needs. Add this to the final stage *before* `USER pch` (example for the Debian 12 based `python:3.11-slim`; # VERIFY against Microsoft's current "Install the Microsoft ODBC driver for SQL Server (Linux)" page):
+
+```dockerfile
+RUN apt-get update && apt-get install -y --no-install-recommends curl gnupg ca-certificates unixodbc \
+ && curl -sSfL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg \
+ && echo "deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/debian/12/prod bookworm main" > /etc/apt/sources.list.d/mssql-release.list \
+ && apt-get update && ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql18 \
+ && apt-get purge -y curl gnupg && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+```
+
+Scan the image in your registry (Defender for Containers or your scanner) before first deploy.
+
+## 5. App settings
+
+### Web app (`pch serve`)
+
+| Setting | Example value | Notes |
+|---|---|---|
+| `APP_ENV` | `prod` | HSTS, `/api/docs` off, `ALLOWED_HOSTS` mandatory, `AUTH_MODE=none` forbidden, https-only source URLs, `scope.yaml` required |
 | `AUTH_MODE` | `easyauth` | |
-| `AUTH_ALLOWED_ROLES` | `PCH.Reader` | Entra app role value(s), comma separated. Exact, case-sensitive match. |
-| `ALLOWED_HOSTS` | `<app>.azurewebsites.net` | `*.azurewebsites.net` also works; add custom domains. A bare `*` is refused in prod. |
-| `HOST` | `0.0.0.0` | The container must listen on all interfaces; allowed because Easy Auth is enforced. |
-| `WEBSITES_PORT` | `8000` | Used when `PORT` is not set. |
-| `FORWARDED_ALLOW_IPS` | `*` | Acceptable on App Service only because the platform front end is the sole ingress to the container (# VERIFY). |
+| `AUTH_ALLOWED_ROLES` | `PCH.Reader` | Entra app role value(s), comma separated, exact and case-sensitive |
+| `ALLOWED_HOSTS` | `pch-prod-web.azurewebsites.net` | `*.azurewebsites.net` works; add custom domains; a bare `*` is refused in prod |
+| `HOST` | `0.0.0.0` | The container must listen on all interfaces; allowed because Easy Auth is enforced |
+| `WEBSITES_PORT` | `8000` | Used when `PORT` is not set |
+| `FORWARDED_ALLOW_IPS` | `*` | Only because the App Service front end is the sole ingress (# VERIFY) |
+| `DATABASE_URL` | `mssql+pyodbc://@sql-pch-prod.database.windows.net:1433/pch?driver=ODBC+Driver+18+for+SQL+Server&Encrypt=yes` | No password in the URL |
+| `DB_AUTH` | `azure_ad` | Entra token via managed identity |
+| `AZURE_CLIENT_ID` | client id of `id-pch-web` | Required for `DefaultAzureCredential` when using a user-assigned identity |
+| `LOG_LEVEL` | `INFO` | JSON logs are the default in prod |
+| `APPLICATIONINSIGHTS_CONNECTION_STRING` | `@Microsoft.KeyVault(SecretUri=https://kv-pch-prod.vault.azure.net/secrets/appinsights-connection-string/)` | Optional; a secret |
+| `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | `microsoft.fixed_percentage`, `0.1` | Optional sampling |
+| `GRACEFUL_SHUTDOWN_SECONDS` | `20` | Keep below the platform stop window (# VERIFY); raise `WEBSITES_CONTAINER_STOP_TIME_LIMIT` if you raise it |
+| `WEBSITES_ENABLE_APP_SERVICE_STORAGE` | `false` | The container is stateless |
+| `WEBSITE_AUTH_ENABLED` | (do not set) | The platform sets it when Authentication is on; never set `AUTH_EASYAUTH_ASSUME_ENABLED` or `AUTH_NONE_ALLOW_CONTAINER_BIND` in prod (both refused) |
 
-Do **not** set `WEBSITE_AUTH_ENABLED` yourself (the platform sets it when Authentication is on), and never set `AUTH_EASYAUTH_ASSUME_ENABLED` or `AUTH_NONE_ALLOW_CONTAINER_BIND` in prod (both are refused).
-The app refuses to start (exit 2, listing every problem) unless these are consistent; run `pch doctor` to see `auth` and `serve_guard`.
+```bash
+az webapp config appsettings set -g $RG -n $APP --settings APP_ENV=prod AUTH_MODE=easyauth AUTH_ALLOWED_ROLES=PCH.Reader \
+  ALLOWED_HOSTS=$APP.azurewebsites.net HOST=0.0.0.0 WEBSITES_PORT=8000 FORWARDED_ALLOW_IPS='*' DB_AUTH=azure_ad AZURE_CLIENT_ID=$WEB_CLIENT \
+  DATABASE_URL='mssql+pyodbc://@'$SQLSRV'.database.windows.net:1433/'$SQLDB'?driver=ODBC+Driver+18+for+SQL+Server&Encrypt=yes' \
+  LOG_LEVEL=INFO WEBSITES_ENABLE_APP_SERVICE_STORAGE=false
+```
 
-## Authentication (Web App -> Settings -> Authentication)
+The app refuses to start (exit 2, listing every problem) when these are inconsistent; run `pch doctor` (`auth`, `serve_guard`) from the same settings to see why. The Azure SQL password-free URL requires the `azuresql` extra and the ODBC driver (section 4).
 
-1. Add identity provider **Microsoft** (Entra ID), workforce tenant, new or existing app registration.
+### Scan job (`pch scan`, `pch scans prune`)
+
+| Setting | Example value | Notes |
+|---|---|---|
+| `APP_ENV` | `prod` | |
+| `DATABASE_URL`, `DB_AUTH`, `AZURE_CLIENT_ID` | as above, client id of `id-pch-scan` | |
+| `ADO_ORG` | `contoso` | Organization name |
+| `ADO_PAT`, `SONAR_TOKEN`, `AIKIDO_CLIENT_SECRET`, `SERVICENOW_PASSWORD` | Key Vault references or job secrets | Or `SECRETS_PROVIDER=azure_keyvault` + `KEYVAULT_URL` (then the env credentials are ignored) |
+| `SONAR_URL`, `AIKIDO_CLIENT_ID`, `SERVICENOW_URL`, `SERVICENOW_USER` | your values | https only in prod; setting one marks the source configured |
+| `ARTIFACT_STORE`, `ARTIFACT_BLOB_ACCOUNT_URL`, `ARTIFACT_BLOB_CONTAINER` | `azure_blob`, `https://<sa>.blob.core.windows.net`, `pch-raw` | Optional raw cache |
+| `SCAN_TIMEOUT_MINUTES`, `SCAN_LOCK_STALE_MINUTES` | `240`, `360` | Timeout must be smaller than the stale window (validated) |
+| `HTTP_MAX_RESPONSE_MB`, `DB_CONNECT_TIMEOUT_SECONDS`, `CONCURRENCY` | `50`, `15`, `8` | Defaults shown |
+
+Every variable, default and meaning is in the README "Configuration reference".
+
+## 6. Run the migrations (release step)
+
+The web app refuses to start against a schema that is not at the build's head, so migrate **before** starting or updating it, as `id-pch-deploy` (not as the app identity). Example from a release pipeline runner that has the image's Python environment or `pip install ".[azuresql]"` plus the ODBC driver, signed in with `az login` (workload identity federation) so `DefaultAzureCredential` finds the CLI credential:
+
+```bash
+export APP_ENV=prod DB_AUTH=azure_ad DATABASE_URL='mssql+pyodbc://@<sql-pch-prod>.database.windows.net:1433/pch?driver=ODBC+Driver+18+for+SQL+Server&Encrypt=yes'
+pch db upgrade && pch db check
+```
+
+The SQL server's firewall / private endpoint must allow the runner. Do not use `DB_AUTO_MIGRATE=true` in prod: it needs DDL rights on the app identity and concurrent instances can race. Rollback policy and backups: `IMPORT_CHECKLIST.md`, section 10.
+
+## 7. Authentication (Web App, Settings, Authentication)
+
+1. Add identity provider **Microsoft** (Entra ID), workforce tenant, new or existing app registration, **single tenant**.
 2. **Restrict access: Require authentication.**
-3. **Unauthenticated requests:** `HTTP 401 Unauthorized` (recommended for APIs) or `HTTP 302 redirect to Microsoft` for browsers. The dashboard is a browser app, so use the redirect; scripted clients of `/api/v1/*` then need a token and get 401 from the platform.
+3. **Unauthenticated requests:** `HTTP 302 redirect to Microsoft` for browsers (the dashboard) or `HTTP 401` (recommended for scripted API use; then clients need a token).
 4. Token store: optional (the app does not call downstream APIs or read tokens).
-5. **Excluded paths:** `/health/live` and `/health/ready` (and `/api/v1/health` if you use it). The App Service Health check probe carries no sign-in, so with *Require authentication* the platform answers it with 401/302 before it reaches the container unless these paths are excluded (Authentication -> Edit -> *Restrict access* -> Excluded paths; or `excludedPaths` in the `authsettingsV2` config). The endpoints return a status and a generic reason code only. Everything else stays protected. # VERIFY: excluded-paths option and wildcard syntax in the current Easy Auth (authsettingsV2 `globalValidation.excludedPaths`).
-6. Enterprise application -> Properties -> **Assignment required = Yes**; assign users/groups to the app role.
+5. **Excluded paths:** `/health/live` and `/health/ready` (and `/api/v1/health` if you use it). The App Service Health check probe carries no sign-in, so with *Require authentication* the platform answers it with 401/302 before it reaches the container unless these paths are excluded (Authentication, Edit, *Restrict access*, Excluded paths; or `globalValidation.excludedPaths` in the `authsettingsV2` configuration). The endpoints return a status and a generic reason code only; everything else stays protected. # VERIFY: excluded-paths option and wildcard syntax in the current Easy Auth.
+   Example (CLI, **# VERIFY** the option name for your CLI version; the portal is the reference): `az webapp auth update -g $RG -n $APP --enabled true --action RedirectToLoginPage --excluded-paths "/health/live;/health/ready"`.
+6. Enterprise application, Properties: **Assignment required = Yes**; assign users or groups to the app role (below).
 
-## App role (app registration -> Manifest, `appRoles`)
+**App role** (app registration, Manifest, `appRoles`):
 
 ```json
 {
@@ -39,7 +218,45 @@ The app refuses to start (exit 2, listing every problem) unless these are consis
 }
 ```
 
-Assign users or groups to **PCH Reader** under Enterprise applications -> Users and groups. The `roles` claim is then present in the principal that Easy Auth passes in `X-MS-CLIENT-PRINCIPAL`; the app allows the request only if it contains a role from `AUTH_ALLOWED_ROLES`. Sign-out is `/.auth/logout` (linked in the header).
+Assign users or groups to **PCH Reader** under Enterprise applications, Users and groups. The `roles` claim is then present in the principal that Easy Auth passes in `X-MS-CLIENT-PRINCIPAL`; the app allows the request only if it contains a role from `AUTH_ALLOWED_ROLES`. Sign-out is `/.auth/logout` (linked in the header).
+Then run the forged-header test in `IMPORT_CHECKLIST.md` (expect 401, or a 302 to Microsoft sign-in, never data).
+
+## 8. Health check, logging, telemetry, shutdown
+
+* **App Service, Monitoring, Health check path: `/health/ready`** (example: `az webapp config set -g $RG -n $APP --generic-configurations '{"healthCheckPath": "/health/ready"}'`). App Service pings it about once a minute; an instance that fails it repeatedly (threshold configurable via `WEBSITE_HEALTHCHECK_MAXPINGFAILURES`, 2-10) is removed from rotation and, if it stays unhealthy, replaced. # VERIFY: current thresholds, the setting name, and that the probe host/headers are accepted by `ALLOWED_HOSTS`.
+* Why `/health/ready` and not `/health/live`: readiness is "DB reachable and migrated to head" (503 with `db_unreachable`, `db_timeout` or `schema_not_ready`). It intentionally ignores the artifact store, Key Vault and the sources so one flaky optional dependency cannot take every instance out of rotation at once. `/health/live` (process only) is what the image `HEALTHCHECK` uses, so a DB outage never restarts the container.
+* Both paths must be excluded from Easy Auth (section 7, step 5). The health check needs at least 2 instances to be useful (# VERIFY).
+* **Logs:** `APP_ENV=prod` gives JSON logs on stdout/stderr. Enable *App Service logs, Application logging (filesystem)* or route Diagnostic settings (`AppServiceConsoleLogs`) to Log Analytics.
+* **Application Insights:** build with `requirements-azure.lock`, set `APPLICATIONINSIGHTS_CONNECTION_STRING` as a Key Vault reference. Cloud role names are `pch-web` and `pch-scan`. Do not also enable the App Service *auto-instrumentation* agent for the same app (double telemetry). # VERIFY: no URL query, credential or row value appears in `exceptions`, `dependencies` or `requests`.
+* **Graceful shutdown:** on stop/restart/scale-in App Service sends SIGTERM and waits before SIGKILL; `GRACEFUL_SHUTDOWN_SECONDS` (default 20) must stay below that window. `KEEP_ALIVE_SECONDS` (default 65) should exceed the front end's idle reuse window. # VERIFY: ~30 s stop time, `WEBSITES_CONTAINER_STOP_TIME_LIMIT`, ~230 s ARR idle timeout.
+
+## 9. The scan job (out-of-band)
+
+`pch serve` (the web app) and `pch scan` (minutes to hours) are separate processes: never run scans inside the web container. Both use the same image and database; the scan lock in the database ensures one scan at a time even if two schedulers fire.
+Exit codes (README): 0 ok, 1 generic failure, 2 configuration, 3 database not ready, 4 another scan holds the lock (usually fine), 5 interrupted or timed out (the scan row is `failed`, the lock released).
+Run `pch scan` and then `pch scans prune --keep 30 --older-than 90` (retention; `--dry-run` first).
+
+**(a) Azure DevOps scheduled pipeline (container job).** A YAML pipeline with a `schedules:` cron trigger and `container:` pointing at the same image in ACR, running `pch scan`. The pipeline only *reads* ADO via the PAT stored as a secret variable / variable group linked to Key Vault; it must not write to ADO. Authenticate to Azure SQL/Blob/Key Vault with a workload-identity-federation service connection (OIDC); give that identity the scan roles from section 3. # VERIFY: use `AzureCLI@2` with `addSpnToEnvironment: true` or the pipeline's federated identity to obtain tokens for `DefaultAzureCredential` (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_FEDERATED_TOKEN_FILE`).
+
+**(b) Azure Container Apps Job (scheduled) or App Service WebJob.** Container Apps Job: same image, *Schedule* trigger (cron), command `pch scan`, `replicaTimeout` slightly above `SCAN_TIMEOUT_MINUTES` (in seconds), `replicaRetryLimit` 0, the `id-pch-scan` user-assigned identity, secrets as Key Vault-backed secrets. The platform sends SIGTERM when a replica is stopped; the scan marks itself `failed` (`interrupted`) and releases the lock. A WebJob in the web app's own container shares its CPU, memory and stop window; prefer the job. # VERIFY: Container Apps Job field names and WebJob support for custom Linux containers.
+
+Alert on a failed job run and on "no `complete` scan in the last N hours".
+
+## 10. Scaling notes
+
+* The web app is stateless and read-only: scale out (>= 2 instances for the health check) rather than adding workers; `pch serve` runs one uvicorn process per instance. Easy Auth keeps the session at the front end; ARR affinity can be off.
+* Each instance opens up to `DB_POOL_SIZE + DB_MAX_OVERFLOW` (default 15) connections; size the Azure SQL tier's connection limit for instances x 15 plus the scan job. `DB_POOL_RECYCLE` (default 1800 s) stays below Azure SQL's ~30 min idle disconnect; `DB_CONNECT_TIMEOUT_SECONDS` bounds a hung server.
+* SQLite is for development only: with several instances each would have its own file. Production uses Azure SQL (or PostgreSQL).
+* The scan is the heavy part (HTTP fan-out bounded by `CONCURRENCY`, per-response cap `HTTP_MAX_RESPONSE_MB`, overall `SCAN_TIMEOUT_MINUTES`). Give the job its own compute; do not scale the web plan for it.
+* `/health/ready` results are cached for `HEALTH_READY_CACHE_SECONDS` (5 s) and the probe is single-flight, so health pings cannot stampede the database.
+
+## 11. Verify, then go live
+
+Run the go-live gate in `IMPORT_CHECKLIST.md` section 9 (forged-header test, readiness probe, excluded paths, role assignment, retention, backup/restore, rollback).
+
+## 12. Where infrastructure-as-code goes
+
+Express sections 1-3 and 5 (resources, role assignments, app settings, Easy Auth configuration) in your organisation's IaC repository (Bicep, Terraform, ...) and keep this runbook as the reference for what the app needs. The template deliberately ships none, so it does not dictate your modules or landing zone.
 
 ## Assumptions to verify on the real platform (`# VERIFY:` in code)
 
@@ -49,41 +266,3 @@ Assign users or groups to **PCH Reader** under Enterprise applications -> Users 
 * `/.auth/logout` is the sign-out endpoint.
 * `FORWARDED_ALLOW_IPS=*` is safe because the App Service front end is the only way to reach the container (`settings.py`).
 * The platform health probe sends the site host name as `Host` (so `ALLOWED_HOSTS` does not reject it); the container `HEALTHCHECK` uses a loopback Host, allowed for the three health paths only.
-
-## Operations (T6)
-
-### Health check and probes
-
-* **App Service -> Monitoring -> Health check path: `/health/ready`.** App Service pings it about once a minute; an instance that fails it repeatedly (the *Load balancing* threshold, default 10 minutes in the portal, configurable via `WEBSITE_HEALTHCHECK_MAXPINGFAILURES`, 2-10) is removed from rotation and, if it stays unhealthy, replaced. # VERIFY: current thresholds, the `WEBSITE_HEALTHCHECK_MAXPINGFAILURES` name, and that the probe host/headers are accepted by `ALLOWED_HOSTS`.
-* Why `/health/ready` and not `/health/live`: readiness is "DB reachable and migrated to head" (503 with `db_unreachable`, `db_timeout` or `schema_not_ready`). It intentionally ignores the artifact store, Key Vault and external sources so one flaky optional dependency cannot take every instance out of rotation at once. `/health/live` (process only) is what the image `HEALTHCHECK` uses, so a DB outage never restarts the container.
-* Both paths must be excluded from Easy Auth (see Authentication step 5), otherwise the platform probe is rejected with 401/302 and the instance is marked unhealthy.
-* Health check needs at least 2 instances to be useful (it only removes an unhealthy instance from rotation if another exists). # VERIFY.
-
-### Logging, telemetry
-
-* Set `APP_ENV=prod` (JSON logs by default), `LOG_LEVEL=INFO`. The container writes to stdout/stderr: enable *App Service logs -> Application logging (filesystem)* or route Diagnostic settings (`AppServiceConsoleLogs`) to Log Analytics.
-* Application Insights: build the image with `--build-arg PCH_LOCKFILE=requirements-azure.lock` (includes the `azure-monitor` extra) and set `APPLICATIONINSIGHTS_CONNECTION_STRING` as a Key Vault reference. Cloud role name `pch-web` (web) and `pch-scan` (scan). Sampling: `OTEL_TRACES_SAMPLER=microsoft.fixed_percentage`, `OTEL_TRACES_SAMPLER_ARG=0.1`. Do not also enable the App Service *auto-instrumentation* agent for the same app (double telemetry). # VERIFY.
-
-### Graceful shutdown
-
-On stop/restart/scale-in App Service sends SIGTERM and waits before SIGKILL; `GRACEFUL_SHUTDOWN_SECONDS` (default 20) must stay below that window. Raise `WEBSITES_CONTAINER_STOP_TIME_LIMIT` (seconds) if you increase it. # VERIFY: default stop time (~30 s) and the app setting name for custom containers.
-
-### Running the scan out-of-band
-
-`pch serve` (the web app) and `pch scan` (a batch job taking minutes to hours) are separate processes: do not run scans inside the web container. Both use the same image, DB and (optionally) artifact store. The scan lock in the DB guarantees one scan at a time even if two schedulers fire; exit codes are in the README. Required for every option: `APP_ENV=prod`, `DATABASE_URL` (or `DB_AUTH=azure_ad` with a managed identity), the source settings (`ADO_ORG`, `SONAR_URL`, ...; credentials via `SECRETS_PROVIDER=env` with Key Vault references/pipeline secrets, or `azure_keyvault`), `ARTIFACT_STORE=azure_blob` + `ARTIFACT_BLOB_*` if the raw cache should persist, `SCAN_TIMEOUT_MINUTES`. Run `pch db upgrade` as a deploy step before first use (the web app refuses to start on a schema that is not at head).
-
-**(a) Azure DevOps scheduled pipeline (container job).** A YAML pipeline with a `schedules:` cron trigger and `container:` pointing at the same image in ACR, running `pch scan` (then `pch scans prune --keep 30 --older-than 90`). The pipeline itself only *reads* ADO via the PAT stored as a secret variable / variable group linked to Key Vault; it must not write to ADO. Authenticate to Azure SQL/Blob/Key Vault with a workload-identity-federation service connection (OIDC) on the pipeline identity; give that identity the roles below. Treat the exit code: 0 ok, 4 means a scan was already running (usually fine), others fail the run. # VERIFY: use `AzureCLI@2` with `addSpnToEnvironment: true` or the pipeline's federated identity to obtain tokens for `DefaultAzureCredential` (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_FEDERATED_TOKEN_FILE`).
-
-**(b) Azure Container Apps Job (scheduled) or App Service WebJob.** Container Apps Job: same image, *Schedule* trigger (cron), command `pch scan`, `replicaTimeout` slightly above `SCAN_TIMEOUT_MINUTES`, `replicaRetryLimit` 0, a user-assigned managed identity, secrets as Key Vault-backed secrets. The platform sends SIGTERM when a replica is stopped; the scan marks itself `failed` (`interrupted`) and releases the lock. A WebJob (triggered, cron `settings.job`) in the web app's own container is possible but shares the app's CPU/memory and stop window; prefer the job. # VERIFY: Container Apps Job field names and WebJob support for custom Linux containers.
-
-**RBAC for the scan identity (least privilege)**
-
-| Resource | Role / grant |
-|---|---|
-| Azure SQL | contained user `CREATE USER [<identity>] FROM EXTERNAL PROVIDER` with `db_datareader`, `db_datawriter` (scan, prune); a separate deploy identity with `db_ddladmin` runs `pch db upgrade` |
-| Blob container (`ARTIFACT_BLOB_CONTAINER`) | Storage Blob Data Contributor on that container (scan writes, prune deletes) |
-| Key Vault | Key Vault Secrets User (only when `SECRETS_PROVIDER=azure_keyvault`) |
-| Container registry | AcrPull (job pulls the image) |
-| ADO / Sonar / Aikido / ServiceNow | read-only tokens only; the app never writes to them |
-
-The web app identity needs only `db_datareader` on the DB.

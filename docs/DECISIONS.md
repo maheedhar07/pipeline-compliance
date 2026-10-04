@@ -95,3 +95,80 @@ Choices made where `docs/PLAN.md` was ambiguous or silent. Revisit them when rea
 - **Interrupts and timeouts.** `run_guarded` converts SIGTERM/SIGINT into cancellation of the scan task; `Scanner.run` records the reason (`interrupted`, `timeout: exceeded N minutes`, or the exception) and re-raises; the lock is released by its context manager; the CLI exits 5. `SCAN_TIMEOUT_MINUTES` is per `Scanner.run` (demo mode with history applies it to each snapshot). A hard SIGKILL is still recovered by the stale-lock / orphan logic (T3).
 - **Exit codes** are constants in `pch/exitcodes.py` (0 ok, 1 generic, 2 config, 3 schema/db, 4 lock, 5 interrupted/timeout) and documented in the README.
 - **Unverified platform assumptions** (all `# VERIFY`): App Service stop window (~30 s) vs `GRACEFUL_SHUTDOWN_SECONDS`; front-end idle timeout vs `KEEP_ALIVE_SECONDS`; Easy Auth excluded-path syntax; Health check thresholds/app setting names; Container Apps Job / WebJob fields; federated-identity token wiring in ADO.
+
+## Architecture decision records (T1-T7)
+
+Short ADRs for the decisions a team building on this template is most likely to want to revisit. The sections above hold the detail.
+Format: context, decision, consequences, how to reverse.
+
+### ADR-01 Supply chain is pinned and verified (T1)
+- **Context.** The app holds read tokens for the source systems and runs in a regulated org; an unpinned dependency, action or base image is a path to those tokens.
+- **Decision.** GitHub Actions pinned by commit SHA with `permissions: contents: read`; hash-locked `requirements.lock` (core + `postgres`) and `requirements-azure.lock` (all extras) installed with `--require-hashes`; base image pinned by digest; CI runs ruff, mypy, pytest, bandit, `pip-audit` on both lockfiles, gitleaks (checksum-verified binary) and Dependabot (pip, actions, docker).
+- **Consequences.** Dependency changes need a lockfile regeneration (two files) and digest bumps are manual or Dependabot PRs. SEC-12 (unpinned dev tools in CI, PEP 517 build backend fetched without hashes) is accepted.
+- **Reverse.** Drop `--require-hashes` in the Dockerfile and the pin comments; not recommended.
+
+### ADR-02 Strict, fail-fast configuration with an `APP_ENV` profile (T2, T7)
+- **Context.** Silent misconfiguration (a typo in `policy.yaml`, `http://` source URL, a timeout longer than the lock window) turns into a wrong report or an unsafe deployment.
+- **Decision.** `Settings` validates everything at construction; YAML models are `extra="forbid"` and errors name file and field path (never the value). `APP_ENV=prod` adds checks: https-only source URLs, `ALLOWED_HOSTS`, no `AUTH_MODE=none`, `scope.yaml` required. `SCAN_TIMEOUT_MINUTES < SCAN_LOCK_STALE_MINUTES` is enforced in every environment. `pch doctor` runs the same checks plus connectivity.
+- **Consequences.** A bad value stops startup (exit 2) instead of degrading. On-prem `http://` sources work only outside prod.
+- **Reverse.** Remove the prod branch in `Settings._provider_settings`; set `extra="ignore"` on `_Strict` (not recommended).
+
+### ADR-03 Schema only through Alembic migrations, dialect-neutral types (T3)
+- **Context.** `create_all` hides drift and cannot evolve a live database; the target set is SQLite, PostgreSQL and Azure SQL.
+- **Decision.** Migrations ship inside the package and are driven by `pch db ...` with the engine's own connection. `UTCDateTime`, `Unicode` text, indexed strings of at most 450 characters, no JSON-path SQL. SQLite in dev/test auto-migrates (so the whole suite exercises migrations); everything else requires `pch db upgrade` (or opt-in `DB_AUTO_MIGRATE`). A test fails if models and migrations differ.
+- **Consequences.** Every model change needs a revision (see CUSTOMIZING). Downgrade of the initial revision drops all tables.
+- **Reverse.** Not practical; a new dialect is added by extending the types and the CI matrix instead.
+
+### ADR-04 Scans run out-of-band behind a database lock (T3, T6, T7)
+- **Context.** A scan takes minutes to hours; running it in a web request or on every instance would overload sources and the app.
+- **Decision.** `pch scan` is a separate process (scheduled job). A row in `scan_locks` enforces one scan at a time on all dialects, with takeover after `SCAN_LOCK_STALE_MINUTES`; `SCAN_TIMEOUT_MINUTES` cancels a scan and marks it `failed`; results and `complete` are committed in one transaction. T7 made the invariant timeout < stale window a validation error.
+- **Consequences.** The deployment needs a scheduler (ADO pipeline, Container Apps Job or WebJob). The web app only reads.
+- **Reverse.** Call `Scanner` from an in-process scheduler; keep the lock.
+
+### ADR-05 Provider seams are explicit, non-mixing and optional (T4)
+- **Context.** Secrets and raw-cache storage differ per host; cloud SDKs must not be required for the core.
+- **Decision.** `SecretProvider` (`env`, `file`, `azure_keyvault`) and `ArtifactStore` (`local`, `azure_blob`) are built by one factory function each (`build_secret_provider`, `build_artifact_store`) from a `Literal` setting; the SDK import is lazy and a missing extra raises `ProviderUnavailable` with the pip command. Providers are never mixed (no silent fallback). Azure Blob has no key/SAS/connection-string path.
+- **Consequences.** Adding a provider means a class, a `Literal` value and an `elif` branch (there is no plugin discovery by design). The auth seam uses a dict registry (`AUTHENTICATORS`).
+- **Reverse.** Replace the factories with entry-point discovery if a third party must add providers.
+
+### ADR-06 Easy Auth plus Entra app roles, with a fail-closed guard (T5)
+- **Context.** Microsoft-only org on App Service; sign-in, sessions and token handling should not live in this app.
+- **Decision.** `AUTH_MODE=easyauth` reads `X-MS-CLIENT-PRINCIPAL`, authorizes by exact app-role match, and refuses to start unless `WEBSITE_AUTH_ENABLED=True` (otherwise the headers are forgeable). `none` is loopback-only and forbidden in prod. Every other path returns 401 to anonymous users; only the health endpoints and `/static/` are public.
+- **Consequences.** Safety depends on platform behavior the code cannot prove (SEC-08, listed in the go-live gate). Local testing of easyauth needs `AUTH_EASYAUTH_ASSUME_ENABLED`.
+- **Reverse.** Add another `Authenticator` to `AUTHENTICATORS` (CUSTOMIZING, Auth).
+
+### ADR-07 No third-party origins at runtime (T5)
+- **Context.** A CDN script on a page that shows compliance data is an exfiltration path.
+- **Decision.** Tailwind CSS is built with the pinned standalone CLI; HTMX and Chart.js are vendored with sha256 in `MANIFEST.json`; CSP is `default-src 'self'` with no inline script or style.
+- **Consequences.** Updating a front-end asset is a manual procedure (CUSTOMIZING, Rebuild CSS). `/api/docs` (dev only) is the one exception.
+- **Reverse.** Not recommended.
+
+### ADR-08 Redact before anything is persisted or logged (T4, T6, T7)
+- **Context.** Responses and exceptions can contain credentials.
+- **Decision.** `RecordingTransport.build_record` redacts (JSON field names incl. suffixes, text patterns) before the artifact store sees a byte; exception text is scrubbed before it reaches the database; a log handler filter scrubs by pattern and by exact registered secret values; SQLAlchemy runs with `hide_parameters=True`; regexes are linear-time (SEC-01).
+- **Consequences.** Redaction is best effort for free text and may over-scrub. New collectors must not bypass `SourceClient`.
+- **Reverse.** None; it is a security invariant.
+
+### ADR-09 Collection fails open, startup fails closed (T2, T6)
+- **Context.** One failing repo or source should not lose a scan, but a misconfigured service must not start.
+- **Decision.** Collectors record a collection error and continue; the scan stores them. Startup validation, the serve guard and the migration-head check refuse to start (exit 2/3). `/health/ready` is DB reachability plus migration head only, so a flaky optional dependency cannot take every instance out of rotation.
+- **Consequences.** A report can be partial; collection errors are visible in the dashboard and are findings (`COLLECTION-ERROR`).
+- **Reverse.** n/a.
+
+### ADR-10 Optional extras with two lockfiles (T1, T4)
+- **Context.** The core must be installable without cloud SDKs or the ODBC driver.
+- **Decision.** Extras: `postgres`, `azuresql`, `azure-keyvault`, `azure-blob`, `azure-monitor`. `requirements.lock` = core + postgres; `requirements-azure.lock` = everything. The Dockerfile takes `PCH_LOCKFILE`. CI has an `all-extras` job so Azure adapter tests are not skipped.
+- **Consequences.** Both lockfiles must be regenerated together.
+- **Reverse.** Fold extras into the core dependencies and keep one lockfile.
+
+### ADR-11 Residual-risk hardening: https-only prod, response cap, connect timeout (T7)
+- **Context.** The independent review accepted four low risks (SEC-11, SEC-13) as operator-controlled; the owner's rule is to fail safe in live.
+- **Decision.** In prod every configured source URL must be `https://`; `SizeLimitTransport` (`HTTP_MAX_RESPONSE_MB`, default 50) sits beneath the recorder and aborts oversize responses (error becomes a collection error, not retried); server engines get `DB_CONNECT_TIMEOUT_SECONDS` (psycopg `connect_timeout`, pyodbc login `timeout`).
+- **Consequences.** A legitimately huge upstream response (large pipeline list) needs the cap raised; the failure is visible as a collection error.
+- **Reverse.** Raise the caps via settings; remove the prod URL check in `Settings`.
+
+### ADR-12 Documentation is checked against the code (T7)
+- **Context.** Template docs rot; stale env-var tables cause misconfiguration.
+- **Decision.** The environment-variable table in the README is generated from `Settings` (`pch config reference`); `tests/test_docs.py` fails if a setting is undocumented, the README table or `docs/RULES.md` is stale, `.env.example` omits a setting, or a relative markdown link is broken.
+- **Consequences.** Adding a setting means one entry in `src/pch/config_reference.py`, one mention in `.env.example` and a regenerated README.
+- **Reverse.** Delete the tests.

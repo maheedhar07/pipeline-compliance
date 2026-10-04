@@ -1,5 +1,5 @@
 {
-  "_comment": "Vendored third-party assets. sha256 is of the committed file. Provenance: the npm tarball named in 'source' was downloaded and its sha1 (dist.shasum) and sha512 (dist.integrity) compared with the npm registry before extracting 'path_in_package'. Re-verify with scripts/verify_vendor.sh. Update procedure: see README 'Vendored frontend assets'.",
+  "_comment": "Vendored third-party assets. sha256 is of the committed file. Provenance: the npm tarball named in 'source' was downloaded and its sha1 (dist.shasum) and sha512 (dist.integrity) compared with the npm registry before extracting 'path_in_package'. Re-verify with tests/test_web_security.py::test_vendor_manifest_matches_files. Update procedure: see docs/CUSTOMIZING.md 'Rebuild CSS, bump vendored JavaScript'.",
   "assets": [
     {
       "name": "htmx.org",

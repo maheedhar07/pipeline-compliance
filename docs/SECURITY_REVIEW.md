@@ -60,9 +60,9 @@ report-only (never writes to ADO / GitHub / Sonar / Aikido / ServiceNow), never 
 * Over-scrubbing is intentional: long high-entropy identifiers (for example a Sonar project key) can show as `***REDACTED***` in logs / error rows.
 * Dashboard data (compliance findings, repo names, owners) is sensitive to anyone holding the reader role.
 
-## `# VERIFY:` markers and go-live checklist
+## VERIFY markers and go-live checklist
 
-Confirm on a real App Service before go-live.
+Confirm on a real App Service before go-live (the `# VERIFY:` comments in the code; the full gate is in `IMPORT_CHECKLIST.md`).
 
 **Easy Auth / ingress** (`web/auth.py`, `web/guard.py`, `settings.py`, `docs/DEPLOY_AZURE.md`)
 * `WEBSITE_AUTH_ENABLED=True` reaches the container when Authentication is on (`guard.py:62`, `settings.py:131`).

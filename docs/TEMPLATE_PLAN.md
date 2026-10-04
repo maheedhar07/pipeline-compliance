@@ -30,47 +30,49 @@ infrastructure seams are swappable by configuration, and which **fails safe** in
 
 ## Milestones
 
+Status: **T1-T7 are complete.** T7 also closed the residual risks the security review had accepted (https-only prod sources, scan timeout < lock window, response size cap, DB connect timeout) and added `CUSTOMIZING.md`, `IMPORT_CHECKLIST.md`, `THREAT_MODEL.md`, an expanded `DEPLOY_AZURE.md`, ADR-01..12 in `DECISIONS.md` and the docs-drift tests.
+
 Each milestone ends with `ruff check . && mypy src && pytest`, a conventional commit, and `git push origin main`.
 
-### T1 — Supply-chain baseline
+### T1 — Supply-chain baseline (done)
 - Pin GitHub Actions by full commit SHA (with version comment). Least-privilege `permissions:` on workflows.
 - CI jobs: lint+type+test (3.11, 3.12), `pip-audit`, `bandit -r src` (config in pyproject), gitleaks (or equivalent secret scan).
 - Dependabot for pip, github-actions, docker.
 - Upper-bounded dependency ranges in pyproject; `requirements.lock` generated with hashes (pip-tools style) and used by the Dockerfile.
 - Dockerfile: base image pinned by digest (comment how to bump), multi-stage, non-root, no build tools in final image, `--require-hashes` install.
 
-### T2 — Settings & config
+### T2 — Settings & config (done)
 - `APP_ENV` (`dev|test|prod`) profile. Settings grouped and documented; `.env.example` complete.
 - Strict YAML models (`extra="forbid"`), useful error messages with file + field path.
 - Move org-specific literals (e.g. quality-gate name "Company Way", contoso hosts) into config / `.example` files.
 - `pch doctor` command (exit non-zero on any failure, never prints secret values).
 
-### T3 — Portable persistence
+### T3 — Portable persistence (done)
 - Alembic migrations (initial revision = current schema), `pch db upgrade|current|check`. Prod: no `create_all`; app readiness fails if DB not at head.
 - Dialect-neutral types: timezone-aware UTC datetimes everywhere (no `utcnow()`), JSON via a TypeDecorator that works on SQLite/Postgres/MSSQL, string lengths valid for MSSQL index limits.
 - Engine factory: per-dialect options isolated in one module; `pool_pre_ping`, pool sizing/recycle from settings; credential hook interface (`DB_AUTH=password|azure_ad`) — Azure SQL token injected via `do_connect` using `azure-identity` (extra `azuresql`).
 - Scan lock (DB row/table-based, works on all 3 dialects, with stale-lock timeout).
 - CI matrix: SQLite, Postgres (service container), SQL Server (`mcr.microsoft.com/mssql/server` service container + ODBC driver). DB-portability tests skip locally unless `TEST_DATABASE_URL` set.
 
-### T4 — Provider seams
+### T4 — Provider seams (done)
 - `SecretProvider`: `env` (default), `file` (mounted dir), `azure_keyvault` (extra). Settings secrets resolved through it.
 - `ArtifactStore` for raw cache + `--from-cache`: `local` (default), `azure_blob` (extra, managed identity). Redaction happens before any store write.
 - Single `providers` registry module; clear error when an extra is missing.
 
-### T5 — Web security
+### T5 — Web security (done)
 - Auth modes: `none` (dev only, loopback only), `easyauth` (parse `X-MS-CLIENT-PRINCIPAL`, require `WEBSITE_AUTH_ENABLED=True` in prod, allowlist of roles/groups, 401/403 fail closed), dependency-injected so other modes can be added.
 - Security headers middleware: strict CSP (no third-party origins), HSTS (prod), X-Content-Type-Options, frame-ancestors none, Referrer-Policy, Permissions-Policy.
 - Vendor Tailwind (prebuilt CSS), HTMX, Chart.js into `static/vendor` with recorded versions + SHA256 in a manifest; no CDN at runtime.
 - `/api/docs` disabled in prod; generic error pages (no tracebacks); trusted-host / proxy-headers config for App Service.
 
-### T6 — Operability
+### T6 — Operability (done)
 - Structured JSON logging in prod with request id; log filter redacting secret-like values.
 - `/health/live` (process) and `/health/ready` (DB reachable + migrations at head); keep `/api/v1/health` as alias.
 - Optional App Insights (extra `azure-monitor`) enabled by `APPLICATIONINSIGHTS_CONNECTION_STRING`.
 - `pch scans prune --keep N --older-than D` (retention, also prunes artifact store).
 - Graceful shutdown; App Service startup command / `WEBSITES_PORT` docs.
 
-### T7 — Template docs + independent security review
+### T7 — Template docs + independent security review (done)
 - `docs/CUSTOMIZING.md`: one recipe per seam (swap DB → Azure SQL, secrets, auth, storage, add collector, add rule).
 - `docs/DEPLOY_AZURE.md`: App Service + Easy Auth + managed identity + Key Vault references + Azure SQL + Blob + App Insights; least-privilege role assignments; go-live checklist.
 - `docs/THREAT_MODEL.md` (STRIDE-lite), `docs/IMPORT_CHECKLIST.md`, ADRs appended to `docs/DECISIONS.md`.

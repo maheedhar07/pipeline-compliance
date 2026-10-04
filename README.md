@@ -1,28 +1,117 @@
 # Pipeline Compliance Hub
 
-A **report-only** web dashboard that scores the CI/CD pipelines of ~280 repositories against a policy catalog of 53 deterministic rules.
-Sources: Azure DevOps (Classic build, Classic release, YAML), SonarQube, Aikido and ServiceNow. GitHub Actions support is planned (interface only today).
-It never writes to ADO, GitHub, Sonar, Aikido or ServiceNow, and compliance is decided by Python rules, never by an AI.
+A **report-only** CI/CD compliance dashboard, built as a **template** you import and extend. It scores the pipelines of every repository
+(Azure DevOps Classic build, Classic release and YAML; SonarQube, Aikido and ServiceNow as supporting sources) against a catalog of 53
+deterministic Python rules and serves the result as a server-rendered dashboard plus a JSON API. GitHub Actions support is planned (interface only).
 
-* Repo-centric: one row per repo with its build and release pipelines, test state, Sonar gate, Aikido criticals, score and status.
-* Understands Function Apps, Web Apps, AKS, Azure Data Factory, Synapse, SQL dacpac and IaC deployments.
-* Highlights repos with **no tests** and tests that are **not run**; tracks **ServiceNow CRQ** coverage of production deployments.
-* Ships with a realistic demo estate (280 repos) so you can see everything without credentials.
-
-Docs: [plan](docs/PLAN.md) · [rule catalog](docs/RULES.md) · [decisions & assumptions](docs/DECISIONS.md)
+* **Report-only.** It never writes to Azure DevOps, GitHub, SonarQube, Aikido or ServiceNow (a transport-level guard, tested), and compliance is decided by Python rules, never by an AI.
+* **Safe by default.** Fails closed when misconfigured (`APP_ENV=prod` refuses unsafe auth, bind, host and URL settings), never persists secret values, redacts every cache and log.
+* **Five swappable seams**, chosen by settings: database (SQLite / PostgreSQL / Azure SQL), secrets (env / file / Key Vault), auth (none / Easy Auth), artifact storage (local / Blob), source collectors. Everything else is concrete code.
+* **Runs without credentials.** A synthetic 280-repo estate goes through the real collectors, normalizers and rules.
 
 ## Quick start (demo, no credentials)
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-
-pch seed-demo --repos 280      # generate synthetic raw API payloads for 6 projects / 280 repos
-pch scan --demo                # run them through the REAL collectors -> normalizers -> rules (about 15 s incl. 3 history snapshots)
-pch serve                      # http://127.0.0.1:8000
+python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"
+pch seed-demo --repos 280 && pch scan --demo     # synthetic API payloads -> REAL collectors -> rules (~15 s incl. 3 history snapshots)
+pch serve                                        # http://127.0.0.1:8000  (AUTH_MODE=none, loopback only)
 ```
 
-Useful variants: `pch scan --demo --history 0` (single snapshot, about 3 s), `pch scan --demo --cache` (also write the redacted raw cache), `pch rules list`.
+Variants: `pch scan --demo --history 0` (single snapshot, ~3 s), `pch scan --demo --cache` (also write the redacted raw cache), `pch rules list`.
+
+## Using this as a template
+
+| Guide | What it covers |
+|---|---|
+| [docs/IMPORT_CHECKLIST.md](docs/IMPORT_CHECKLIST.md) | Importing the repo into your org, replacing placeholders, first deploy, the go-live gate and rollback |
+| [docs/CUSTOMIZING.md](docs/CUSTOMIZING.md) | Architecture and one recipe per task: switch DB, secrets, auth, artifact store, add a collector or rule, rebrand, rebuild assets, update dependencies |
+| [docs/DEPLOY_AZURE.md](docs/DEPLOY_AZURE.md) | Ordered Azure App Service runbook: resources, role assignments, app settings, Easy Auth, health check, scan job |
+| [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) | Assets, trust boundaries, threats, mitigations with their tests, residual risks |
+| [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md) | Independent review findings (all fixed or accepted) and the `# VERIFY:` list to confirm on a real platform |
+| [docs/PLAN.md](docs/PLAN.md) · [docs/RULES.md](docs/RULES.md) · [docs/DECISIONS.md](docs/DECISIONS.md) · [docs/TEMPLATE_PLAN.md](docs/TEMPLATE_PLAN.md) | Domain plan, generated rule catalog, decision records, template/hardening plan |
+
+AI-assisted work in a derived repo should keep the invariants listed at the end of [CLAUDE.md](CLAUDE.md).
+
+## Configuration reference
+
+Settings are environment variables (or a `.env` file; copy `.env.example`). Invalid values stop startup with a clear error naming the variable, and
+`pch doctor` validates the whole setup (credentials are reported only as `set` / `missing`). This table is generated from the `Settings` class
+(`pch config reference`) and a test fails when it, `src/pch/config_reference.py` or `.env.example` drift from the code.
+
+<!-- config-reference:start -->
+| Variable | Default | Description |
+|---|---|---|
+| **Runtime** | | |
+| `APP_ENV` | `dev` | Profile: `dev`, `test` or `prod`. `prod` turns on the fail-closed checks (https-only sources, `ALLOWED_HOSTS`, no `AUTH_MODE=none`, no auto-migrate of SQLite, `config/scope.yaml` required). |
+| `DATA_DIR` | `data` | Local data directory (SQLite file, demo world, local raw cache under `raw/`). |
+| `CONFIG_DIR` | `config` | Directory holding `scope.yaml` and `policy.yaml`. |
+| **Database** | | |
+| `DATABASE_URL` | `sqlite:///data/pch.db` | SQLAlchemy URL: `sqlite:///...`, `postgresql+psycopg://...` or `mssql+pyodbc://...`. May embed a password (never printed). |
+| `DB_AUTH` | `password` | `password` (credentials in the URL) or `azure_ad` (Entra access token via `DefaultAzureCredential`; Azure SQL only). |
+| `DB_POOL_SIZE` | `5` | Connection pool size (server databases; 1-100). |
+| `DB_MAX_OVERFLOW` | `10` | Extra connections above the pool size (0-200). |
+| `DB_POOL_RECYCLE` | `1800` | Recycle connections after N seconds (-1 = never). Keep below Azure SQL's ~30 min idle disconnect. |
+| `DB_POOL_TIMEOUT` | `30` | Seconds to wait for a pooled connection (0-600). |
+| `DB_CONNECT_TIMEOUT_SECONDS` | `15` | Seconds to wait when opening a new server connection (psycopg `connect_timeout`, pyodbc login `timeout`; 1-300). Ignored for SQLite. |
+| `DB_AUTO_MIGRATE` | `false` | Run `alembic upgrade head` at startup on any database. Off by default; prefer `pch db upgrade` as a deploy step. |
+| `SCAN_LOCK_STALE_MINUTES` | `360` | A scan lock or `running` scan older than this is treated as abandoned. Must be greater than `SCAN_TIMEOUT_MINUTES`. |
+| **Providers** | | |
+| `SECRETS_PROVIDER` | `env` | Where source credentials come from: `env` (default; App Service Key Vault references arrive as env vars), `file`, `azure_keyvault`. Never mixed. |
+| `SECRETS_DIR` | (unset) | Directory with one file per secret (`file` provider; required for it). |
+| `KEYVAULT_URL` | (empty) | `https://<vault>.vault.azure.net` (required for `azure_keyvault`; https only). |
+| `KEYVAULT_SECRET_MAP` | `{}` | JSON map env-style name -> Key Vault secret name (default: lowercase, `_` -> `-`, e.g. `ADO_PAT` -> `ado-pat`). |
+| `KEYVAULT_CACHE_TTL_SECONDS` | `300` | In-memory cache of Key Vault values (0 = always re-read; 0-86400). |
+| `ARTIFACT_STORE` | `local` | Raw scan cache backend: `local` or `azure_blob`. |
+| `ARTIFACT_BLOB_ACCOUNT_URL` | (empty) | `https://<account>.blob.core.windows.net` (required for `azure_blob`; managed identity only). |
+| `ARTIFACT_BLOB_CONTAINER` | (empty) | Blob container name (required for `azure_blob`). |
+| **Azure DevOps** | | |
+| `ADO_ORG` | (empty) | Organization name (`https://dev.azure.com/<org>`). Required for live scans. |
+| `ADO_PAT` | (empty) | Read-only personal access token (secret). |
+| `ADO_BASE_URL` | `https://dev.azure.com` | Base URL of Azure DevOps Services (change for Azure DevOps Server). https in prod. |
+| `ADO_VSRM_URL` | `https://vsrm.dev.azure.com` | Base URL of the release management service. https in prod. |
+| **SonarQube** | | |
+| `SONAR_URL` | (empty) | SonarQube base URL. Unset = Sonar not queried. https in prod. |
+| `SONAR_TOKEN` | (empty) | User token with Browse permission (secret). |
+| **Aikido** | | |
+| `AIKIDO_URL` | `https://app.aikido.dev` | Aikido base URL. https in prod. |
+| `AIKIDO_CLIENT_ID` | (empty) | OAuth client id. Setting it enables Aikido. |
+| `AIKIDO_CLIENT_SECRET` | (empty) | OAuth client secret (secret). |
+| **ServiceNow** | | |
+| `SERVICENOW_URL` | (empty) | ServiceNow instance URL. Unset = not queried. https in prod. |
+| `SERVICENOW_USER` | (empty) | User with read access to `change_request`. |
+| `SERVICENOW_PASSWORD` | (empty) | Password of that user (secret). |
+| **Collection** | | |
+| `CONCURRENCY` | `8` | Parallel requests per source (1-64). |
+| `HTTP_TIMEOUT` | `30` | Per-request timeout in seconds (>0, <=300). |
+| `HTTP_MAX_RESPONSE_MB` | `50` | Largest single upstream response body in MB (1-2048). Larger responses are aborted while streaming and recorded as a collection error. |
+| **Web server** | | |
+| `HOST` | `127.0.0.1` | Bind address. Non-loopback needs an authenticated mode (see guard rules in README). |
+| `PORT` | `8000` | Listen port (1-65535). |
+| `WEBSITES_PORT` | (unset) | App Service container port; used when `PORT` is not set. |
+| `ALLOWED_HOSTS` | (empty) | Comma-separated Host allowlist (wildcards like `*.azurewebsites.net`). Required in prod; a bare `*` is refused. |
+| `FORWARDED_ALLOW_IPS` | `127.0.0.1` | Proxy IPs trusted for `X-Forwarded-*`. `*` only behind the App Service front end. |
+| **Web authentication** | | |
+| `AUTH_MODE` | `none` | `none` (dev only, loopback only) or `easyauth` (App Service Authentication + Entra app roles). |
+| `AUTH_ALLOWED_ROLES` | (empty) | Comma-separated Entra app role values allowed to use the app, e.g. `PCH.Reader`. Exact, case-sensitive match. |
+| `AUTH_ALLOW_ANY_AUTHENTICATED` | `false` | Explicit opt-in: any signed-in user passes when no role allowlist is set. |
+| `WEBSITE_AUTH_ENABLED` | (empty) | Set by App Service when Authentication is on; do not set by hand. `easyauth` refuses to start unless it is `True`. |
+| `AUTH_EASYAUTH_ASSUME_ENABLED` | `false` | Local testing of `easyauth` only; refused in prod. |
+| `AUTH_NONE_ALLOW_CONTAINER_BIND` | `false` | Dev only (docker compose): allow `AUTH_MODE=none` on `0.0.0.0`. Refused in prod. |
+| **Operations** | | |
+| `LOG_FORMAT` | (unset) | `text` or `json`. Unset: `json` when `APP_ENV=prod`, else `text`. |
+| `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` or `CRITICAL`. |
+| `APPLICATIONINSIGHTS_CONNECTION_STRING` | (empty) | Enables Application Insights export (needs the `azure-monitor` extra). A secret: use a Key Vault reference. |
+| `UVICORN_ACCESS_LOG` | (unset) | uvicorn access log (full URLs). Unset: off in prod, on otherwise. |
+| `GRACEFUL_SHUTDOWN_SECONDS` | `20` | Seconds uvicorn drains in-flight requests after SIGTERM (1-600). Keep below the platform stop window. |
+| `KEEP_ALIVE_SECONDS` | `65` | Idle keep-alive of client connections (1-600). Keep above the front end's idle reuse window. |
+| `SCAN_TIMEOUT_MINUTES` | `240` | A scan running longer is cancelled and marked `failed` (reason `timeout`). Must be smaller than `SCAN_LOCK_STALE_MINUTES`. |
+| `HEALTH_READY_TIMEOUT_SECONDS` | `2.5` | Time budget of the `/health/ready` DB probe (0-30). |
+| `HEALTH_READY_CACHE_SECONDS` | `5` | How long a readiness result is cached (0-300). |
+| `RETENTION_KEEP_SCANS` | (unset) | Default `--keep` for `pch scans prune` (unset = no default). |
+| `RETENTION_MAX_AGE_DAYS` | (unset) | Default `--older-than` for `pch scans prune` (unset = no default). |
+<!-- config-reference:end -->
+
+URLs must be `http(s)` without query string (trailing slashes are stripped); in `APP_ENV=prod` every configured source URL must be `https://`.
 
 ## Database
 
@@ -37,7 +126,7 @@ The same code runs on SQLite (default, dev/demo), PostgreSQL and Azure SQL / SQL
 
 `DB_AUTH=azure_ad` fetches an access token with `azure-identity` `DefaultAzureCredential` (managed identity in App Service, `az login` locally), caches it and injects it into each new connection, refreshing it 5 minutes before expiry. The identity needs a database user (`CREATE USER [<app-name>] FROM EXTERNAL PROVIDER`) with `db_datareader`/`db_datawriter`, plus DDL rights (`db_ddladmin`) only for whoever runs `pch db upgrade`. If the extra is missing the app stops at startup with a clear message. Server databases use `pool_pre_ping`, and `DB_POOL_SIZE`, `DB_MAX_OVERFLOW`, `DB_POOL_TIMEOUT` and `DB_POOL_RECYCLE` (default 1800 s, below Azure SQL's ~30 min idle disconnect).
 
-The provided Docker image contains the SQLite and PostgreSQL drivers only; for Azure SQL build an image that also installs the Microsoft ODBC Driver 18 and `pip install '.[azuresql]'` (see `docs/DEPLOY_AZURE.md` once T7 lands).
+The provided Docker image contains the SQLite and PostgreSQL drivers only; for Azure SQL build an image that also installs the Microsoft ODBC Driver 18 and uses `requirements-azure.lock` (see the Dockerfile example in [docs/DEPLOY_AZURE.md](docs/DEPLOY_AZURE.md)).
 
 **Migrations (Alembic, shipped inside the package):**
 
@@ -105,32 +194,13 @@ The container image runs as a non-root user. Compose runs the app with `APP_ENV=
 
 ## Pointing it at your real systems
 
-1. `cp .env.example .env` and fill in the values (the file is gitignored; secrets only ever come from the environment).
+1. `cp .env.example .env` and fill in the values (the file is gitignored; secrets only ever come from the environment or a secret provider). See the [configuration reference](#configuration-reference).
+2. **`config/scope.yaml` and `config/policy.yaml`** ship as commented examples with placeholder values (`your-org`, `myorgacr.azurecr.io`); every field is documented inline. They are strictly validated: an unknown or mistyped key is an error such as `config/policy.yaml: waivers.0.expires: ...` (file plus field path). Set your organisation's Sonar quality gate via `sonar_quality_gate_name` (default `Sonar way`).
+3. **ADO PAT scopes (all read-only):** Build (Read), Release (Read), Code (Read), Project and Team (Read), Service Connections (Read), Variable Groups (Read), Environment (Read), Task Groups (Read). Do not grant write, manage or execute scopes. The tool also refuses to send any non-GET request except the YAML `preview` call (`previewRun: true`).
+4. **`pch doctor`** (`--json` for machines) checks that settings load, scope/policy validate, which sources are configured and whether each has its credentials (`set`/`missing`, never values), the secret provider, the artifact store (write/read/delete probe), that the database answers `SELECT 1` and is at the migration head, and that `DATA_DIR` is writable. Output is `OK`/`WARN`/`FAIL` per check; exit code 1 if any check fails.
+5. `pch scan` (live) or `pch scan --from-cache <scan_id>` to re-evaluate the cached, redacted raw responses of an earlier scan. Then `pch serve`.
 
-   | Variable | Purpose |
-   |---|---|
-   | `ADO_ORG` | Azure DevOps organization name (`https://dev.azure.com/<org>`) |
-   | `ADO_PAT` | Personal access token (read-only scopes below) |
-   | `SONAR_URL`, `SONAR_TOKEN` | SonarQube base URL and a user token with *Browse* permission |
-   | `AIKIDO_URL`, `AIKIDO_CLIENT_ID`, `AIKIDO_CLIENT_SECRET` | Aikido public API OAuth client credentials |
-   | `SERVICENOW_URL`, `SERVICENOW_USER`, `SERVICENOW_PASSWORD` | ServiceNow user with read access to `change_request` |
-   | `APP_ENV` | `dev` (default), `test` or `prod`. In `prod` a missing `config/scope.yaml` is an error |
-   | `CONCURRENCY`, `HTTP_TIMEOUT` | Parallel requests (1-64) and per-request timeout seconds (>0, <=300) |
-   | `DATABASE_URL` | `sqlite:///data/pch.db` (default), `postgresql+psycopg://user:pw@host/db` or an `mssql+pyodbc://` URL, see [Database](#database) |
-| `SECRETS_PROVIDER`, `SECRETS_DIR`, `KEYVAULT_*`, `ARTIFACT_STORE`, `ARTIFACT_BLOB_*` | Secret and raw-cache backends, see [Providers](#providers) |
-| `DB_AUTH`, `DB_POOL_*`, `DB_AUTO_MIGRATE`, `SCAN_LOCK_STALE_MINUTES` | Database auth mode, pool tuning, auto-migration and scan-lock timeout, see [Database](#database) |
-
-   URLs must be `http(s)` (trailing slashes are stripped). Invalid values stop startup with a clear error. `.env.example` lists every variable.
-
-   **`config/scope.yaml` and `config/policy.yaml`** ship as commented examples with placeholder values (`your-org`, `myorgacr.azurecr.io`); every field is documented inline. They are strictly validated: an unknown or mistyped key is an error such as `config/policy.yaml: waivers.0.expires: ...` (file plus field path). Set your organisation's Sonar quality gate via `sonar_quality_gate_name` (default `Sonar way`).
-
-   **Check your setup with `pch doctor`** (`--json` for machines). It checks that settings load, scope/policy validate, which sources are configured and whether each has its credentials (printed only as `set`/`missing`, never values), that the database answers `SELECT 1`, and that `DATA_DIR` is writable. Output is `OK`/`WARN`/`FAIL` per check; exit code 1 if any check fails.
-
-2. **ADO PAT scopes (all read-only):** Build (Read), Release (Read), Code (Read), Project and Team (Read), Service Connections (Read), Variable Groups (Read), Environment (Read), Task Groups (Read). Do not grant write, manage or execute scopes. The tool also refuses to send any non-GET request except the YAML `preview` call (`previewRun: true`).
-3. Edit `config/scope.yaml` (projects, per-repo overrides: `sonar_key`, `aikido_repo`, `owner`, `servicenow_ci`, `coverage_threshold`, environment-name to tier overrides) and `config/policy.yaml` (thresholds, Sonar gate name, Aikido SLAs, approved registries, marketplace allowlist, waivers).
-4. `pch scan` (live) or `pch scan --from-cache <scan_id>` to re-evaluate the cached, redacted raw responses of an earlier scan. Then `pch serve`.
-
-Things to check on first contact with real data (all marked `# VERIFY:` in the code): the Aikido endpoint paths/field names (`collectors/aikido.py`), how your CRQ numbers appear in release names/descriptions/pipeline parameters (`collectors/ado/runs.py`), how the ServiceNow integration is attached to environments/release gates, and the resource-group scope fields of service connections.
+Things to check on first contact with real data (all marked `# VERIFY:` in the code): the Aikido endpoint paths/field names (`collectors/aikido.py`), how your CRQ numbers appear in release names/descriptions/pipeline parameters (`collectors/ado/runs.py`), how the ServiceNow integration is attached to environments/release gates, and the resource-group scope fields of service connections. The full list is in [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md#verify-markers-and-go-live-checklist).
 
 ## How it works
 
@@ -154,31 +224,13 @@ Test states per repo: `TESTS_OK`, `TESTS_LOW_COVERAGE`, `TESTS_NO_COVERAGE`, `TE
 
 ## Extending
 
-**Add a rule** (one function, no other wiring; the runner, dashboard, API and `docs/RULES.md` pick it up):
-
-```python
-# src/pch/engine/rules/hygiene.py  (or a new module in that package)
-from pch.engine.registry import rule
-from pch.model.findings import RuleResult
-
-@rule("HYG-004", "Pipeline has a description", "low", "pipeline",
-      "Descriptions tell responders what a pipeline deploys.",
-      {"classic": "Edit the definition and fill in the description.", "yaml": "Add a comment header to the YAML."})
-def hyg_004(ctx, policy, p):                  # scope "repo": (ctx, policy); "pipeline": (ctx, policy, p); "stage": (ctx, policy, t)
-    return RuleResult.passed("ok") if p.name else RuleResult.failed("unnamed")
-```
-
-Then add a PASS and a FAIL test in `tests/test_rules.py` (helpers in `tests/builders.py`), and run `pch rules docs --write docs/RULES.md` (a test fails if the file is stale). Optional filters on the decorator: `platforms=`, `targets=`, `tiers=`.
-
-**Teach it a new task**: add it to `src/pch/normalize/capabilities.yaml` (task -> capability tags, `when:` conditions on inputs, regexes for inline scripts). Deprecated tasks live in `deprecated_tasks.yaml`, GitHub Actions equivalents in `gha_mapping.yaml`. These are data files, not code.
-
-**Add a data source**: write a collector returning plain facts (see `collectors/sonar.py`), put them on `RepoContext`, and use them in rules. Keep unverified API details in one function with a `# VERIFY:` comment.
+Recipes (add a rule, a collector, a secret provider, an auth mode, an artifact store, a DB dialect; edit the data files; rebrand) are in [docs/CUSTOMIZING.md](docs/CUSTOMIZING.md). In short: rules are one decorated function plus a PASS and a FAIL test (`pch rules docs --write docs/RULES.md` regenerates the catalog); task knowledge lives in `src/pch/normalize/capabilities.yaml`, `deprecated_tasks.yaml` and `gha_mapping.yaml` (data, not code); collectors return plain facts and must go through `SourceClient` so the read-only guard applies.
 
 ## Development
 
 ```bash
 pytest --cov=pch            # unit tests; all HTTP is mocked (respx / in-memory demo transport)
-ruff check . && mypy src
+ruff check . && mypy src   # CI also runs bandit, pip-audit (both lockfiles), gitleaks, a DB matrix and an all-extras job
 ```
 
 Collectors are tested against fixtures in `tests/fixtures/` (no live credentials are ever needed). The demo transport (`pch.demo.transport`) lets the whole pipeline run offline.

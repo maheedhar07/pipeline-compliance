@@ -84,6 +84,34 @@ def rules_docs(
     typer.echo(f"wrote {write}")
 
 
+config_app = typer.Typer(help="Configuration helpers", no_args_is_help=True)
+app.add_typer(config_app, name="config")
+
+
+@config_app.command("reference")
+def config_reference(
+    write: str | None = typer.Option(None, "--write", help="Update the marked table in this file (e.g. README.md)"),
+    check: bool = typer.Option(False, "--check", help="Exit 1 if the --write target is out of date"),
+) -> None:
+    """Print the environment-variable reference generated from the Settings fields."""
+    from pathlib import Path
+
+    from pch import config_reference as ref
+
+    if not write:
+        typer.echo(ref.render_table())
+        return
+    target = Path(write)
+    if check:
+        if not ref.check_file(target):
+            typer.echo(f"{write} is out of date: run `pch config reference --write {write}`", err=True)
+            raise typer.Exit(exitcodes.FAILED)
+        typer.echo(f"{write} is up to date")
+        return
+    target.write_text(ref.splice(target.read_text()))
+    typer.echo(f"updated {write}")
+
+
 # ----------------------------------------------------------------------------- database
 db_app = typer.Typer(help="Database migrations (Alembic)", no_args_is_help=True)
 app.add_typer(db_app, name="db")
