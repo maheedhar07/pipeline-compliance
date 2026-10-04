@@ -1,0 +1,228 @@
+{
+ "id": 41,
+ "name": "contoso-billing-api-CI",
+ "path": "\\",
+ "type": "build",
+ "project": {
+  "name": "Payments"
+ },
+ "repository": {
+  "id": "contoso-payments/billing-api",
+  "name": "contoso-payments/billing-api",
+  "type": "GitHub",
+  "url": "https://github.com/contoso-payments/billing-api.git",
+  "defaultBranch": "refs/heads/main",
+  "clean": null,
+  "checkoutSubmodules": false,
+  "properties": {
+   "apiUrl": "https://api.github.com/repos/contoso-payments/billing-api",
+   "branchesUrl": "https://api.github.com/repos/contoso-payments/billing-api/branches",
+   "cloneUrl": "https://github.com/contoso-payments/billing-api.git",
+   "connectedServiceId": "0b4e5b1c-7a38-4f6e-9d7c-3c1f6a2b8e11",
+   "defaultBranch": "main",
+   "fullName": "contoso-payments/billing-api",
+   "manageUrl": "https://github.com/contoso-payments/billing-api",
+   "orgName": "contoso-payments",
+   "refsUrl": "https://api.github.com/repos/contoso-payments/billing-api/git/refs",
+   "safeRepository": "contoso-payments/billing-api",
+   "shortName": "billing-api",
+   "reportBuildStatus": "true"
+  }
+ },
+ "process": {
+  "type": 1,
+  "phases": [
+   {
+    "name": "Agent job 1",
+    "steps": [
+     {
+      "environment": {},
+      "enabled": true,
+      "continueOnError": false,
+      "alwaysRun": false,
+      "displayName": "Prepare analysis on SonarQube",
+      "timeoutInMinutes": 0,
+      "condition": "succeeded()",
+      "task": {
+       "id": "ca6d76a9-24d5-5b9a-be18-19ef0a47e5bc",
+       "versionSpec": "5.*",
+       "definitionType": "task"
+      },
+      "inputs": {
+       "SonarQube": "sonar-conn",
+       "projectKey": "contoso_payments-api",
+       "extraProperties": "sonar.qualitygate.wait=true"
+      }
+     },
+     {
+      "environment": {},
+      "enabled": true,
+      "continueOnError": false,
+      "alwaysRun": false,
+      "displayName": "Build",
+      "timeoutInMinutes": 0,
+      "condition": "succeeded()",
+      "task": {
+       "id": "c192fbd1-5f54-51b7-b3e3-af3e93b11be1",
+       "versionSpec": "2.*",
+       "definitionType": "task"
+      },
+      "inputs": {
+       "command": "build",
+       "projects": "**/*.csproj"
+      }
+     },
+     {
+      "environment": {},
+      "enabled": true,
+      "continueOnError": false,
+      "alwaysRun": false,
+      "displayName": "Unit tests",
+      "timeoutInMinutes": 0,
+      "condition": "succeeded()",
+      "task": {
+       "id": "c192fbd1-5f54-51b7-b3e3-af3e93b11be1",
+       "versionSpec": "2.*",
+       "definitionType": "task"
+      },
+      "inputs": {
+       "command": "test",
+       "projects": "**/*Tests.csproj"
+      }
+     },
+     {
+      "environment": {},
+      "enabled": true,
+      "continueOnError": false,
+      "alwaysRun": false,
+      "displayName": "Publish test results",
+      "timeoutInMinutes": 0,
+      "condition": "succeeded()",
+      "task": {
+       "id": "d92e0f16-b129-56a1-8713-5456c5755fc8",
+       "versionSpec": "2.*",
+       "definitionType": "task"
+      },
+      "inputs": {}
+     },
+     {
+      "environment": {},
+      "enabled": true,
+      "continueOnError": false,
+      "alwaysRun": false,
+      "displayName": "Publish coverage",
+      "timeoutInMinutes": 0,
+      "condition": "succeeded()",
+      "task": {
+       "id": "2617d73a-a268-5d7f-a8cd-5596f0419c51",
+       "versionSpec": "1.*",
+       "definitionType": "task"
+      },
+      "inputs": {}
+     },
+     {
+      "environment": {},
+      "enabled": true,
+      "continueOnError": false,
+      "alwaysRun": false,
+      "displayName": "Run Code Analysis",
+      "timeoutInMinutes": 0,
+      "condition": "succeeded()",
+      "task": {
+       "id": "c95cfac5-da77-5582-bc47-b5e7e51acccc",
+       "versionSpec": "5.*",
+       "definitionType": "task"
+      },
+      "inputs": {}
+     },
+     {
+      "environment": {},
+      "enabled": true,
+      "continueOnError": false,
+      "alwaysRun": false,
+      "displayName": "Publish Quality Gate Result",
+      "timeoutInMinutes": 0,
+      "condition": "succeeded()",
+      "task": {
+       "id": "31dc6072-7521-5d1d-888f-0701b32fa6aa",
+       "versionSpec": "5.*",
+       "definitionType": "task"
+      },
+      "inputs": {}
+     },
+     {
+      "environment": {},
+      "enabled": true,
+      "continueOnError": false,
+      "alwaysRun": false,
+      "displayName": "Publish artifact",
+      "timeoutInMinutes": 0,
+      "condition": "succeeded()",
+      "task": {
+       "id": "5be038e7-69e3-5407-9624-ccaec3685446",
+       "versionSpec": "1.*",
+       "definitionType": "task"
+      },
+      "inputs": {
+       "PathtoPublish": "$(Build.ArtifactStagingDirectory)",
+       "ArtifactName": "drop"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ "queue": {
+  "name": "Azure Pipelines",
+  "pool": {
+   "name": "Azure Pipelines",
+   "isHosted": true
+  }
+ },
+ "variables": {
+  "BuildConfiguration": {
+   "value": "Release",
+   "allowOverride": true
+  },
+  "dbPassword": {
+   "value": "hunter2-hunter2",
+   "isSecret": false
+  },
+  "apiKey": {
+   "value": null,
+   "isSecret": true
+  }
+ },
+ "variableGroups": [
+  {
+   "id": 5,
+   "name": "payments-common",
+   "type": "Vsts"
+  }
+ ],
+ "triggers": [
+  {
+   "triggerType": "continuousIntegration",
+   "branchFilters": [
+    "+refs/heads/main"
+   ]
+  }
+ ],
+ "retentionRules": [
+  {
+   "branches": [
+    "+refs/heads/*"
+   ],
+   "daysToKeep": 30
+  }
+ ],
+ "authoredBy": {
+  "displayName": "Jane Doe",
+  "uniqueName": "jane.doe@contoso.com"
+ },
+ "_links": {
+  "web": {
+   "href": "https://dev.azure.com/contoso/Payments/_build?definitionId=41"
+  }
+ }
+}

@@ -18,8 +18,12 @@ def tst_001(ctx: RepoContext, policy: Policy) -> RuleResult:
     st = ctx.facts.test_state
     if st == TestState.NOT_APPLICABLE:
         return RuleResult.na(ctx.facts.test_state_reason)
+    if st == TestState.UNKNOWN:
+        return RuleResult.unknown(ctx.facts.test_state_reason, test_state=st.value)
     if st == TestState.NO_TESTS:
         return RuleResult.failed(ctx.facts.test_state_reason, test_state=st.value, languages=ctx.facts.languages)
+    if ctx.facts.facts_source == "unavailable":
+        return RuleResult.passed("a pipeline runs tests (repository contents were not read)", test_state=st.value)
     return RuleResult.passed("tests detected", test_state=st.value, signals=ctx.facts.test_signals[:5])
 
 
@@ -31,6 +35,8 @@ def tst_001(ctx: RepoContext, policy: Policy) -> RuleResult:
 )
 def tst_002(ctx: RepoContext, policy: Policy) -> RuleResult:
     st = ctx.facts.test_state
+    if st == TestState.UNKNOWN:
+        return RuleResult.unknown(ctx.facts.test_state_reason, test_state=st.value)
     if st in (TestState.NOT_APPLICABLE, TestState.NO_TESTS):
         return RuleResult.na("no tests to run (see TST-001)" if st == TestState.NO_TESTS else ctx.facts.test_state_reason)
     if st == TestState.TESTS_NOT_RUN:
@@ -46,6 +52,8 @@ def tst_002(ctx: RepoContext, policy: Policy) -> RuleResult:
 def tst_003(ctx: RepoContext, policy: Policy) -> RuleResult:
     st = ctx.facts.test_state
     thr = ctx.repo.coverage_threshold or policy.coverage_threshold
+    if st == TestState.UNKNOWN:
+        return RuleResult.unknown(ctx.facts.test_state_reason, test_state=st.value)
     if st in (TestState.NOT_APPLICABLE, TestState.NO_TESTS, TestState.TESTS_NOT_RUN):
         return RuleResult.na("coverage not measurable until tests run")
     if st == TestState.TESTS_NO_COVERAGE:
@@ -103,6 +111,11 @@ def tst_006(ctx: RepoContext, policy: Policy) -> RuleResult:
     kind = ctx.facts.kind
     need = {"adf": {"validate:adf"}, "synapse": {"validate:synapse"}, "iac": {"whatif", "plan", "validate:iac"}}.get(kind)
     if need is None:
+        if ctx.facts.facts_source == "unavailable":
+            # kind could not be read from the repo; ADF/Synapse/IaC repos are recognised from their pipelines' deploy targets
+            if any(p.deploy_targets for p in ctx.pipelines):
+                return RuleResult.na("pipelines deploy application targets, not ADF/Synapse/IaC")
+            return RuleResult.unknown(ctx.facts.facts_reason)
         return RuleResult.na("not an ADF/Synapse/IaC repository")
     caps: set[str] = set()
     for p in ctx.pipelines:

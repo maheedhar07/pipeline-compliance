@@ -18,6 +18,7 @@ from typing import Any
 from pch.collectors.ado.classic_build import normalize_build_definition
 from pch.collectors.ado.classic_release import normalize_release_definition
 from pch.collectors.ado.environments import apply_environment_checks, collect_environments
+from pch.collectors.ado.repo_discovery import Discovery, RepoEntry, discover
 from pch.collectors.ado.repo_policies import collect_policy_configurations, policies_for_repo
 from pch.collectors.ado.runs import collect_build_runs, collect_release_runs
 from pch.collectors.ado.service_conn import collect_service_connections
@@ -34,7 +35,9 @@ from pch.model.findings import Finding, Severity, Status
 from pch.model.pipeline import Pipeline
 from pch.model.repo import (
     AikidoFacts,
+    BranchPolicies,
     RepoContext,
+    RepoFacts,
     RepoRef,
     ServiceConnection,
     SnowFacts,
@@ -42,6 +45,7 @@ from pch.model.repo import (
     VariableGroup,
 )
 from pch.normalize.target_detect import enrich_pipeline
+from pch.repo_scan.external import infer_external_kind, unavailable_facts
 from pch.repo_scan.files import fetch_contents, fetch_file, fetch_tree, select_content_paths
 from pch.repo_scan.tests_detect import analyze_repo, classify_test_state
 from pch.scanrun import REASON_INTERRUPTED, REASON_TIMEOUT, ScanTimeout
@@ -81,7 +85,8 @@ class ScanResult:
 @dataclass
 class _ProjectData:
     name: str
-    repos: list[dict[str, Any]] = field(default_factory=list)
+    repos: list[dict[str, Any]] = field(default_factory=list)  # raw Azure Repos repositories
+    disc: Discovery = field(default_factory=lambda: Discovery([], {}, {}, []))
     build_defs: list[dict[str, Any]] = field(default_factory=list)
     release_defs: list[dict[str, Any]] = field(default_factory=list)
     policies: list[dict[str, Any]] = field(default_factory=list)
@@ -125,9 +130,8 @@ class Scanner:
         pd = _ProjectData(name)
         try:
             pd.repos = await ado.repositories(name)
-        except Exception as e:
+        except Exception as e:  # externally hosted repos are still discoverable through the pipelines
             self.err("ado", f"{name}: repositories", e)
-            return pd
         try:
             listing = await ado.paged(name, "_apis/build/definitions", {"includeAllProperties": "true"})
             details = await asyncio.gather(*(ado.get(name, f"_apis/build/definitions/{d['id']}") for d in listing), return_exceptions=True)
@@ -158,19 +162,21 @@ class Scanner:
                 setattr(pd, attr, await fn(ado, name))
             except Exception as e:
                 self.err("ado", f"{name}: {label}", e)
+        pd.disc = discover(pd.repos, pd.build_defs, pd.release_defs)
         return pd
 
     # ------------------------------------------------------------------ repo level
-    async def scan_repo(self, pd: _ProjectData, repo: dict[str, Any], builds: list[dict[str, Any]], releases: list[dict[str, Any]]):
+    async def scan_repo(self, pd: _ProjectData, repo: RepoEntry, builds: list[dict[str, Any]], releases: list[dict[str, Any]]):
         cfg, ado = self.cfg, self.src.ado
         project = pd.name
-        branch = (repo.get("defaultBranch") or "refs/heads/main").removeprefix("refs/heads/")
-        ov = cfg.scope.override_for(project, repo["name"])
+        branch = (repo.default_branch or "refs/heads/main").removeprefix("refs/heads/")
+        ov = cfg.scope.override_for(project, repo.name)
         ref = RepoRef(
-            id=repo["id"], name=repo["name"], project=project, url=repo.get("webUrl") or ado.web_url(project, f"_git/{repo['name']}"),
+            id=repo.id, name=repo.name, project=project, url=repo.url or ado.web_url(project, f"_git/{repo.name}"),
             default_branch=branch, owner=ov.owner if ov else None, sonar_key=ov.sonar_key if ov else None,
             aikido_repo=ov.aikido_repo if ov else None, servicenow_ci=ov.servicenow_ci if ov else None,
-            coverage_threshold=ov.coverage_threshold if ov else None, disabled=bool(repo.get("isDisabled")),
+            coverage_threshold=ov.coverage_threshold if ov else None, disabled=repo.disabled,
+            provider=repo.provider, full_name=repo.name if repo.external else "", service_connection_id=repo.service_connection_id,
         )
         repo_errors: list[tuple[str, str]] = []
 
@@ -179,16 +185,20 @@ class Scanner:
             repo_errors.append((source, msg[:300]))
             self.err(source, ref.key, exc)
 
-        # 1. repo files -> facts
-        facts = analyze_repo(None)
-        paths: list[str] | None = None
-        try:
-            paths = await fetch_tree(ado, project, ref.id, branch)
-            if paths:
-                contents = await fetch_contents(ado, project, ref.id, branch, select_content_paths(paths))
-                facts = analyze_repo(paths, contents)
-        except Exception as e:
-            rerr("ado", e)
+        # 1. repo files -> facts. Externally hosted repos are not in Azure Repos: the Items API does not apply, the facts
+        #    stay "unavailable" (not "empty") until a reader for that host provides them.
+        facts: RepoFacts
+        if ref.external:
+            facts = unavailable_facts(ref.provider)
+        else:
+            facts = analyze_repo(None)
+            try:
+                paths = await fetch_tree(ado, project, ref.id, branch)
+                if paths:
+                    contents = await fetch_contents(ado, project, ref.id, branch, select_content_paths(paths))
+                    facts = analyze_repo(paths, contents)
+            except Exception as e:
+                rerr("ado", e)
 
         tier_over = {**cfg.scope.env_tiers, **(ov.env_tiers if ov else {})}
         adf_only = facts.adf and not facts.iac
@@ -218,6 +228,10 @@ class Scanner:
             self.catalog.annotate(p)
             enrich_pipeline(p, adf_only, facts.synapse and not facts.iac, tier_over)
             apply_environment_checks(p, pd.envs)
+        if ref.external:
+            inferred = infer_external_kind(pipelines)  # data-platform / IaC repos are recognisable from what they deploy
+            if inferred:
+                facts.kind, facts.has_app_code = inferred, False
         # 3. run history
         since = cfg.now - timedelta(days=cfg.run_days)
         for p in pipelines:
@@ -233,6 +247,8 @@ class Scanner:
         if self.src.sonar is not None and facts.kind not in ("docs",):
             try:
                 keys = [k for k in (ref.sonar_key, f"{project}_{ref.name}", ref.name) if k]
+                if ref.external:  # Sonar projects are usually named after the repo, not "org/repo"
+                    keys += [k for k in (f"{project}_{ref.short_name}", ref.short_name, ref.name.replace("/", "_")) if k not in keys]
                 sonar = await self.src.sonar.first_found(keys)
             except Exception as e:
                 rerr("sonar", e)
@@ -242,6 +258,8 @@ class Scanner:
             from pch.collectors.aikido import AikidoClient
 
             aikido = AikidoClient.facts_for(ref.name, self.aikido_data[0], self.aikido_data[1], ref.aikido_repo)
+            if ref.external and not aikido.onboarded and not ref.aikido_repo:  # Aikido may list it as "repo" instead of "org/repo"
+                aikido = AikidoClient.facts_for(ref.short_name, self.aikido_data[0], self.aikido_data[1])
         # 6. ServiceNow
         snow = SnowFacts()
         if self.src.snow is not None and any(p.deployments_90d for p in pipelines):
@@ -257,12 +275,16 @@ class Scanner:
         state, reason, cov = classify_test_state(facts, pipelines, sonar, threshold)
         facts.test_state, facts.test_state_reason, facts.coverage = state, reason, cov
         # 8. rules
+        if ref.external:  # ADO branch policies cover Azure Repos only; GitHub branch protection needs the GitHub reader
+            policies = BranchPolicies(available=False, unavailable_reason=facts.facts_reason)
+        else:
+            policies = policies_for_repo(pd.policies, ref.id, branch)
+            if not pd.policies:
+                policies.available = False  # policies were not collected for this project
         ctx = RepoContext(
-            repo=ref, pipelines=pipelines, facts=facts, policies=policies_for_repo(pd.policies, ref.id, branch) if pd.policies else policies_for_repo([], ref.id, branch),
+            repo=ref, pipelines=pipelines, facts=facts, policies=policies,
             sonar=sonar, aikido=aikido, snow=snow, service_connections=pd.conns, variable_groups=pd.groups, environments=pd.envs, now=cfg.now,
         )
-        if not pd.policies:
-            ctx.policies.available = False  # policies were not collected for this project
         findings = evaluate(ctx, cfg.policy, self.rules)
         apply_waivers(findings, ref.key, cfg.policy, cfg.now.date())
         sc = score_repo(findings, cfg.policy)
@@ -279,6 +301,8 @@ class Scanner:
             text = (await ado.post_preview(project, d["id"])).get("finalYaml")
         except Exception as e:
             self.err("ado", f"{ref.key}: YAML preview for pipeline {d['id']} failed, falling back to the raw file", e)
+        if not text and ref.external:  # the Items API only serves Azure Repos; the preview (via the service connection) was the one way
+            raise RuntimeError(f"YAML definition could not be retrieved ({ref.provider} repository: Azure Repos file fallback does not apply)")
         if not text:
             fname = (d.get("process") or {}).get("yamlFilename", "azure-pipelines.yml")
             text = await fetch_file(ado, project, ref.id, branch, fname)
@@ -339,30 +363,18 @@ class Scanner:
                 self.err("aikido", "organisation fetch", e)
         pdatas = await asyncio.gather(*(self.collect_project(p) for p in projects))
         jobs = []
+        excluded = {x.casefold() for x in cfg.scope.exclude_repos}
         for pd in pdatas:
-            builds_by_repo: dict[str, list] = {}
-            repo_of_build: dict[str, str] = {}
-            for b in pd.build_defs:
-                rid = (b.get("repository") or {}).get("id")
-                if rid:
-                    builds_by_repo.setdefault(rid, []).append(b)
-                    repo_of_build[str(b["id"])] = rid
-            releases_by_repo: dict[str, list] = {}
-            for r in pd.release_defs:
-                linked = [str(((a.get("definitionReference") or {}).get("definition") or {}).get("id")) for a in r.get("artifacts", []) if a.get("type") == "Build"]
-                rid = next((repo_of_build[x] for x in linked if x in repo_of_build), None)
-                if rid:
-                    releases_by_repo.setdefault(rid, []).append(r)
-                else:
-                    self.err("ado", f"{pd.name}: release {r.get('name')}", "release is not linked to a build definition in a known repo (skipped)")
-            for repo in pd.repos:
-                key = f"{pd.name}/{repo['name']}"
-                if key in cfg.scope.exclude_repos:
+            for r in pd.disc.unlinked_releases:
+                self.err("ado", f"{pd.name}: release {r.get('name')}", "release is not linked to a build definition in a known repo (skipped)")
+            for repo in pd.disc.repos:
+                key = f"{pd.name}/{repo.name}"
+                if key.casefold() in excluded:
                     continue
-                if repo.get("isDisabled"):
+                if repo.disabled:
                     self.err("ado", key, "repository is disabled (skipped)")
                     continue
-                jobs.append((pd, repo, builds_by_repo.get(repo["id"], []), releases_by_repo.get(repo["id"], [])))
+                jobs.append((pd, repo, pd.disc.builds_by_repo.get(repo.link_key, []), pd.disc.releases_by_repo.get(repo.link_key, [])))
         total = len(jobs)
         sem = asyncio.Semaphore(cfg.concurrency)
         done = 0
@@ -375,7 +387,7 @@ class Scanner:
                 try:
                     out = await self.scan_repo(pd, repo, builds, releases)
                 except Exception as e:  # last-resort: never abort the scan
-                    self.err("scan", f"{pd.name}/{repo['name']}", e)
+                    self.err("scan", f"{pd.name}/{repo.name}", e)
                     out = (pd.name, repo, e)
             done += 1
             if self.progress and (done % 25 == 0 or done == total):
@@ -397,8 +409,9 @@ class Scanner:
                 if len(out) == 3:  # hard failure
                     project, repo, exc = out
                     failed += 1
-                    s.add(RepoResultRow(scan_id=scan_id, repo_key=f"{project}/{repo['name']}", project=project, repo=repo["name"], status="NOT_SCANNED", test_state="NOT_APPLICABLE"))
-                    s.add(FindingRow(scan_id=scan_id, repo_key=f"{project}/{repo['name']}", rule_id="COLLECTION-ERROR", category="SYS", severity="info", status="UNKNOWN", message=scrub(str(exc))[:300]))
+                    s.add(RepoResultRow(scan_id=scan_id, repo_key=f"{project}/{repo.name}", project=project, repo=repo.name, status="NOT_SCANNED", test_state="NOT_APPLICABLE",
+                                        external={"repo": {"provider": repo.provider, "full_name": repo.name if repo.external else "", "service_connection_id": repo.service_connection_id}}))
+                    s.add(FindingRow(scan_id=scan_id, repo_key=f"{project}/{repo.name}", rule_id="COLLECTION-ERROR", category="SYS", severity="info", status="UNKNOWN", message=scrub(str(exc))[:300]))
                     counts["NOT_SCANNED"] += 1
                     continue
                 ctx, findings, sc, mig_score, blockers = out
@@ -418,6 +431,7 @@ class Scanner:
                         "sonar": ctx.sonar.model_dump(mode="json") if ctx.sonar else None,
                         "aikido": ({"onboarded": ctx.aikido.onboarded, "url": ctx.aikido.url, "open": {sev: ctx.aikido.count(sev) for sev in ("critical", "high", "medium", "low")}} if ctx.aikido else None),
                         "snow_available": ctx.snow.available,
+                        "repo": {"provider": ctx.repo.provider, "full_name": ctx.repo.full_name, "service_connection_id": ctx.repo.service_connection_id},
                         "policies": ctx.policies.model_dump(mode="json"),
                     },
                 ))

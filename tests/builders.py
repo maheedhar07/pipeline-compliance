@@ -46,7 +46,7 @@ def pipe(stages, platform="ado_yaml", id="1", enrich=True, **kw) -> Pipeline:
 
 def ctx(pipelines=(), facts=None, policies=None, sonar=None, aikido=None, snow=None, conns=(), groups=(), envs=None, **kw) -> RepoContext:
     return RepoContext(
-        repo=RepoRef(id="r1", name="r", project="P", **kw.pop("repo_kw", {})),
+        repo=RepoRef(**{"id": "r1", "name": "r", "project": "P", **kw.pop("repo_kw", {})}),
         pipelines=list(pipelines),
         facts=facts or RepoFacts(languages=["dotnet"], kind="application", has_app_code=True),
         policies=policies or BranchPolicies(),

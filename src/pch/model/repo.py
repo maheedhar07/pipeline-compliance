@@ -21,9 +21,20 @@ class TestState(StrEnum):
     TESTS_NO_COVERAGE = "TESTS_NO_COVERAGE"
     NO_TESTS = "NO_TESTS"
     NOT_APPLICABLE = "NOT_APPLICABLE"
+    UNKNOWN = "UNKNOWN"  # repo contents unavailable (externally hosted repo, no reader) and no pipeline proves tests run
 
 
 RepoKind = Literal["application", "adf", "synapse", "iac", "sql", "docs"]
+RepoProvider = Literal["azure_repos", "github", "github_enterprise", "other_git"]
+PROVIDER_LABEL: dict[str, str] = {"azure_repos": "Azure Repos", "github": "GitHub", "github_enterprise": "GitHub Enterprise", "other_git": "Other Git"}
+FactsSource = Literal["ado_items", "unavailable"]  # where RepoFacts came from; a future reader adds its own value
+
+
+def unavailable_reason(provider: str) -> str:
+    """Why repo-level facts are missing for an externally hosted repo (shown on UNKNOWN findings)."""
+    if provider in ("github", "github_enterprise"):
+        return "GitHub-hosted: repository contents/branch protection need the GitHub reader (not configured)"
+    return "externally hosted (not Azure Repos): repository contents/branch protection need a reader for that host (not configured)"
 
 
 class RepoRef(BaseModel):
@@ -38,10 +49,22 @@ class RepoRef(BaseModel):
     servicenow_ci: str | None = None
     coverage_threshold: float | None = None
     disabled: bool = False
+    # Hosting. For externally hosted code (built by Azure DevOps pipelines) `name` is the full name ("org/repo").
+    provider: RepoProvider = "azure_repos"
+    full_name: str = ""
+    service_connection_id: str | None = None
 
     @property
     def key(self) -> str:
         return f"{self.project}/{self.name}"
+
+    @property
+    def external(self) -> bool:
+        return self.provider != "azure_repos"
+
+    @property
+    def short_name(self) -> str:
+        return self.name.rsplit("/", 1)[-1]
 
 
 class RepoFacts(BaseModel):
@@ -63,12 +86,16 @@ class RepoFacts(BaseModel):
     test_state: TestState = TestState.NOT_APPLICABLE
     test_state_reason: str = ""
     coverage: float | None = None
+    # "unavailable" = nothing was read from the repository (empty defaults mean "not collected", NOT "collected and empty")
+    facts_source: FactsSource = "ado_items"
+    facts_reason: str = ""
 
 
 class BranchPolicies(BaseModel):
     """Policies on the default branch."""
 
     available: bool = False
+    unavailable_reason: str = ""  # why `available` is False, when known (e.g. externally hosted repo)
     min_reviewers: int | None = None
     creator_vote_counts: bool | None = None
     reset_on_push: bool | None = None

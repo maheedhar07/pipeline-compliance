@@ -20,7 +20,7 @@ from pch.settings import Policy
 def src_001(ctx: RepoContext, policy: Policy) -> RuleResult:
     pol = ctx.policies
     if not pol.available:
-        return RuleResult.unknown("branch policies were not collected")
+        return RuleResult.unknown(pol.unavailable_reason or "branch policies were not collected")
     problems = []
     need = policy.min_reviewers
     if (pol.min_reviewers or 0) < need:
@@ -42,7 +42,7 @@ def src_001(ctx: RepoContext, policy: Policy) -> RuleResult:
 )
 def src_002(ctx: RepoContext, policy: Policy) -> RuleResult:
     if not ctx.policies.available:
-        return RuleResult.unknown("branch policies were not collected")
+        return RuleResult.unknown(ctx.policies.unavailable_reason or "branch policies were not collected")
     if ctx.policies.build_validation:
         return RuleResult.passed("build validation policy present")
     return RuleResult.failed("no build validation policy on the default branch")
@@ -56,7 +56,7 @@ def src_002(ctx: RepoContext, policy: Policy) -> RuleResult:
 def src_003(ctx: RepoContext, policy: Policy) -> RuleResult:
     pol = ctx.policies
     if not pol.available:
-        return RuleResult.unknown("branch policies were not collected")
+        return RuleResult.unknown(pol.unavailable_reason or "branch policies were not collected")
     missing = []
     if not pol.work_item_required:
         missing.append("linked work item")
@@ -107,9 +107,11 @@ def src_005(ctx, policy: Policy, t) -> RuleResult:
     {"any": "Add a CODEOWNERS file covering azure-pipelines*.yml, or a Required reviewers policy with path filter /azure-pipelines*.yml."},
 )
 def src_006(ctx: RepoContext, policy: Policy) -> RuleResult:
-    has_yaml = bool(ctx.facts.pipeline_files) or any(p.platform == "ado_yaml" for p in ctx.pipelines)
+    has_yaml = bool(ctx.facts.pipeline_files) or any(p.platform == "ado_yaml" for p in ctx.pipelines)  # externally hosted: ADO YAML pipelines only
     if not has_yaml:
         return RuleResult.na("no YAML pipeline files in the repo")
+    if ctx.facts.facts_source == "unavailable":
+        return RuleResult.unknown(ctx.facts.facts_reason)  # CODEOWNERS lives in the repository itself
     if ctx.facts.codeowners:
         return RuleResult.passed("CODEOWNERS file present")
     pats = ctx.policies.required_reviewer_paths

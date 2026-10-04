@@ -313,7 +313,7 @@ class Scope(_Strict):
 
     def override_for(self, project: str, repo: str) -> RepoOverride | None:
         for r in self.repos:
-            if r.project == project and r.repo == repo:
+            if r.project == project and r.repo.casefold() == repo.casefold():  # GitHub names are case-insensitive
                 return r
         return None
 

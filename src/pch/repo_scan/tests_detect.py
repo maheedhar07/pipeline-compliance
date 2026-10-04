@@ -166,9 +166,14 @@ def classify_test_state(
     coverage = sonar.coverage if sonar and sonar.onboarded else None
     if not facts.has_app_code:
         return TestState.NOT_APPLICABLE, f"{facts.kind} repository: validated by TST-006 instead of unit tests", coverage
-    if not facts.tests_detected:
-        return TestState.NO_TESTS, "no test files, test projects or test frameworks detected in an application repo", coverage
     present, effective = runs_tests(pipelines)
+    if facts.facts_source == "unavailable":
+        # Repo contents were not read, so "no tests" cannot be claimed. A pipeline that effectively runs tests proves they
+        # exist; otherwise the state is UNKNOWN (never NO_TESTS / TESTS_NOT_RUN).
+        if not effective:
+            return TestState.UNKNOWN, f"{facts.facts_reason}; no pipeline is known to run tests", coverage
+    elif not facts.tests_detected:
+        return TestState.NO_TESTS, "no test files, test projects or test frameworks detected in an application repo", coverage
     if not effective:
         why = "a test step exists but is disabled / continueOnError / always-false" if present else "tests exist but no build pipeline runs them"
         return TestState.TESTS_NOT_RUN, why, coverage

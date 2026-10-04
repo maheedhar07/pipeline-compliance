@@ -1,0 +1,48 @@
+{
+ "id": 42,
+ "name": "contoso-orders-func",
+ "type": "build",
+ "project": {
+  "name": "Payments"
+ },
+ "repository": {
+  "id": "contoso-payments/orders-func",
+  "name": "contoso-payments/orders-func",
+  "type": "GitHub",
+  "url": "https://github.com/contoso-payments/orders-func.git",
+  "defaultBranch": "refs/heads/main",
+  "clean": null,
+  "checkoutSubmodules": false,
+  "properties": {
+   "apiUrl": "https://api.github.com/repos/contoso-payments/orders-func",
+   "branchesUrl": "https://api.github.com/repos/contoso-payments/orders-func/branches",
+   "cloneUrl": "https://github.com/contoso-payments/orders-func.git",
+   "connectedServiceId": "0b4e5b1c-7a38-4f6e-9d7c-3c1f6a2b8e11",
+   "defaultBranch": "main",
+   "fullName": "contoso-payments/orders-func",
+   "manageUrl": "https://github.com/contoso-payments/orders-func",
+   "orgName": "contoso-payments",
+   "refsUrl": "https://api.github.com/repos/contoso-payments/orders-func/git/refs",
+   "safeRepository": "contoso-payments/orders-func",
+   "shortName": "orders-func",
+   "reportBuildStatus": "true"
+  }
+ },
+ "process": {
+  "type": 2,
+  "yamlFilename": "azure-pipelines.yml"
+ },
+ "retentionRules": [
+  {
+   "daysToKeep": 400
+  }
+ ],
+ "authoredBy": {
+  "uniqueName": "bob@contoso.com"
+ },
+ "_links": {
+  "web": {
+   "href": "https://dev.azure.com/contoso/Payments/_build?definitionId=42"
+  }
+ }
+}

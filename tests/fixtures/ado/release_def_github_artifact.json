@@ -1,0 +1,345 @@
+{
+ "id": 43,
+ "name": "contoso-ledger-CD",
+ "path": "\\",
+ "artifacts": [
+  {
+   "sourceId": "0b4e5b1c-7a38-4f6e-9d7c-3c1f6a2b8e11:contoso-payments/ledger",
+   "type": "GitHub",
+   "alias": "contoso-payments_ledger",
+   "isPrimary": true,
+   "isRetained": false,
+   "definitionReference": {
+    "definition": {
+     "id": "contoso-payments/ledger",
+     "name": "contoso-payments/ledger"
+    },
+    "connection": {
+     "id": "0b4e5b1c-7a38-4f6e-9d7c-3c1f6a2b8e11",
+     "name": "github-contoso"
+    },
+    "branches": {
+     "id": "main",
+     "name": "main"
+    },
+    "defaultVersionType": {
+     "id": "latestFromBranchType",
+     "name": "Latest from default branch"
+    },
+    "defaultVersionBranch": {
+     "id": "main",
+     "name": "main"
+    }
+   }
+  }
+ ],
+ "triggers": [],
+ "environments": [
+  {
+   "id": 1,
+   "name": "Dev",
+   "rank": 1,
+   "conditions": [
+    {
+     "name": "ReleaseStarted",
+     "conditionType": 1,
+     "value": ""
+    }
+   ],
+   "preDeployApprovals": {
+    "approvals": [
+     {
+      "rank": 1,
+      "isAutomated": true,
+      "isNotificationOn": false
+     }
+    ],
+    "approvalOptions": {
+     "requiredApproverCount": null,
+     "releaseCreatorCanBeApprover": true
+    }
+   },
+   "postDeployApprovals": {
+    "approvals": [
+     {
+      "rank": 1,
+      "isAutomated": true
+     }
+    ]
+   },
+   "preDeploymentGates": {
+    "gates": [],
+    "gatesOptions": {
+     "isEnabled": false,
+     "timeout": 1440
+    }
+   },
+   "postDeploymentGates": {
+    "gates": [],
+    "gatesOptions": {
+     "isEnabled": false,
+     "timeout": 1440
+    }
+   },
+   "deployPhases": [
+    {
+     "name": "Agent job",
+     "phaseType": 1,
+     "workflowTasks": [
+      {
+       "taskId": "bf05b349-5e57-5c77-8adb-e9e574ecb20e",
+       "version": "1.*",
+       "name": "Deploy Function App",
+       "enabled": true,
+       "continueOnError": false,
+       "alwaysRun": false,
+       "inputs": {
+        "azureSubscription": "conn-prod-wif",
+        "appType": "functionApp",
+        "appName": "orders-fn",
+        "deployToSlotOrASE": false,
+        "slotName": "staging",
+        "package": "$(System.DefaultWorkingDirectory)/**/*.zip"
+       }
+      }
+     ]
+    }
+   ],
+   "retentionPolicy": {
+    "daysToKeep": 30,
+    "releasesToKeep": 3,
+    "retainBuild": true
+   },
+   "variables": {}
+  },
+  {
+   "id": 2,
+   "name": "UAT",
+   "rank": 2,
+   "conditions": [
+    {
+     "name": "Dev",
+     "conditionType": 2,
+     "value": "4"
+    }
+   ],
+   "preDeployApprovals": {
+    "approvals": [
+     {
+      "rank": 1,
+      "isAutomated": true,
+      "isNotificationOn": false
+     }
+    ],
+    "approvalOptions": {
+     "requiredApproverCount": null,
+     "releaseCreatorCanBeApprover": true
+    }
+   },
+   "postDeployApprovals": {
+    "approvals": [
+     {
+      "rank": 1,
+      "isAutomated": true
+     }
+    ]
+   },
+   "preDeploymentGates": {
+    "gates": [],
+    "gatesOptions": {
+     "isEnabled": false,
+     "timeout": 1440
+    }
+   },
+   "postDeploymentGates": {
+    "gates": [],
+    "gatesOptions": {
+     "isEnabled": false,
+     "timeout": 1440
+    }
+   },
+   "deployPhases": [
+    {
+     "name": "Agent job",
+     "phaseType": 1,
+     "workflowTasks": [
+      {
+       "taskId": "bf05b349-5e57-5c77-8adb-e9e574ecb20e",
+       "version": "1.*",
+       "name": "Deploy Function App",
+       "enabled": true,
+       "continueOnError": false,
+       "alwaysRun": false,
+       "inputs": {
+        "azureSubscription": "conn-prod-wif",
+        "appType": "functionApp",
+        "appName": "orders-fn",
+        "deployToSlotOrASE": true,
+        "slotName": "staging",
+        "package": "$(System.DefaultWorkingDirectory)/**/*.zip"
+       }
+      },
+      {
+       "taskId": "c9b7dcff-c44e-5ffe-a060-37ac20aa3700",
+       "version": "0.*",
+       "name": "Swap slots",
+       "enabled": true,
+       "continueOnError": false,
+       "alwaysRun": false,
+       "inputs": {
+        "Action": "Swap Slots",
+        "SourceSlot": "staging",
+        "WebAppName": "orders-fn"
+       }
+      }
+     ]
+    }
+   ],
+   "retentionPolicy": {
+    "daysToKeep": 30,
+    "releasesToKeep": 3,
+    "retainBuild": true
+   },
+   "variables": {}
+  },
+  {
+   "id": 3,
+   "name": "Production",
+   "rank": 3,
+   "conditions": [
+    {
+     "name": "UAT",
+     "conditionType": 2,
+     "value": "4"
+    }
+   ],
+   "preDeployApprovals": {
+    "approvals": [
+     {
+      "rank": 1,
+      "isAutomated": false,
+      "isNotificationOn": true,
+      "approver": {
+       "displayName": "Alice Lead",
+       "uniqueName": "alice.lead@contoso.com"
+      }
+     }
+    ],
+    "approvalOptions": {
+     "requiredApproverCount": 1,
+     "releaseCreatorCanBeApprover": false,
+     "timeoutInMinutes": 43200
+    }
+   },
+   "postDeployApprovals": {
+    "approvals": [
+     {
+      "rank": 1,
+      "isAutomated": true
+     }
+    ]
+   },
+   "preDeploymentGates": {
+    "gates": [
+     {
+      "tasks": [
+       {
+        "taskId": "3577cadb-0547-5113-bfc0-fa2813b5105c",
+        "name": "ServiceNow CRQ gate",
+        "version": "1.*",
+        "inputs": {
+         "table": "change_request"
+        }
+       }
+      ]
+     }
+    ],
+    "gatesOptions": {
+     "isEnabled": true,
+     "timeout": 1440
+    }
+   },
+   "postDeploymentGates": {
+    "gates": [
+     {
+      "tasks": [
+       {
+        "taskId": "dda751f6-e9a3-5951-8f0f-3b26d2a5aa1d",
+        "name": "Health check",
+        "version": "1.*",
+        "inputs": {
+         "urlSuffix": "/health"
+        }
+       }
+      ]
+     }
+    ],
+    "gatesOptions": {
+     "isEnabled": true,
+     "timeout": 1440
+    }
+   },
+   "deployPhases": [
+    {
+     "name": "Agent job",
+     "phaseType": 1,
+     "workflowTasks": [
+      {
+       "taskId": "bf05b349-5e57-5c77-8adb-e9e574ecb20e",
+       "version": "1.*",
+       "name": "Deploy Function App",
+       "enabled": true,
+       "continueOnError": false,
+       "alwaysRun": false,
+       "inputs": {
+        "azureSubscription": "conn-prod-wif",
+        "appType": "functionApp",
+        "appName": "orders-fn",
+        "deployToSlotOrASE": true,
+        "slotName": "staging",
+        "package": "$(System.DefaultWorkingDirectory)/**/*.zip"
+       }
+      },
+      {
+       "taskId": "c9b7dcff-c44e-5ffe-a060-37ac20aa3700",
+       "version": "0.*",
+       "name": "Swap slots",
+       "enabled": true,
+       "continueOnError": false,
+       "alwaysRun": false,
+       "inputs": {
+        "Action": "Swap Slots",
+        "SourceSlot": "staging",
+        "WebAppName": "orders-fn"
+       }
+      }
+     ]
+    }
+   ],
+   "retentionPolicy": {
+    "daysToKeep": 365,
+    "releasesToKeep": 3,
+    "retainBuild": true
+   },
+   "variables": {}
+  }
+ ],
+ "variables": {
+  "connStr": {
+   "value": "Server=x;Password=abcd1234;",
+   "isSecret": false
+  }
+ },
+ "variableGroups": [
+  5
+ ],
+ "modifiedBy": {
+  "displayName": "Jane Doe",
+  "uniqueName": "jane.doe@contoso.com"
+ },
+ "_links": {
+  "web": {
+   "href": "https://dev.azure.com/contoso/Payments/_release?definitionId=43"
+  }
+ }
+}
