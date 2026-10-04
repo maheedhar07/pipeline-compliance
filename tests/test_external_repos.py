@@ -19,7 +19,7 @@ from pch.settings import Policy, RepoOverride, Scope, Waiver
 from pch.sources import Sources
 from pch.store import repository as store
 from pch.store.db import session_scope
-from tests.builders import ctx, one, pipe, stage, step
+from tests.builders import ALL_HOSTS, ctx, one, pipe, stage, step
 
 GH_REASON = "GitHub-hosted: repository contents/branch protection need the GitHub reader (not configured)"
 NOW = datetime(2026, 10, 1, 12, 0, 0)
@@ -180,7 +180,7 @@ def test_tst006_for_github_repos():
 
 # ------------------------------------------------------------------ scope helpers
 def test_scope_override_matches_github_names_case_insensitively():
-    s = Scope(repos=[RepoOverride(project="Payments", repo="Contoso/Billing-API", owner="o@x")])
+    s = Scope(code_hosts=ALL_HOSTS, repos=[RepoOverride(project="Payments", repo="Contoso/Billing-API", owner="o@x")])
     assert s.override_for("Payments", "contoso/billing-api").owner == "o@x"
     assert s.override_for("Other", "contoso/billing-api") is None
 
@@ -245,7 +245,7 @@ def mock_ado(fx, fxt, *, items_calls: list[str], preview_ok=True, extra_builds=(
 def scan(tmp_path, scope=None, policy=None):
     db = f"sqlite:///{tmp_path}/ext.db"
     src = Sources(ado=AdoClient("contoso", "x", backoff_base=0, max_attempts=1))
-    cfg = ScanConfig(scope=scope or Scope(projects=["Payments"]), policy=policy or Policy(), db_url=db, mode="demo", now=NOW)
+    cfg = ScanConfig(scope=scope or Scope(code_hosts=ALL_HOSTS, projects=["Payments"]), policy=policy or Policy(), db_url=db, mode="demo", now=NOW)
 
     async def go():
         try:
@@ -300,7 +300,7 @@ def test_scan_yaml_preview_failure_on_github_repo_skips_items_fallback(fx, fxt, 
 @respx.mock
 def test_scan_scope_exclude_override_and_waiver_with_slash_names(fx, fxt, tmp_path):
     mock_ado(fx, fxt, items_calls=[])
-    scope = Scope(projects=["Payments"], exclude_repos=["Payments/Contoso-Payments/Ledger"],
+    scope = Scope(code_hosts=ALL_HOSTS, projects=["Payments"], exclude_repos=["Payments/Contoso-Payments/Ledger"],
                   repos=[RepoOverride(project="Payments", repo="contoso-payments/billing-api", owner="team@x.com", sonar_key="k")])
     pol = Policy(waivers=[Waiver(rule="SRC-004", repo="contoso-payments/billing-api", reason="r", owner="o")])
     db = scan(tmp_path, scope, pol)

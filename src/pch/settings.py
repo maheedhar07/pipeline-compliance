@@ -309,12 +309,33 @@ class RepoOverride(_Strict):
     env_tiers: dict[str, str] = Field(default_factory=dict)
 
 
+CODE_HOSTS = ("github", "github_enterprise", "azure_repos", "other_git")
+CodeHost = Literal["github", "github_enterprise", "azure_repos", "other_git"]
+
+
+def _default_code_hosts() -> list[CodeHost]:
+    return ["github"]
+
+
 class Scope(_Strict):
     organization: str = ""
+    # Where the code lives. GitHub is the default; Azure Repos stays available (template reuse) but is OFF unless listed:
+    # then `_apis/git/repositories` is not called and pipelines/releases sourced from a host that is not listed are out of scope.
+    code_hosts: list[CodeHost] = Field(default_factory=_default_code_hosts)
     projects: list[str] = Field(default_factory=list)
     repos: list[RepoOverride] = Field(default_factory=list)
     env_tiers: dict[str, str] = Field(default_factory=dict)  # stage/environment name -> tier
     exclude_repos: list[str] = Field(default_factory=list)
+
+    @field_validator("code_hosts")
+    @classmethod
+    def _hosts(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError(f"must list at least one of: {', '.join(CODE_HOSTS)}")
+        return list(dict.fromkeys(v))
+
+    def hosts(self) -> set[str]:
+        return set(self.code_hosts)
 
     def override_for(self, project: str, repo: str) -> RepoOverride | None:
         for r in self.repos:

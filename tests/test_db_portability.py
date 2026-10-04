@@ -34,6 +34,7 @@ from pch.store.db import (
 )
 from pch.store.models import Base, CollectionErrorRow, FindingRow, LineageRow, RepoResultRow, ScanRow
 from pch.timeutil import utcnow
+from tests.builders import ALL_HOSTS
 
 runner = CliRunner()
 REMOTE = os.environ.get("TEST_DATABASE_URL")
@@ -128,7 +129,7 @@ def test_models_and_migrations_in_sync(url):
 def test_demo_scan_roundtrip(url):
     world = generate_world(seed=7, repos=12, now=datetime(2026, 10, 1, 12, 0, 0))
     src = demo_sources(world)
-    cfg = ScanConfig(scope=Scope(projects=world["meta"]["projects"]), policy=Policy(approved_registries=["contosoacr.azurecr.io"]),
+    cfg = ScanConfig(scope=Scope(code_hosts=ALL_HOSTS, projects=world["meta"]["projects"]), policy=Policy(approved_registries=["contosoacr.azurecr.io"]),
                      db_url=url, mode="demo", now=parse_world_time(world))
 
     async def go():
@@ -312,7 +313,7 @@ def test_scan_lock_released_on_error(engine):
 
 # ------------------------------------------------------------------ scan failure handling
 def _cfg(world, url, **kw):
-    return ScanConfig(scope=Scope(projects=world["meta"]["projects"]), policy=Policy(), db_url=url, mode="demo", now=parse_world_time(world), **kw)
+    return ScanConfig(scope=Scope(code_hosts=ALL_HOSTS, projects=world["meta"]["projects"]), policy=Policy(), db_url=url, mode="demo", now=parse_world_time(world), **kw)
 
 
 @pytest.fixture(scope="module")

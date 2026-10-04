@@ -50,6 +50,16 @@ def provider_of_row(r: RepoResultRow) -> str:
     return ((r.external or {}).get("repo") or {}).get("provider") or "azure_repos"
 
 
+def multi_host(s: Session, scan: ScanRow | None) -> bool:
+    """More than one code host in the scan: only then are provider badges and the "Code hosted on" filter shown."""
+    if scan is None:
+        return False
+    prov = (scan.summary or {}).get("providers")
+    if prov is None:  # scans made before G1 did not record it
+        prov = sorted({provider_of_row(r) for r in store.repo_results(s, scan.id)})
+    return len(prov) > 1
+
+
 def row_dict(r: RepoResultRow) -> dict[str, Any]:
     kinds = platform_kinds(r)
     prov = provider_of_row(r)

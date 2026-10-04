@@ -12,11 +12,12 @@ its key is ``Project/org/repo``. Repos are de-duplicated case-insensitively on (
 from __future__ import annotations
 
 import re
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
 
-from pch.model.repo import RepoProvider
+from pch.model.repo import PROVIDER_LABEL, RepoProvider
 
 MAX_NAME = 190  # repo_results.repo is Unicode(200); keep headroom
 
@@ -114,22 +115,57 @@ class Discovery:
     releases_by_repo: dict[tuple[str, str], list[dict[str, Any]]]
     unlinked_releases: list[dict[str, Any]]
     unlinked_builds: list[tuple[dict[str, Any], str]] = field(default_factory=list)  # (raw definition, reason): no resolvable repository
+    # Items whose code host is not in scope (scope.yaml code_hosts): provider -> {"builds": n, "releases": n}. Not scanned, not orphans.
+    out_of_scope: dict[str, dict[str, int]] = field(default_factory=dict)
+
+    def out_of_scope_summary(self, code_hosts: Collection[str]) -> str:
+        """One line for a collection error (info): what was left out and why. Empty when nothing was."""
+        if not self.out_of_scope:
+            return ""
+        parts = []
+        for prov in sorted(self.out_of_scope):
+            c = self.out_of_scope[prov]
+            parts.append(f"{c.get('builds', 0)} build definition(s) and {c.get('releases', 0)} release definition(s) hosted on {PROVIDER_LABEL.get(prov, prov)}")
+        return f"info: out of scope (code_hosts={sorted(code_hosts)}), not scanned: " + "; ".join(parts)
 
 
-def discover(ado_repos: list[dict[str, Any]], build_defs: list[dict[str, Any]], release_defs: list[dict[str, Any]]) -> Discovery:
+def discover(ado_repos: list[dict[str, Any]], build_defs: list[dict[str, Any]], release_defs: list[dict[str, Any]],
+             code_hosts: Collection[str] | None = None, known_github: Collection[str] = ()) -> Discovery:
     """Repos = Azure Repos repositories + external repos referenced by build definitions + GitHub repos used directly
-    as classic release artifacts; with build definitions and releases linked to them."""
+    as classic release artifacts; with build definitions and releases linked to them.
+
+    ``code_hosts`` (scope.yaml; None = every host) limits the scan to those hosts: a repo, build definition or release whose
+    code lives elsewhere is counted in ``Discovery.out_of_scope`` instead of being scanned or reported as unlinked.
+    ``known_github`` are "org/repo" names from scope.yaml: they become repos even when no pipeline references them (so a
+    "repo without pipelines" is visible); ignored unless ``github`` is in scope."""
+    hosts = None if code_hosts is None else set(code_hosts)
+
+    def allowed(provider: str) -> bool:
+        return hosts is None or provider in hosts
+
+    out_of_scope: dict[str, dict[str, int]] = {}
+
+    def skip(provider: str, what: str) -> None:
+        counts = out_of_scope.setdefault(provider, {})
+        counts[what] = counts.get(what, 0) + 1
+
     entries: dict[tuple[str, str], RepoEntry] = {}
-    for r in ado_repos:
+    for r in ado_repos if allowed("azure_repos") else []:
         e = RepoEntry(provider="azure_repos", id=r["id"], name=r["name"], url=r.get("webUrl") or "",
                       default_branch=r.get("defaultBranch") or "", disabled=bool(r.get("isDisabled")))
         entries[e.link_key] = e
     builds_by_repo: dict[tuple[str, str], list[dict[str, Any]]] = {}
     build_repo: dict[str, tuple[str, str]] = {}
+    skipped_builds: dict[str, str] = {}  # build definition id -> provider that is out of scope
     unlinked_builds: list[tuple[dict[str, Any], str]] = []
     for b in sorted(build_defs, key=lambda d: int(d["id"]) if str(d.get("id", "")).isdigit() else 0):
         repo = b.get("repository") or {}
         ext = _from_repository_block(repo)
+        prov = ext.provider if ext is not None else provider_of(repo.get("type"))
+        if (ext is not None or repo.get("id")) and not allowed(prov or "azure_repos"):
+            skip(prov or "azure_repos", "builds")
+            skipped_builds[str(b["id"])] = prov or "azure_repos"
+            continue
         if ext is not None:
             key = ext.link_key
             if key not in entries:
@@ -147,24 +183,38 @@ def discover(ado_repos: list[dict[str, Any]], build_defs: list[dict[str, Any]], 
     unlinked: list[dict[str, Any]] = []
     for rel in release_defs:
         rkey: tuple[str, str] | None = None
+        skipped: str | None = None
         for a in _artifact_order(rel):
             if a.get("type") == "Build":
                 bid = str(((a.get("definitionReference") or {}).get("definition") or {}).get("id"))
                 if bid in build_repo:
                     rkey = build_repo[bid]
+                elif bid in skipped_builds:
+                    skipped = skipped_builds[bid]
             elif a.get("type") == "GitHub":
                 ext = _from_release_artifact(a)
-                if ext is not None:
+                if ext is not None and not allowed(ext.provider):
+                    skipped = ext.provider
+                elif ext is not None:
                     rkey = ext.link_key
                     if rkey not in entries:
                         entries[rkey] = ext
-            if rkey is not None:
+            if rkey is not None or skipped is not None:
                 break
+        if skipped is not None:
+            skip(skipped, "releases")
+            continue
         if rkey is None or rkey not in entries:  # e.g. built from a repo in another project: genuinely unlinkable here
             unlinked.append(rel)
         else:
             releases_by_repo.setdefault(rkey, []).append(rel)
+    if allowed("github"):
+        for name in known_github:
+            full = _clean_full_name(name)
+            if "/" in full and len(full) <= MAX_NAME and ("github", full.casefold()) not in entries:
+                e = RepoEntry(provider="github", id=full, name=full, url=_web_url("github", full, ""))
+                entries[e.link_key] = e
     for key, bs in builds_by_repo.items():  # Azure Repos id that is not in this project's repository list (deleted, other project, no access)
         if key not in entries:
             unlinked_builds.extend((b, "repository not found in this project (deleted, in another project or not visible)") for b in bs)
-    return Discovery(list(entries.values()), builds_by_repo, releases_by_repo, unlinked, unlinked_builds)
+    return Discovery(list(entries.values()), builds_by_repo, releases_by_repo, unlinked, unlinked_builds, out_of_scope)

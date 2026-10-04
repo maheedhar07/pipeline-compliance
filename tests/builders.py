@@ -82,3 +82,6 @@ __all__ = [
     "AikidoFacts", "AikidoIssue", "BranchPolicies", "ServiceConnection", "SnowFacts", "SonarFacts", "TestState",
     "VariableGroup", "VariableGroupRef", "timedelta", "NOW",
 ]
+
+# Scope(code_hosts=...) default is ["github"]; tests that exercise Azure Repos repos opt in explicitly.
+ALL_HOSTS = ["github", "github_enterprise", "azure_repos", "other_git"]

@@ -23,6 +23,7 @@ from pch.store.models import LineageRow
 from pch.web import exports as X
 from pch.web import lineage_q as LQ
 from pch.web.app import create_app
+from tests.builders import ALL_HOSTS
 
 ROLE = "PCH.Reader"
 PAYLOADS = ["<img src=x onerror=alert(1)>", "</script><script>alert(1)</script>", '"><svg/onload=alert(1)>', "javascript:alert(1)"]
@@ -37,7 +38,7 @@ def make_db(tmp: Path, repos=120, seed=7) -> str:
     url = f"sqlite:///{tmp}/lin.db"
     w = generate_world(seed=seed, repos=repos, now=datetime(2026, 10, 1, 12, 0, 0))
     src = demo_sources(w)
-    cfg = ScanConfig(scope=Scope(projects=w["meta"]["projects"]), policy=Policy(approved_registries=["contosoacr.azurecr.io"]), db_url=url, mode="demo", now=parse_world_time(w))
+    cfg = ScanConfig(scope=Scope(code_hosts=ALL_HOSTS, projects=w["meta"]["projects"]), policy=Policy(approved_registries=["contosoacr.azurecr.io"]), db_url=url, mode="demo", now=parse_world_time(w))
 
     async def go():
         try:

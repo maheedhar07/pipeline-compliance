@@ -21,7 +21,7 @@ from pch.web.queries import TARGET_LABEL, TARGETS
 
 TIERS = ["dev", "test", "uat", "prod", "unknown"]
 STATUS_ORDER = ["succeeded", "partial", "in_progress", "pending", "failed", "canceled", "never", "unknown"]
-ORPHAN_REPO_REASON = "no pipelines or releases found in Azure DevOps (a GitHub repo without Azure DevOps pipelines is invisible to this scan)"
+ORPHAN_REPO_REASON = "GitHub repo known from scope.yaml or an Azure DevOps reference, but no Azure DevOps pipeline or release builds it (a GitHub repo named nowhere is invisible to this scan)"
 MAX_CHIPS = 8
 
 

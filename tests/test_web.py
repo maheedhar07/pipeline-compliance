@@ -10,6 +10,7 @@ from pch.orchestrator import ScanConfig, Scanner
 from pch.settings import Policy, Scope
 from pch.sources import demo_sources
 from pch.web.app import create_app
+from tests.builders import ALL_HOSTS
 
 
 @pytest.fixture(scope="module")
@@ -20,7 +21,7 @@ def client(tmp_path_factory):
     for k in (1, 0):  # two snapshots so the trend has data
         w = generate_world(seed=11, repos=70, quality_shift=-0.05 * k, now=base - timedelta(days=14 * k))
         src = demo_sources(w)
-        cfg = ScanConfig(scope=Scope(projects=w["meta"]["projects"]), policy=Policy(approved_registries=["contosoacr.azurecr.io"]), db_url=db, mode="demo", now=parse_world_time(w))
+        cfg = ScanConfig(scope=Scope(code_hosts=ALL_HOSTS, projects=w["meta"]["projects"]), policy=Policy(approved_registries=["contosoacr.azurecr.io"]), db_url=db, mode="demo", now=parse_world_time(w))
 
         async def go(src=src, cfg=cfg, k=k):
             try:

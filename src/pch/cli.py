@@ -233,7 +233,7 @@ def seed_demo(
     d, world_f, scope_f, policy_f = _demo_paths(data_dir)
     world = generate_world(seed=seed, repos=repos)
     save_world(world, world_f)
-    scope = {"organization": world["meta"]["org"], "projects": world["meta"]["projects"], "repos": world["scope_repos"], "env_tiers": {}, "exclude_repos": []}
+    scope = {"organization": world["meta"]["org"], "code_hosts": ["github"], "projects": world["meta"]["projects"], "repos": world["scope_repos"], "env_tiers": {}, "exclude_repos": []}
     scope_f.write_text(yaml.safe_dump(scope, sort_keys=False))
     classic = [(p, v["repository"]["name"]) for p, pr in world["ado"].items() for v in pr["build_defs"].values() if (v.get("process") or {}).get("type") == 1][:6]
     waivers = []

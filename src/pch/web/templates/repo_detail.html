@@ -6,12 +6,12 @@
 <nav class="mb-2 text-xs text-slate-500"><a class="hover:underline" href="{{ u('/repos') }}">Repos</a> / <a class="hover:underline" href="{{ u('/repos', project=r.project) }}">{{ r.project }}</a> / {{ r.repo }}</nav>
 <div class="mb-4 flex flex-wrap items-center gap-3">
   <h1 class="text-lg font-semibold">{{ r.repo }}</h1>
-  {{ provider_badge(r.provider, r.provider_label) }}
+  {% if multi_host %}{{ provider_badge(r.provider, r.provider_label) }}{% endif %}
   {{ status_badge(r.status) }}
   <span class="tnum text-lg font-semibold">{{ '%.0f' | format(r.score) if r.score is not none else 'n/a' }}<span class="text-xs font-normal text-slate-500"> / 100</span></span>
   {% if r.unknowns %}<span class="text-xs text-slate-500">{{ r.unknowns }} rule(s) unknown</span>{% endif %}
   <div class="ml-auto flex gap-3 text-xs">
-    {% if r.url %}<a class="text-indigo-600 hover:underline dark:text-indigo-300" href="{{ r.url | safe_url }}" target="_blank" rel="noopener noreferrer">{{ 'Open in Azure DevOps' if r.provider == 'azure_repos' else 'Open on ' ~ r.provider_label }}</a>{% endif %}
+    {% if r.url %}<a class="text-indigo-600 hover:underline dark:text-indigo-300" href="{{ r.url | safe_url }}" target="_blank" rel="noopener noreferrer">Open on {{ r.provider_label }}</a>{% endif %}
     {% if d.sonar and d.sonar.url %}<a class="text-indigo-600 hover:underline dark:text-indigo-300" href="{{ d.sonar.url | safe_url }}" target="_blank" rel="noopener noreferrer">SonarQube</a>{% endif %}
     {% if d.aikido and d.aikido.onboarded %}<a class="text-indigo-600 hover:underline dark:text-indigo-300" href="{{ d.aikido.url | safe_url }}" target="_blank" rel="noopener noreferrer">Aikido</a>{% endif %}
     <a class="text-indigo-600 hover:underline dark:text-indigo-300" href="{{ u('/lineage/' ~ r.project ~ '/' ~ r.repo) }}">Lineage</a>

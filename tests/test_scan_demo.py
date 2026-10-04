@@ -16,6 +16,7 @@ from pch.settings import Policy, Scope, Waiver
 from pch.sources import cache_sources, demo_sources
 from pch.store import repository as store
 from pch.store.db import session_scope
+from tests.builders import ALL_HOSTS
 
 SECRET_VALUE = "S3cr3t-Value-Do-Not-Store-123"
 
@@ -27,7 +28,7 @@ def world():
 
 def run_scan(world, db, record_to=None, policy=None, scope=None):
     src = demo_sources(world, record_to=LocalArtifactStore(record_to) if record_to else None)
-    cfg = ScanConfig(scope=scope or Scope(projects=world["meta"]["projects"], repos=[]), policy=policy or Policy(approved_registries=["contosoacr.azurecr.io"]),
+    cfg = ScanConfig(scope=scope or Scope(code_hosts=ALL_HOSTS, projects=world["meta"]["projects"], repos=[]), policy=policy or Policy(approved_registries=["contosoacr.azurecr.io"]),
                      db_url=db, mode="demo", now=parse_world_time(world))
     sid = f"t-{abs(hash(db)) % 10000}"
 
@@ -133,7 +134,7 @@ def test_cache_has_no_secrets_and_replay_reproduces(world, tmp_path):
     from pch.settings import Settings
 
     src = cache_sources(LocalArtifactStore(cache), Settings(ado_org="x"), demo=True)
-    cfg = ScanConfig(scope=Scope(projects=world["meta"]["projects"]), policy=Policy(approved_registries=["contosoacr.azurecr.io"]), db_url=f"sqlite:///{tmp_path}/e.db", mode="cache", now=parse_world_time(world))
+    cfg = ScanConfig(scope=Scope(code_hosts=ALL_HOSTS, projects=world["meta"]["projects"]), policy=Policy(approved_registries=["contosoacr.azurecr.io"]), db_url=f"sqlite:///{tmp_path}/e.db", mode="cache", now=parse_world_time(world))
 
     async def go():
         try:
@@ -161,7 +162,7 @@ def test_scan_never_mutates(world, tmp_path):
 
     t = Spy(world)
     src = Sources(ado=AdoClient(P.ORG, "demo", transport=t, backoff_base=0, max_attempts=1))
-    cfg = ScanConfig(scope=Scope(projects=["Payments"]), policy=Policy(), db_url=f"sqlite:///{tmp_path}/spy.db", mode="demo", now=parse_world_time(world))
+    cfg = ScanConfig(scope=Scope(code_hosts=ALL_HOSTS, projects=["Payments"]), policy=Policy(), db_url=f"sqlite:///{tmp_path}/spy.db", mode="demo", now=parse_world_time(world))
 
     async def go():
         try:
@@ -185,7 +186,7 @@ def test_cli_seed_and_scan(tmp_path):
     with session_scope(f"sqlite:///{d}/pch.db") as s:
         scans = store.list_scans(s)
         assert len(scans) == 2 and all(x.status == "complete" for x in scans)
-        assert scans[0].repos_total >= 25
+        assert scans[0].repos_total >= 15  # default code_hosts=[github]: ~70% of the demo estate
     w = load_world(tmp_path / "data/demo/world.json.gz")
     save_world(w, tmp_path / "w2.json.gz")
 
@@ -210,7 +211,7 @@ def test_demo_github_estate_is_scanned_through_real_collectors(world, tmp_path):
 
     src = Sources(ado=AdoClient(P.ORG, "demo", transport=Spy(world), backoff_base=0, max_attempts=1))
     db = f"sqlite:///{tmp_path}/gh.db"
-    cfg = ScanConfig(scope=Scope(projects=world["meta"]["projects"]), policy=Policy(approved_registries=["contosoacr.azurecr.io"]), db_url=db, mode="demo", now=parse_world_time(world))
+    cfg = ScanConfig(scope=Scope(code_hosts=ALL_HOSTS, projects=world["meta"]["projects"]), policy=Policy(approved_registries=["contosoacr.azurecr.io"]), db_url=db, mode="demo", now=parse_world_time(world))
 
     async def go():
         try:

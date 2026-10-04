@@ -148,10 +148,12 @@ class Scanner:
     async def collect_project(self, name: str) -> _ProjectData:
         ado = self.src.ado
         pd = _ProjectData(name)
-        try:
-            pd.repos = await ado.repositories(name)
-        except Exception as e:  # externally hosted repos are still discoverable through the pipelines
-            self.err("ado", f"{name}: repositories", e)
+        hosts = self.cfg.scope.hosts()
+        if "azure_repos" in hosts:  # Azure Repos is not a code host unless scope.yaml says so: its API is not even called
+            try:
+                pd.repos = await ado.repositories(name)
+            except Exception as e:  # externally hosted repos are still discoverable through the pipelines
+                self.err("ado", f"{name}: repositories", e)
         try:
             listing = await ado.paged(name, "_apis/build/definitions", {"includeAllProperties": "true"})
             details = await asyncio.gather(*(ado.get(name, f"_apis/build/definitions/{d['id']}") for d in listing), return_exceptions=True)
@@ -182,7 +184,10 @@ class Scanner:
                 setattr(pd, attr, await fn(ado, name))
             except Exception as e:
                 self.err("ado", f"{name}: {label}", e)
-        pd.disc = discover(pd.repos, pd.build_defs, pd.release_defs)
+        known = [o.repo for o in self.cfg.scope.repos if o.project == name]  # "org/repo" names listed in scope.yaml
+        pd.disc = discover(pd.repos, pd.build_defs, pd.release_defs, hosts, known)
+        if summary := pd.disc.out_of_scope_summary(hosts):
+            self.err("ado", f"{name}: code hosts", summary)
         return pd
 
     # ------------------------------------------------------------------ repo level
@@ -481,11 +486,13 @@ class Scanner:
         counts: Counter[str] = Counter()
         failed = 0
         cat_fail: Counter[str] = Counter()
+        providers: set[str] = set()
         with session_scope(cfg.db_url) as s:
             for out in results:
                 if len(out) == 3:  # hard failure
                     project, repo, exc = out
                     failed += 1
+                    providers.add(repo.provider)
                     s.add(RepoResultRow(scan_id=scan_id, repo_key=f"{project}/{repo.name}", project=project, repo=repo.name, status="NOT_SCANNED", test_state="NOT_APPLICABLE",
                                         external={"repo": {"provider": repo.provider, "full_name": repo.name if repo.external else "", "service_connection_id": repo.service_connection_id}}))
                     s.add(FindingRow(scan_id=scan_id, repo_key=f"{project}/{repo.name}", rule_id="COLLECTION-ERROR", category="SYS", severity="info", status="UNKNOWN", message=scrub(str(exc))[:300]))
@@ -493,6 +500,7 @@ class Scanner:
                     continue
                 ctx, findings, sc, mig_score, blockers = out
                 counts[sc.status.value] += 1
+                providers.add(ctx.repo.provider)
                 kinds = sorted({p.platform for p in ctx.pipelines})
                 targets = sorted({t for p in ctx.pipelines for t in p.deploy_targets})
                 s.add(RepoResultRow(
@@ -534,7 +542,7 @@ class Scanner:
                 row.repos_failed = failed
                 row.findings_total = n_findings
                 row.duration_s = round(duration, 2)
-                row.summary = {"status_counts": dict(counts), "category_fails": dict(cat_fail), "errors": len(self.errors)}
+                row.summary = {"status_counts": dict(counts), "category_fails": dict(cat_fail), "errors": len(self.errors), "providers": sorted(providers)}
         return ScanResult(scan_id, len(results), n_findings, len(self.errors), round(duration, 2), dict(counts))
 
 

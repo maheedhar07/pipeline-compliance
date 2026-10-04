@@ -20,6 +20,7 @@ from pch.sources import Sources
 from pch.store import repository as store
 from pch.store.db import session_scope
 from pch.store.models import LineageRow
+from tests.builders import ALL_HOSTS
 
 
 @pytest.fixture(scope="module")
@@ -29,7 +30,7 @@ def world():
 
 def scan(world, db, transport_cls=DemoTransport, scan_id="s1", **cfg_kw):
     src = Sources(ado=AdoClient(P.ORG, "demo", transport=transport_cls(world), backoff_base=0, max_attempts=1))
-    cfg = ScanConfig(scope=Scope(projects=world["meta"]["projects"]), policy=Policy(approved_registries=["contosoacr.azurecr.io"]), db_url=db, mode="demo", now=parse_world_time(world), **cfg_kw)
+    cfg = ScanConfig(scope=Scope(code_hosts=ALL_HOSTS, projects=world["meta"]["projects"]), policy=Policy(approved_registries=["contosoacr.azurecr.io"]), db_url=db, mode="demo", now=parse_world_time(world), **cfg_kw)
 
     async def go():
         try:

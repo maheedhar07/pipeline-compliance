@@ -40,7 +40,7 @@
 
 <div class="space-y-3">
   <div class="flex flex-wrap items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
-    {{ provider_badge(d.repo.provider, d.repo.provider_label) }}
+    {% if multi_host %}{{ provider_badge(d.repo.provider, d.repo.provider_label) }}{% endif %}
     <span>default branch <b>{{ d.repo.default_branch or 'n/a' }}</b></span>
     {% if d.repo.service_connection %}<span>· read through service connection <b>{{ d.repo.service_connection }}</b></span>{% endif %}
     {% if d.repo.url %}<a class="text-indigo-600 hover:underline dark:text-indigo-300" href="{{ d.repo.url | safe_url }}" target="_blank" rel="noopener noreferrer">open repo</a>{% endif %}

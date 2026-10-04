@@ -41,6 +41,7 @@ from pch.store.models import CollectionErrorRow, FindingRow, RepoResultRow
 from pch.timeutil import utcnow
 from pch.web.app import create_app
 from pch.web.health import ReadinessProbe
+from tests.builders import ALL_HOSTS
 
 ENV_KEYS = ("APP_ENV", "AUTH_MODE", "AUTH_ALLOWED_ROLES", "WEBSITE_AUTH_ENABLED", "AUTH_EASYAUTH_ASSUME_ENABLED", "ALLOWED_HOSTS", "HOST", "PORT",
             "WEBSITES_PORT", "DATABASE_URL", "LOG_FORMAT", "LOG_LEVEL", "APPLICATIONINSIGHTS_CONNECTION_STRING", "RETENTION_KEEP_SCANS",
@@ -538,7 +539,7 @@ def test_delete_scan_rows_chunked(estate):
 
 # ------------------------------------------------------------------ shutdown, timeout, signals
 def make_cfg(url, **kw):
-    return ScanConfig(scope=Scope(projects=[]), policy=Policy(), db_url=url, mode="demo", **kw)
+    return ScanConfig(scope=Scope(code_hosts=ALL_HOSTS, projects=[]), policy=Policy(), db_url=url, mode="demo", **kw)
 
 
 def run_scan(url, scan_id, **kw):

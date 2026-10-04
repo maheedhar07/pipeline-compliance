@@ -25,6 +25,7 @@ from pch.store.engine import build_engine
 from pch.store.models import CollectionErrorRow, ScanRow
 from pch.web import queries as Q
 from pch.web.app import create_app
+from tests.builders import ALL_HOSTS
 
 from .test_web_security import S, easy, hdr, make_db
 
@@ -104,7 +105,7 @@ def test_redact_json_covers_suffixed_secret_field_names_but_keeps_paging_cursors
 
 # --------------------------------------------------------------------------- SEC-03: persisted error text
 def _cfg(db_url: str) -> ScanConfig:
-    return ScanConfig(scope=Scope(projects=[]), policy=Policy(), db_url=db_url, mode="demo", now=datetime(2026, 10, 1, 12, 0, 0))
+    return ScanConfig(scope=Scope(code_hosts=ALL_HOSTS, projects=[]), policy=Policy(), db_url=db_url, mode="demo", now=datetime(2026, 10, 1, 12, 0, 0))
 
 
 def test_scanner_err_scrubs_before_the_text_is_kept_for_the_database():

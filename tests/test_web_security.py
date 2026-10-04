@@ -27,6 +27,7 @@ from pch.web import queries as Q
 from pch.web.app import SortKey, create_app, csv_cell, json_for_script, safe_url
 from pch.web.guard import UnsafeServeConfig, assert_safe_to_serve, guard_problems, is_loopback_host
 from pch.web.security import CSP
+from tests.builders import ALL_HOSTS
 
 WEB = Path(__file__).parent.parent / "src" / "pch" / "web"
 STATIC = WEB / "static"
@@ -72,7 +73,7 @@ def make_db(tmp: Path) -> str:
     url = f"sqlite:///{tmp}/sec.db"
     w = generate_world(seed=11, repos=40, now=datetime(2026, 10, 1, 12, 0, 0))
     src = demo_sources(w)
-    cfg = ScanConfig(scope=Scope(projects=w["meta"]["projects"]), policy=Policy(approved_registries=["contosoacr.azurecr.io"]), db_url=url, mode="demo", now=parse_world_time(w))
+    cfg = ScanConfig(scope=Scope(code_hosts=ALL_HOSTS, projects=w["meta"]["projects"]), policy=Policy(approved_registries=["contosoacr.azurecr.io"]), db_url=url, mode="demo", now=parse_world_time(w))
 
     async def go():
         try:

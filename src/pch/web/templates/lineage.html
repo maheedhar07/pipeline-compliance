@@ -12,8 +12,8 @@
   </div>
 </div>
 <p class="mb-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300" role="note">
-  What comes out of each repository: CI pipelines, the pipelines that consume them, releases, and every stage with its last deployment. All of it is read from <b>Azure DevOps</b>
-  (pipelines, releases, environments and their run history); a GitHub repository that no Azure DevOps pipeline builds is invisible here. People appear only as the display name of whoever triggered the last deployment.
+  What comes out of each repository: CI pipelines, the pipelines that consume them, releases, and every stage with its last deployment. The code is on GitHub; pipelines, releases, environments and their run history are read from <b>Azure DevOps</b>.
+  A GitHub repository that is neither named in scope.yaml nor referenced by an Azure DevOps pipeline is invisible here until GitHub discovery exists. People appear only as the display name of whoever triggered the last deployment.
 </p>
 {% if not data.has_data %}
 <div class="rounded-lg border border-amber-300 bg-amber-50 px-3 py-6 text-center text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-100">This scan has no lineage data (it was made before the Lineage tab existed). Run <code>pch scan</code> again, or pick a newer scan.</div>
@@ -29,7 +29,7 @@
     </select></label>
   {% endmacro %}
   {{ sel('project','Project', data.options.projects, filters.project) }}
-  {{ sel('provider','Code hosted on', data.options.providers, filters.provider, data.options.provider_labels) }}
+  {% if multi_host %}{{ sel('provider','Code hosted on', data.options.providers, filters.provider, data.options.provider_labels) }}{% endif %}
   {{ sel('target','Deploy target', data.options.targets, filters.target, TARGET_LABEL) }}
   {{ sel('tier','Environment tier', data.options.tiers, filters.tier) }}
   {{ sel('has_prod','Prod deployment', ['yes','no'], filters.has_prod, {'yes':'has prod deployment','no':'no prod deployment'}) }}
@@ -52,7 +52,7 @@
     {% set rp = r.repo %}
     <details class="group border-b border-slate-100 last:border-b-0 dark:border-slate-700" hx-get="{{ u('/lineage/' ~ rp.project ~ '/' ~ rp.name, fragment=1) }}" hx-trigger="toggle once" hx-target="find .chain-slot" hx-swap="innerHTML">
       <summary class="flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 hover:bg-slate-50 dark:hover:bg-slate-700/40">
-        <span class="font-medium">{{ rp.name }}</span>{{ provider_badge(rp.provider, rp.provider_label) }}
+        <span class="font-medium">{{ rp.name }}</span>{% if multi_host %}{{ provider_badge(rp.provider, rp.provider_label) }}{% endif %}
         <span class="text-xs text-slate-500 dark:text-slate-400">{{ rp.project }}</span>
         {% set sy = r.summary %}
         <span class="text-xs text-slate-600 dark:text-slate-300">
