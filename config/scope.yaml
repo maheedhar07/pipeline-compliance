@@ -5,8 +5,10 @@
 # not called and pipelines/releases sourced from a host that is not listed are out of scope (one info line per project).
 code_hosts: [github]
 
-# Azure DevOps organization name (the <org> in https://dev.azure.com/<org>). Replace the placeholder.
-organization: your-org
+# Azure DevOps organization name (the <org> in https://dev.azure.com/<org>). Optional: used only when ADO_ORG is not set.
+# If both are set they must be equal, otherwise the scan and `pch doctor` fail with a config error (nothing is picked silently).
+# Example: organization: contoso
+organization: ""
 # Projects to scan; empty = discover all projects in the organization.
 projects: []
 # Repos to skip, as "<project>/<repo>", e.g. ["Sandbox/scratch-repo"]. Code hosted on GitHub (built by ADO pipelines) is

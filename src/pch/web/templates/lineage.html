@@ -15,7 +15,7 @@
 </div>
 <p class="mb-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300" role="note">
   What comes out of each repository: CI pipelines, the pipelines that consume them, releases, and every stage with its last deployment. The code is on GitHub; pipelines, releases, environments and their run history are read from <b>Azure DevOps</b> and, for migrated repositories, from <b>GitHub Actions</b>.
-  A GitHub repository that is neither named in scope.yaml nor referenced by an Azure DevOps pipeline is invisible here until GitHub discovery exists. People appear only as the display name of whoever triggered the last deployment.
+  {{ data.discovery_note }} People appear only as the display name of whoever triggered the last deployment.
 </p>
 {% if not data.has_data %}
 <div class="rounded-lg border border-amber-300 bg-amber-50 px-3 py-6 text-center text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-100">This scan has no lineage data (it was made before the Lineage tab existed). Run <code>pch scan</code> again, or pick a newer scan.</div>

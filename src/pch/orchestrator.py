@@ -635,7 +635,7 @@ class Scanner:
                 row.repos_failed = failed
                 row.findings_total = n_findings
                 row.duration_s = round(duration, 2)
-                row.summary = {"status_counts": dict(counts), "category_fails": dict(cat_fail), "errors": len(self.errors), "providers": sorted(providers),
+                row.summary = {"status_counts": dict(counts), "category_fails": dict(cat_fail), "errors": len(self.errors), "providers": sorted(providers), "github_reader": self.src.github is not None,
                                "policy": policy_effects(cfg.policy, self.rules)}
         return ScanResult(scan_id, len(results), n_findings, len(self.errors), round(duration, 2), dict(counts))
 

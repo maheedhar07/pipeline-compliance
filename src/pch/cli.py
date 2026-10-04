@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import typer
 
 from pch import exitcodes
+
+if TYPE_CHECKING:
+    from pch.settings import Settings
 
 app = typer.Typer(help="Pipeline Compliance Hub (report-only)", no_args_is_help=True)
 rules_app = typer.Typer(help="Inspect the rule catalog", no_args_is_help=True)
@@ -294,7 +299,7 @@ def scan(
 
     from pch.orchestrator import ScanConfig, Scanner
     from pch.providers import PrefixedStore, get_artifact_store
-    from pch.settings import get_settings, load_policy, load_scope
+    from pch.settings import get_settings, load_policy, load_scope, resolve_ado_org
     from pch.sources import cache_sources, demo_sources, live_sources
     from pch.timeutil import utcnow_naive
 
@@ -351,13 +356,14 @@ def scan(
                 typer.echo(f"  {res.repos} repos, {res.findings} findings, {res.errors} collection errors, {res.duration_s}s, {res.status_counts}")
             return
         scope, policy = load_scope(scope_file), load_policy(policy_file)
+        live_settings = settings.model_copy(update={"ado_org": resolve_ado_org(settings, scope)[0]})  # ConfigError on a conflict (exit 2)
         now = utcnow_naive()
         if from_cache:
-            scan_id, src = f"{now:%Y%m%d-%H%M%S}-cache", cache_sources(PrefixedStore(artifacts, from_cache), settings)
+            scan_id, src = f"{now:%Y%m%d-%H%M%S}-cache", cache_sources(PrefixedStore(artifacts, from_cache), live_settings)
             mode = "cache"
         else:
             scan_id = f"{now:%Y%m%d-%H%M%S}-live"
-            src = live_sources(settings, record_to=PrefixedStore(artifacts, scan_id) if cache is not False else None)
+            src = live_sources(live_settings, record_to=PrefixedStore(artifacts, scan_id) if cache is not False else None)
             mode = "live"
         cfg = ScanConfig(scope=scope, policy=policy, db_url=db_url, mode=mode, now=now, stale_after=stale, timeout_s=timeout_s,
                          lineage=settings.lineage_enabled, lineage_top=settings.lineage_deployments_top)
@@ -367,8 +373,8 @@ def scan(
             await src.aclose()
         typer.echo(f"{res.repos} repos, {res.findings} findings, {res.errors} collection errors, {res.duration_s}s, {res.status_counts}")
 
-    if not demo and not from_cache and not settings.ado_org:
-        typer.echo("ADO_ORG is not set. Copy .env.example to .env, or try `pch seed-demo && pch scan --demo`.", err=True)
+    if not demo and not from_cache and not _ado_org_known(settings, scope_file):
+        typer.echo("ADO_ORG is not set (nor `organization:` in scope.yaml). Copy .env.example to .env, or try `pch seed-demo && pch scan --demo`.", err=True)
         raise typer.Exit(exitcodes.CONFIG)
     from pch.scanrun import ScanInterrupted, ScanTimeout, run_guarded
     from pch.settings import ConfigError
@@ -391,6 +397,16 @@ def scan(
         typer.echo(f"Config error: {exc}", err=True)
         raise typer.Exit(exitcodes.CONFIG) from None
     sys.stdout.flush()
+
+
+def _ado_org_known(settings: Settings, scope_file: str) -> bool:
+    """Pre-flight for `pch scan`: is an organisation available from ADO_ORG or scope.yaml? A bad scope file or a conflict is reported later, in the scan."""
+    from pch.settings import ConfigError, load_scope, resolve_ado_org
+
+    try:
+        return bool(resolve_ado_org(settings, load_scope(scope_file))[0])
+    except ConfigError:
+        return True
 
 
 scans_app = typer.Typer(help="Stored scan snapshots", no_args_is_help=True)

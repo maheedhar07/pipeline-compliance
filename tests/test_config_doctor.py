@@ -72,7 +72,7 @@ def test_url_trailing_slash_normalised(monkeypatch):
 
 # ------------------------------------------------------------------ yaml
 def test_repo_configs_and_defaults_validate():
-    assert load_scope(REPO / "config" / "scope.yaml").organization
+    assert load_scope(REPO / "config" / "scope.yaml").organization == ""  # optional fallback for ADO_ORG, blank by default
     assert load_policy(REPO / "config" / "policy.yaml").coverage_threshold == 80
     assert Policy().sonar_quality_gate_name == "Sonar way"
 
@@ -187,3 +187,44 @@ def test_doctor_data_dir_not_writable(tmp_path, monkeypatch):
     res = run()
     assert res.exit_code == 1 and "data_dir" in res.output
     assert Path(f).is_file()
+
+
+# ------------------------------------------------------------------ ADO org resolution (ADO_ORG / scope.yaml organization)
+def _org_pair(env_org, scope_org):
+    from pch.settings import Scope, Settings
+
+    return Settings(_env_file=None, ado_org=env_org), Scope(organization=scope_org)
+
+
+def test_ado_org_falls_back_to_scope_when_env_is_empty():
+    from pch.settings import resolve_ado_org
+
+    assert resolve_ado_org(*_org_pair("", "contoso")) == ("contoso", "scope.yaml organization")
+    assert resolve_ado_org(*_org_pair("envorg", "")) == ("envorg", "ADO_ORG")
+    assert resolve_ado_org(*_org_pair("", "")) == ("", "not set")
+
+
+def test_ado_org_equal_in_both_is_fine_and_conflict_fails():
+    import pytest
+
+    from pch.settings import ConfigError, resolve_ado_org
+
+    assert resolve_ado_org(*_org_pair("Contoso", "contoso")) == ("Contoso", "ADO_ORG")
+    with pytest.raises(ConfigError) as ei:
+        resolve_ado_org(*_org_pair("one", "two"))
+    assert "one" in str(ei.value) and "two" in str(ei.value) and "ADO_ORG" in str(ei.value) and "scope.yaml" in str(ei.value)
+
+
+def test_doctor_reports_org_source_and_conflict(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "d"))
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/x.db")
+    monkeypatch.setenv("ADO_PAT", SECRETS["ADO_PAT"])
+    monkeypatch.delenv("ADO_ORG", raising=False)
+    sc, po = tmp_path / "s.yaml", tmp_path / "p.yaml"
+    sc.write_text("organization: fromscope\n")
+    po.write_text("coverage_threshold: 70\n")
+    res = run("--scope", str(sc), "--policy", str(po))
+    assert "fromscope (from scope.yaml organization)" in res.output and "ADO_ORG=missing" not in res.output
+    monkeypatch.setenv("ADO_ORG", "other")
+    res = run("--scope", str(sc), "--policy", str(po))
+    assert res.exit_code == 1 and "conflict" in res.output and "fromscope" in res.output and "other" in res.output

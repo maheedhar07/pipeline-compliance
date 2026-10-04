@@ -23,6 +23,7 @@ from pch.settings import (
     format_validation_error,
     load_policy,
     load_scope,
+    resolve_ado_org,
 )
 
 OK, WARN, FAIL = "OK", "WARN", "FAIL"
@@ -61,6 +62,17 @@ def _config_summary(cfg: Scope | Policy) -> str:
     if cfg.scoring.model_fields_set:
         parts.append("custom scoring")
     return f" ({'; '.join(parts)})" if parts else ""
+
+
+def check_ado_org(s: Settings, scope: Scope | None) -> tuple[Check, Settings]:
+    """Which source provided the Azure DevOps organisation (ADO_ORG, else scope.yaml ``organization``); a conflict between them fails."""
+    try:
+        org, origin = resolve_ado_org(s, scope)
+    except ConfigError as exc:
+        return Check("ado_org", FAIL, str(exc)), s
+    if not org:
+        return Check("ado_org", WARN, "not set: set ADO_ORG (or `organization:` in scope.yaml) for live scans"), s
+    return Check("ado_org", OK, f"{org} (from {origin})"), s.model_copy(update={"ado_org": org})
 
 
 def check_config_files(s: Settings, scope_path: Path | None, policy_path: Path | None) -> list[Check]:
@@ -400,9 +412,11 @@ def run_checks(scope_path: Path | None = None, policy_path: Path | None = None, 
         checks.append(Check("remaining checks", WARN, "skipped: settings are invalid"))
         return checks
     checks += check_config_files(s, scope_path, policy_path)
-    checks += check_sources(s)
-    checks += check_secrets(s)
     scope = _scope_or_none(s, scope_path)
+    org_check, s_eff = check_ado_org(s, scope)
+    checks.append(org_check)
+    checks += check_sources(s_eff)
+    checks += check_secrets(s_eff)
     checks.append(check_github(s, scope))
     if online:
         checks += check_github_online(s, scope)

@@ -81,7 +81,7 @@ def test_lineage_is_the_last_nav_item_and_page_renders(client):
     assert r.status_code == 200 and 'data-page="lineage"' in r.text
     nav = re.findall(r'<a href="(/[a-z]*)(?:\?scan=[^"]*)?" class="[^"]*">([^<]+)</a>', r.text.split("</nav>")[0])
     assert nav[-1] == ("/lineage", "Lineage") and nav[-2][1] == "Scans"
-    for needle in ("Export CSV", "Export Excel", "Orphans", "Code hosted on", "Deploy target", "Environment tier", "Prod deployment", "invisible here", "display name"):
+    for needle in ("Export CSV", "Export Excel", "Orphans", "Code hosted on", "Deploy target", "Environment tier", "Prod deployment", "GitHub org discovery is off", "display name"):
         assert needle in r.text
     assert 'hx-trigger="click once"' in r.text and "data-flow-toggle" in r.text  # server-rendered rows, the flow is loaded on first open
     assert "Traceback" not in r.text and "UndefinedError" not in r.text
@@ -157,7 +157,7 @@ def test_filters_on_page_and_api(client):
 def test_orphans_section_lists_reasons(client):
     items = client.get("/api/v1/lineage").json()["orphans"]
     reasons = " | ".join(o["reason"] for o in items)
-    for needle in ("no resolvable repository", "not found in this project", "no artifact source", "cannot be linked to a repository", "invisible to this scan"):
+    for needle in ("no resolvable repository", "not found in this project", "no artifact source", "cannot be linked to a repository", "no GitHub reader is configured"):
         assert needle in reasons
 
 

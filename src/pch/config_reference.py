@@ -48,7 +48,7 @@ FIELD_DOCS: dict[str, list[tuple[str, str]]] = {
         ("artifact_blob_container", "Blob container name (required for `azure_blob`)."),
     ],
     "Azure DevOps": [
-        ("ado_org", "Organization name (`https://dev.azure.com/<org>`). Required for live scans."),
+        ("ado_org", "Organization name (`https://dev.azure.com/<org>`). Required for live scans (or set `organization` in scope.yaml; both set must be equal)."),
         ("ado_pat", "Read-only personal access token (secret)."),
         ("ado_base_url", "Base URL of Azure DevOps Services (change for Azure DevOps Server). https in prod."),
         ("ado_vsrm_url", "Base URL of the release management service. https in prod."),

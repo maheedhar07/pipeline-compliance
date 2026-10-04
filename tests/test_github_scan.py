@@ -153,6 +153,7 @@ def test_without_a_reader_nothing_changes_and_configured_orgs_are_flagged(fx, fx
         assert rows[f"Payments/{ORG}/billing-api"].facts["facts_source"] == "unavailable"
         assert status(s, f"Payments/{ORG}/billing-api", "SRC-001") == {"UNKNOWN"} and status(s, f"Payments/{ORG}/billing-api", "SRC-007") == {"UNKNOWN"}
         assert rows[f"Payments/{ORG}/billing-api"].external["protection"] is None
+        assert store.get_scan(s, "gh").summary["github_reader"] is False
     assert not any(c.request.url.host == "api.github.com" for c in respx.calls)
 
 

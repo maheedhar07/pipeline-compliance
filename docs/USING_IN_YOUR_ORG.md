@@ -58,7 +58,7 @@ rules:                                  # 5. standards as config: disable, re-ra
   DEP-005: {params: {window_slack_hours: 4}}
 ```
 
-* `organization:` in `scope.yaml` is only a label; the Azure DevOps organisation used for scanning is the variable `ADO_ORG` (phase 3). `projects: []` means every ADO project. `code_hosts` stays `[github]` (use `github_enterprise` for GHES).
+* The Azure DevOps organisation is `ADO_ORG` (phase 3); `organization:` in `scope.yaml` is an optional fallback used only when `ADO_ORG` is empty. If both are set and differ, `pch scan` and `pch doctor` fail with a config error naming both; `pch doctor` shows which one supplied it. `projects: []` means every ADO project. `code_hosts` stays `[github]` (use `github_enterprise` for GHES).
 * A repo's key is `<ADO project>/<org>/<repo>` when an ADO pipeline builds it, otherwise `<org>/<org>/<repo>`. Waivers, `exclude_repos` and overrides use that key (copy it from the Repos page).
 * Replace the remaining placeholders: `git grep -nE 'your-org|example\.(com|net)|myorgacr|Sonar way' -- config .env.example`.
 * List what a rule can be tuned with: `pch rules list --params --policy config/policy.yaml`.
@@ -82,11 +82,9 @@ APP_ENV=dev
 ADO_ORG=<your-ado-org>
 ADO_PAT=<read-only PAT>
 GITHUB_TOKEN=<read-only fine-grained PAT>
-SONAR_URL=
-SERVICENOW_URL=
 ```
 
-Blank `SONAR_URL` and `SERVICENOW_URL` (the example hosts would mark those sources as configured) and add `SONAR_TOKEN`, `AIKIDO_*`, `SERVICENOW_*` only if you use them. Never paste a token into chat, a ticket or an AI assistant. Then:
+Add `SONAR_URL` + `SONAR_TOKEN`, `AIKIDO_*`, `SERVICENOW_*` only if you use them (they are blank or commented out in `.env.example`, so unused sources stay off). Never paste a token into chat, a ticket or an AI assistant. Then:
 
 ```bash
 pch doctor

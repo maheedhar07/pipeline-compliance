@@ -570,6 +570,21 @@ def load_scope(path: Path | str = "config/scope.yaml", *, required: bool | None 
         raise ConfigError(format_validation_error(str(p), exc)) from None
 
 
+def resolve_ado_org(settings: Settings, scope: Scope | None) -> tuple[str, str]:
+    """The Azure DevOps organisation and where it came from: ``ADO_ORG``, else ``scope.yaml`` ``organization``, else ``("", "not set")``.
+
+    Both set and different is a ConfigError (never silently pick one). Names are compared case-insensitively (ADO org names are)."""
+    env_org = settings.ado_org.strip()
+    scope_org = (scope.organization if scope else "").strip()
+    if env_org and scope_org and env_org.casefold() != scope_org.casefold():
+        raise ConfigError(f"Azure DevOps organization conflict: ADO_ORG={env_org!r} but scope.yaml organization={scope_org!r}. Set only one, or make them equal.")
+    if env_org:
+        return env_org, "ADO_ORG"
+    if scope_org:
+        return scope_org, "scope.yaml organization"
+    return "", "not set"
+
+
 def load_policy(path: Path | str = "config/policy.yaml") -> Policy:
     p = Path(path)
     try:

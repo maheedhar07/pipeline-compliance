@@ -57,7 +57,7 @@ Settings are environment variables (or a `.env` file; copy `.env.example`). Inva
 | `ARTIFACT_BLOB_ACCOUNT_URL` | (empty) | `https://<account>.blob.core.windows.net` (required for `azure_blob`; managed identity only). |
 | `ARTIFACT_BLOB_CONTAINER` | (empty) | Blob container name (required for `azure_blob`). |
 | **Azure DevOps** | | |
-| `ADO_ORG` | (empty) | Organization name (`https://dev.azure.com/<org>`). Required for live scans. |
+| `ADO_ORG` | (empty) | Organization name (`https://dev.azure.com/<org>`). Required for live scans (or set `organization` in scope.yaml; both set must be equal). |
 | `ADO_PAT` | (empty) | Read-only personal access token (secret). |
 | `ADO_BASE_URL` | `https://dev.azure.com` | Base URL of Azure DevOps Services (change for Azure DevOps Server). https in prod. |
 | `ADO_VSRM_URL` | `https://vsrm.dev.azure.com` | Base URL of the release management service. https in prod. |

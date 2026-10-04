@@ -18,14 +18,32 @@ from pch.engine.reasons import short_title
 from pch.model.lineage import DEPLOY_STATUS_LABEL, LDeploy, LPipeline, LRelease, LStage, RepoLineage
 from pch.model.repo import PROVIDER_LABEL
 from pch.store import repository as store
-from pch.store.models import RepoResultRow
+from pch.store.models import RepoResultRow, ScanRow
 from pch.web.queries import SEV_RANK, STATUS_RANK, TARGET_LABEL, TARGETS, reasons_text, row_dict, rule_index
 from pch.web.tables import sort_rows
 
 TIERS = ["dev", "test", "uat", "prod", "unknown"]
 PIPELINE_PLATFORM = {"yaml": "ado_yaml", "classic_build": "ado_classic_build", "gha": "gha"}
 STATUS_ORDER = ["succeeded", "partial", "in_progress", "pending", "failed", "canceled", "never", "unknown"]
-ORPHAN_REPO_REASON = "GitHub repo known from scope.yaml or an Azure DevOps reference, but no Azure DevOps pipeline or release builds it (a GitHub repo named nowhere is invisible to this scan)"
+_ORPHAN_BASE = "GitHub repo known from scope.yaml, GitHub org discovery or an Azure DevOps reference, but no Azure DevOps pipeline or release builds it"
+_DISCOVERY_ON = "GitHub repositories are discovered from the orgs configured under github.orgs in scope.yaml, so repos without Azure DevOps pipelines still appear."
+_DISCOVERY_OFF = ("GitHub org discovery is off because no GitHub reader is configured (GITHUB_TOKEN or a GitHub App, plus github.orgs in scope.yaml): "
+                  "a GitHub repository that is neither named in scope.yaml nor referenced by an Azure DevOps pipeline is not visible here.")
+
+
+def discovery_note(github_reader: bool | None) -> str:
+    """Accurate text about GitHub org discovery. ``github_reader`` is ``scans.summary.github_reader`` (None for scans that did not record it)."""
+    if github_reader is None:
+        return "Whether GitHub org discovery ran was not recorded for this scan."
+    return _DISCOVERY_ON if github_reader else _DISCOVERY_OFF
+
+
+def orphan_repo_reason(github_reader: bool | None) -> str:
+    if github_reader:
+        return f"{_ORPHAN_BASE} (repos are discovered from the configured GitHub orgs)"
+    if github_reader is None:
+        return _ORPHAN_BASE
+    return f"{_ORPHAN_BASE} (a GitHub repo named nowhere is not discovered: no GitHub reader is configured)"
 MAX_CHIPS = 8
 
 
@@ -41,6 +59,7 @@ class LineageData:
     rows: list[LRow]
     orphans: list[dict[str, Any]]  # unlinked pipelines / releases (from the scan)
     has_data: bool  # the scan has lineage rows at all (False for scans made before L2)
+    github_reader: bool | None = None  # scans.summary.github_reader: a GitHub reader was configured for the scan (None: not recorded)
 
 
 def compliance_of(r: RepoResultRow) -> dict[str, Any]:
@@ -60,7 +79,9 @@ def load(s: Session, scan_id: str) -> LineageData:
         else:
             rows.append(LRow(r.repo_key, RepoLineage.model_validate(r.doc), comp.get(r.repo_key)))
     rows.sort(key=lambda x: (x.lin.repo.project.lower(), x.lin.repo.name.lower()))
-    return LineageData(rows, orphans, bool(stored))
+    scan = s.get(ScanRow, scan_id)
+    reader = (scan.summary or {}).get("github_reader") if scan else None
+    return LineageData(rows, orphans, bool(stored), reader)
 
 
 def _haystack(lin: RepoLineage) -> str:
@@ -96,7 +117,7 @@ def apply_filters(data: LineageData, *, project: str | None = None, provider: st
     orphans = [o for o in data.orphans if (not project or o.get("project") == project) and (not q or q.lower() in f"{o.get('name', '')} {o.get('reason', '')}".lower())]
     if provider or target or tier or has_prod:
         orphans = []  # unlinked items have no repo, provider, target or tier: they do not match those filters
-    return LineageData(rows, orphans, data.has_data)
+    return LineageData(rows, orphans, data.has_data, data.github_reader)
 
 
 def chips(lin: RepoLineage) -> list[dict[str, str]]:
@@ -122,7 +143,7 @@ def orphan_items(data: LineageData) -> list[dict[str, Any]]:
     out = [dict(o) for o in data.orphans]
     for r in data.rows:
         if r.lin.is_empty:
-            out.append({"type": "repo", "project": r.lin.repo.project, "id": "", "name": r.lin.repo.name, "url": r.lin.repo.url, "reason": ORPHAN_REPO_REASON, "key": r.key})
+            out.append({"type": "repo", "project": r.lin.repo.project, "id": "", "name": r.lin.repo.name, "url": r.lin.repo.url, "reason": orphan_repo_reason(data.github_reader), "key": r.key})
     out.sort(key=lambda o: (o["project"].lower(), {"pipeline": 0, "release": 1, "repo": 2}.get(o["type"], 3), o["name"].lower()))
     return out
 
@@ -152,7 +173,7 @@ def options(data: LineageData) -> dict[str, Any]:
 def lineage_page(s: Session, scan_id: str, **filters: Any) -> dict[str, Any]:
     full = load(s, scan_id)
     data = apply_filters(full, **filters)
-    return {"has_data": full.has_data, "repos": [repo_doc(r.lin, r.compliance) for r in data.rows], "orphans": orphan_items(data), "summary": summary(data), "options": options(full)}
+    return {"has_data": full.has_data, "github_reader": full.github_reader, "discovery_note": discovery_note(full.github_reader), "repos": [repo_doc(r.lin, r.compliance) for r in data.rows], "orphans": orphan_items(data), "summary": summary(data), "options": options(full)}
 
 
 def sort_repos(repos: list[dict[str, Any]], sort: str, direction: str) -> list[dict[str, Any]]:
@@ -318,7 +339,7 @@ def summary_rows(scan: Any, data: LineageData, filters: dict[str, Any], n_rows: 
         ["#", "Pipeline Compliance Hub: lineage export (read-only report)"],
         ["Scan", scan.id], ["Scan started (UTC)", scan.started_at.replace(tzinfo=None)], ["Scan mode", scan.mode], ["Generated (UTC)", generated],
         ["Filters", filter_text(filters)], ["Rows in the Lineage sheet", n_rows], ["Orphans (unlinked pipelines/releases)", sm["orphans"]],
-        ["Source", "Azure DevOps pipelines for GitHub code. GitHub repos without Azure DevOps pipelines are invisible. People: display name of whoever triggered the last deployment only."],
+        ["Source", f"Azure DevOps pipelines for GitHub code. {discovery_note(data.github_reader)} People: display name of whoever triggered the last deployment only."],
         [], ["#", "Totals"],
         ["Repositories", sm["repos"]], ["Pipelines (CI/build)", sm["pipelines"]], ["Classic releases", sm["releases"]], ["Stages / environments", sm["stages"]],
         ["Repos with a successful prod deployment", sm["with_prod"]], ["Repos without any pipeline or release", sm["empty_repos"]],

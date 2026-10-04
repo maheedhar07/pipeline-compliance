@@ -12,7 +12,7 @@ def test_cli_version():
 
 def test_config_loads():
     assert load_policy("config/policy.yaml").coverage_threshold == 80
-    assert load_scope("config/scope.yaml").organization == "your-org"
+    assert load_scope("config/scope.yaml").organization == ""
 
 
 def test_rules_list_shows_all():
