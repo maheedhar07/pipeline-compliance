@@ -67,6 +67,9 @@ def guard_problems(s: Settings, host: str) -> list[str]:
                 "X-MS-CLIENT-PRINCIPAL is not stripped from client requests and can be forged. Enable Authentication on the "
                 "Web App, or for local testing only set AUTH_EASYAUTH_ASSUME_ENABLED=true (APP_ENV!=prod)."
             )
+    else:
+        # Fail closed: a new auth mode must get its own guard branch before it can serve.
+        p.append(f"AUTH_MODE={s.auth_mode!r} has no startup guard rules; add a branch in pch.web.guard.guard_problems.")
     if s.is_prod:
         hosts = s.allowed_host_list
         if not hosts:

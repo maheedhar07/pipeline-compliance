@@ -592,3 +592,12 @@ def test_static_js_has_no_eval_or_html_injection():
         t = f.read_text()
         for bad in ("eval(", "new Function", "document.write", "innerHTML", "insertAdjacentHTML", "setAttribute(\"style\""):
             assert bad not in t, f"{f.name}: {bad}"
+
+
+def test_guard_refuses_auth_mode_without_guard_branch():
+    s = Settings(_env_file=None, app_env="dev")
+    object.__setattr__(s, "auth_mode", "future-mode")  # simulates a mode added to the Literal but not to the guard
+    problems = guard_problems(s, "127.0.0.1")
+    assert any("has no startup guard rules" in p for p in problems)
+    with pytest.raises(UnsafeServeConfig):
+        assert_safe_to_serve(s, "127.0.0.1")
