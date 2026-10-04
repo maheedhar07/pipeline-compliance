@@ -77,3 +77,19 @@ Each milestone ends with `ruff check . && mypy src && pytest`, a conventional co
 - `docs/DEPLOY_AZURE.md`: App Service + Easy Auth + managed identity + Key Vault references + Azure SQL + Blob + App Insights; least-privilege role assignments; go-live checklist.
 - `docs/THREAT_MODEL.md` (STRIDE-lite), `docs/IMPORT_CHECKLIST.md`, ADRs appended to `docs/DECISIONS.md`.
 - Independent security review of the whole T1–T6 diff; fix findings.
+
+---
+
+# GitHub-first phase (G1–G5)
+
+Owner's estate: **all code on GitHub; pipelines in Azure DevOps (YAML + Classic), migrating to GitHub Actions.**
+Azure Repos is not used. Not going live yet: optimise for clarity and customisability. **Do not spend effort on
+demo/mock data** — add or adjust only the one or two records needed to verify a change; spend the effort on the code.
+
+| # | Milestone | Outcome |
+|---|---|---|
+| G1 | GitHub-only + standards-as-config + reasons | Azure Repos removed from scan/UI (GitHub is the code host). Per-rule `enabled`/`severity`/params in `policy.yaml`; `docs/STANDARDS.md` maps every knob. Every non-compliant repo/pipeline shows a plain-language **"why"** (failing critical/high rules + message) on Repos, Overview, Lineage, repo page, CSV/XLSX/JSON. |
+| G2 | GitHub read-only reader | Fine-grained PAT (default) or GitHub App. Repo discovery from the GitHub org; branch protection + rulesets, file tree (tests/Dockerfiles/IaC), CODEOWNERS. Replaces the UNKNOWNs from ADR-13 with real PASS/FAIL. |
+| G3 | GitHub Actions pipelines | Workflows → canonical `Pipeline(platform="gha")`, environments + protection rules, deployments/runs, OIDC vs secrets, action SHA pinning. Rules + lineage cover GHA, so repos are covered as they migrate. |
+| G4 | Scheduling + richer UI | Scheduled GitHub Actions workflow running `pch scan` (opt-in, OIDC, pinned). UI: visual lineage flow, richer overview (by project/owner, severity, top reasons, drill-down charts), richer repo page (category breakdown, fix-first list, trend), better tables (sticky headers, sort, pagination, column chooser, filter chips). |
+| G5 | Org playbook | Short `docs/USING_IN_YOUR_ORG.md` (ordered steps, commands, don'ts), compact `docs/AI_GUIDE.md` for AI-assisted work, README/CLAUDE.md pointers; prune duplication. |
