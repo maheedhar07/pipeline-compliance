@@ -159,7 +159,7 @@ and is only acceptable with a single-tenant app registration and assignment requ
 1. `web/auth.py`: implement `Authenticator` (`mode`, `authenticate(headers) -> Principal` raising `AuthError(401, ...)`, `authorize(principal)` raising `AuthError(403, ...)`) and register it in `AUTHENTICATORS`.
    Any parsing problem must be a 401, never an exception that becomes a 500.
 2. `settings.py`: add the value to the `auth_mode` `Literal` and its settings.
-3. **`web/guard.py` (`guard_problems`)**: add a branch for the mode. The guard only knows `none` and `easyauth`; an unknown mode currently adds no problems, so without a branch a new mode starts unchecked.
+3. **`web/guard.py` (`guard_problems`)**: add a branch for the mode. An unknown mode is refused at startup (fail closed), so the app will not serve until the mode has its own guard rules.
    Refuse start-up when what the mode trusts (headers, a JWKS URL, ...) is not guaranteed.
 4. Keep `/health/*` and `/static/` the only unauthenticated paths (`auth.is_public_path`); do not add a path to `PUBLIC_EXACT` without a test.
 5. Tests: extend `tests/test_web_security.py` (guard matrix, `test_guard_exhaustive_invariants`, 401/403 behavior, malformed input is 401). Verify with a forged-header request against the deployed app (expect 401), see `IMPORT_CHECKLIST.md`.
