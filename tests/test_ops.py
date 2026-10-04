@@ -74,7 +74,7 @@ def lines(buf: io.StringIO) -> list[dict]:
 
 # ------------------------------------------------------------------ scrubbing
 SECRETS = [
-    ("Authorization: Bearer " + "abcDEF123456789" + ".xyz-TOKEN", "abcDEF123456789"),
+    ("Authorization: Bearer " + "abc" + "DEF123456789" + ".xyz-TOKEN", "abc" + "DEF123456789"),
     ("headers={'Authorization': 'Basic dXNlcjpwYXNzd29yZA=='}", "dXNlcjpwYXNzd29yZA"),
     ("got Bearer " + ".".join(["eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiIxMjM0NTY3ODkwIn0", "sig_abc-123"]), "eyJhbGciOiJIUzI1NiJ9"),
     ("connect pat=hunter2hunter2 failed", "hunter2hunter2"),
