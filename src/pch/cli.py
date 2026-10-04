@@ -397,6 +397,36 @@ scans_app = typer.Typer(help="Stored scan snapshots", no_args_is_help=True)
 app.add_typer(scans_app, name="scans")
 
 
+@scans_app.command("summary")
+def scans_summary(
+    exit_code: int | None = typer.Option(None, "--exit-code", help="Exit code of the preceding `pch scan`, shown with its meaning and hint"),
+    since: str | None = typer.Option(None, "--since", help="ISO-8601 UTC time: a latest scan older than this was not made by the current run"),
+    db: str | None = typer.Option(None, "--db", help="Database URL (default DATABASE_URL)"),
+) -> None:
+    """Markdown summary of the latest scan for a CI job summary (counts only, no secrets). Never fails: a CI summary must not mask the scan's own result."""
+    from datetime import UTC, datetime
+
+    from pch import scan_summary
+    from pch.settings import get_settings
+    from pch.store.db import session_scope
+
+    since_dt = None
+    if since:
+        try:
+            since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
+            since_dt = since_dt.replace(tzinfo=UTC) if since_dt.tzinfo is None else since_dt
+        except ValueError:
+            typer.echo("--since must be an ISO-8601 time, for example 2026-10-04T02:00:00Z", err=True)
+            raise typer.Exit(exitcodes.CONFIG) from None
+    try:
+        with session_scope(db or get_settings().database_url) as s:
+            typer.echo(scan_summary.build(s, exit_code, since_dt), nl=False)
+    except Exception as exc:  # noqa: BLE001 - the summary is best effort; say why without leaking connection details
+        typer.echo(f"Scan summary unavailable ({type(exc).__name__}).")
+        if exit_code is not None:
+            typer.echo(f"Scan exit code: {exit_code} ({exitcodes.DESCRIPTIONS.get(exit_code, 'unknown')}).")
+
+
 @scans_app.command("prune")
 def scans_prune(
     keep: int | None = typer.Option(None, "--keep", min=1, help="Keep the newest N scans (default RETENTION_KEEP_SCANS)"),

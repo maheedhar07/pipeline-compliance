@@ -1,0 +1,158 @@
+# Scheduled `pch scan` (read-only) on GitHub Actions. OPT-IN: the job only runs when the repository variable
+# PCH_SCAN_ENABLED is exactly "true", so forks and the public template do nothing. Setup: README "Scheduling".
+#
+# Change the schedule by editing the cron line below (UTC; GitHub may delay scheduled runs by several minutes).
+# Run it by hand: Actions -> Scheduled scan -> Run workflow.
+#
+# Secrets live in the GitHub *environment* `pch-scan` (add required reviewers / branch limits there), never in the
+# repository secrets: ADO_PAT, PCH_GITHUB_TOKEN (or PCH_GITHUB_APP_PRIVATE_KEY), DATABASE_URL (with DB_AUTH=azure_ad the URL
+# holds no password, so it may be the variable DATABASE_URL instead), SONAR_TOKEN, AIKIDO_CLIENT_SECRET, SERVICENOW_PASSWORD. Everything else is a plain variable (vars.*).
+# Secrets reach the scan only through `env:` (masked in logs); no `run:` line interpolates a ${{ }} expression
+# (tests/test_scheduled_workflow.py enforces this).
+name: Scheduled scan
+
+on:
+  schedule:
+    - cron: "0 2 * * *" # daily 02:00 UTC
+  workflow_dispatch:
+    inputs:
+      prune:
+        description: "Run `pch scans prune` afterwards (needs RETENTION_KEEP_SCANS and/or RETENTION_MAX_AGE_DAYS)"
+        type: boolean
+        default: true
+
+permissions: {}
+
+# Two scans never overlap: a newer run waits (it is not cancelled, so a running scan is never killed half way).
+# The database scan lock is the second guard.
+concurrency:
+  group: pch-scheduled-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    name: pch scan
+    if: ${{ vars.PCH_SCAN_ENABLED == 'true' }}
+    runs-on: ubuntu-24.04
+    # A little above SCAN_TIMEOUT_MINUTES (default 240) plus install, doctor and prune. Raise both together.
+    timeout-minutes: 255
+    environment: pch-scan
+    permissions:
+      contents: read
+      id-token: write # only used by azure/login (OIDC) when vars.AZURE_CLIENT_ID is set
+    env:
+      APP_ENV: ${{ vars.APP_ENV || 'prod' }}
+      CONFIG_DIR: config
+      # --- sources (non-secret config) ---
+      ADO_ORG: ${{ vars.ADO_ORG }}
+      ADO_BASE_URL: ${{ vars.ADO_BASE_URL || 'https://dev.azure.com' }}
+      ADO_VSRM_URL: ${{ vars.ADO_VSRM_URL || 'https://vsrm.dev.azure.com' }}
+      # GitHub forbids variables/secrets named GITHUB_*: they are PCH_GITHUB_* here and mapped to the names pch reads.
+      GITHUB_API_URL: ${{ vars.PCH_GITHUB_API_URL || 'https://api.github.com' }} # VERIFY: the runner honours an env override of this default variable
+      GITHUB_AUTH: ${{ vars.PCH_GITHUB_AUTH || 'pat' }}
+      GITHUB_APP_ID: ${{ vars.PCH_GITHUB_APP_ID }}
+      GITHUB_APP_INSTALLATION_ID: ${{ vars.PCH_GITHUB_APP_INSTALLATION_ID }}
+      SONAR_URL: ${{ vars.SONAR_URL }}
+      AIKIDO_URL: ${{ vars.AIKIDO_URL || 'https://app.aikido.dev' }}
+      AIKIDO_CLIENT_ID: ${{ vars.AIKIDO_CLIENT_ID }}
+      SERVICENOW_URL: ${{ vars.SERVICENOW_URL }}
+      SERVICENOW_USER: ${{ vars.SERVICENOW_USER }}
+      # --- database / artifacts ---
+      DB_AUTH: ${{ vars.DB_AUTH || 'password' }}
+      ARTIFACT_STORE: ${{ vars.ARTIFACT_STORE || 'local' }}
+      ARTIFACT_BLOB_ACCOUNT_URL: ${{ vars.ARTIFACT_BLOB_ACCOUNT_URL }}
+      ARTIFACT_BLOB_CONTAINER: ${{ vars.ARTIFACT_BLOB_CONTAINER }}
+      # --- tuning ---
+      CONCURRENCY: ${{ vars.CONCURRENCY || '8' }}
+      SCAN_TIMEOUT_MINUTES: ${{ vars.SCAN_TIMEOUT_MINUTES || '240' }}
+      SCAN_LOCK_STALE_MINUTES: ${{ vars.SCAN_LOCK_STALE_MINUTES || '360' }}
+      RETENTION_KEEP_SCANS: ${{ vars.RETENTION_KEEP_SCANS }}
+      RETENTION_MAX_AGE_DAYS: ${{ vars.RETENTION_MAX_AGE_DAYS }}
+      # Lockfile choice: requirements.lock (default; Postgres) or requirements-azure.lock (Azure SQL, Key Vault, Blob).
+      PCH_LOCKFILE: ${{ vars.PCH_LOCKFILE || 'requirements.lock' }}
+      PCH_INSTALL_ODBC: ${{ vars.PCH_INSTALL_ODBC }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+      - name: Check the lockfile choice
+        run: |
+          case "$PCH_LOCKFILE" in
+            requirements*.lock) [ -f "$PCH_LOCKFILE" ] || { echo "::error::PCH_LOCKFILE '$PCH_LOCKFILE' does not exist in the repository"; exit 2; } ;;
+            *) echo "::error::PCH_LOCKFILE must be a requirements*.lock file in the repository root"; exit 2 ;;
+          esac
+      - name: Install Microsoft ODBC Driver 18 (Azure SQL / SQL Server only)
+        if: ${{ vars.PCH_INSTALL_ODBC == 'true' }}
+        run: |
+          curl -sSfL https://packages.microsoft.com/keys/microsoft.asc | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
+          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/ubuntu/$(lsb_release -rs)/prod $(lsb_release -cs) main" \
+            | sudo tee /etc/apt/sources.list.d/mssql-release.list > /dev/null
+          sudo apt-get update -q
+          sudo ACCEPT_EULA=Y apt-get install -y -q msodbcsql18 unixodbc
+      - name: Install pch (hash-checked lockfile)
+        run: |
+          python -m pip install --require-hashes -r "$PCH_LOCKFILE"
+          python -m pip install --no-deps .
+      # Azure SQL with DB_AUTH=azure_ad (and Key Vault / Blob): passwordless OIDC login, no client secret stored.
+      - name: Azure login (OIDC)
+        if: ${{ vars.AZURE_CLIENT_ID != '' }}
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          allow-no-subscriptions: true
+      - name: Doctor (fail fast on configuration problems)
+        env:
+          ADO_PAT: ${{ secrets.ADO_PAT }}
+          GITHUB_TOKEN: ${{ secrets.PCH_GITHUB_TOKEN }}
+          GITHUB_APP_PRIVATE_KEY: ${{ secrets.PCH_GITHUB_APP_PRIVATE_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL || vars.DATABASE_URL }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          AIKIDO_CLIENT_SECRET: ${{ secrets.AIKIDO_CLIENT_SECRET }}
+          SERVICENOW_PASSWORD: ${{ secrets.SERVICENOW_PASSWORD }}
+        run: |
+          pch doctor
+          pch db check
+      - name: Scan
+        id: scan
+        env:
+          ADO_PAT: ${{ secrets.ADO_PAT }}
+          GITHUB_TOKEN: ${{ secrets.PCH_GITHUB_TOKEN }}
+          GITHUB_APP_PRIVATE_KEY: ${{ secrets.PCH_GITHUB_APP_PRIVATE_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL || vars.DATABASE_URL }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          AIKIDO_CLIENT_SECRET: ${{ secrets.AIKIDO_CLIENT_SECRET }}
+          SERVICENOW_PASSWORD: ${{ secrets.SERVICENOW_PASSWORD }}
+        run: |
+          echo "started=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          args=()
+          # The runner is ephemeral: a local raw-response cache would be thrown away, so only cache to a real artifact store.
+          if [ "$ARTIFACT_STORE" = "local" ]; then args+=(--no-cache); fi
+          rc=0
+          pch scan "${args[@]}" || rc=$?
+          echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
+          exit "$rc"
+      - name: Job summary
+        if: ${{ always() && steps.scan.outputs.exit_code != '' }}
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL || vars.DATABASE_URL }}
+          SCAN_EXIT_CODE: ${{ steps.scan.outputs.exit_code }}
+          SCAN_STARTED: ${{ steps.scan.outputs.started }}
+        run: pch scans summary --exit-code "$SCAN_EXIT_CODE" --since "$SCAN_STARTED" >> "$GITHUB_STEP_SUMMARY"
+      - name: Job summary (pre-flight failed)
+        if: ${{ failure() && steps.scan.outcome == 'skipped' }}
+        run: |
+          {
+            echo "## Pipeline Compliance Hub: scheduled scan"
+            echo
+            echo "**Result:** did not start. Install, \`pch doctor\` or \`pch db check\` failed; see the job log (secrets are masked there)."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Prune old scans
+        if: ${{ success() && github.event.inputs.prune != 'false' && (vars.RETENTION_KEEP_SCANS != '' || vars.RETENTION_MAX_AGE_DAYS != '') }}
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL || vars.DATABASE_URL }}
+        run: pch scans prune

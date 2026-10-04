@@ -112,6 +112,7 @@ FIELD_DOCS: dict[str, list[tuple[str, str]]] = {
         ("health_ready_cache_seconds", "How long a readiness result is cached (0-300)."),
         ("retention_keep_scans", "Default `--keep` for `pch scans prune` (unset = no default)."),
         ("retention_max_age_days", "Default `--older-than` for `pch scans prune` (unset = no default)."),
+        ("scan_stale_hours", "The dashboard shows a warning banner when the latest complete scan is older than this many hours (1-8760), or when the latest scan failed. Set it above your scan interval."),
     ],
 }
 

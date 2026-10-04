@@ -29,12 +29,30 @@
         </select>
       </form>
       {% endif %}
+      {% if freshness and freshness.state != 'none' %}
+      <span id="last-scan" class="{{ 'font-semibold text-amber-700 dark:text-amber-300' if freshness.state != 'ok' else '' }}" title="Latest complete scan{{ ' (' ~ freshness.scan_id ~ ')' if freshness.scan_id }}">Last scan: {% if freshness.age_text %}{{ freshness.age_text }} ({{ freshness.mode }}){% else %}none complete{% endif %}</span>
+      {% endif %}
       {% if docs_enabled %}<a href="/api/docs" class="hover:underline">API</a>{% endif %}
       {% if principal and principal.auth_type != 'none' %}<span class="text-slate-700 dark:text-slate-200" title="{{ principal.id }}">{{ principal.name or principal.id }}</span><a href="/.auth/logout" class="hover:underline">Sign out</a>{% endif %}
       <button type="button" data-action="toggle-theme" class="rounded border border-slate-300 px-2 py-0.5 hover:bg-slate-100 dark:border-slate-600 dark:hover:bg-slate-800" aria-label="Toggle dark mode">Theme</button>
     </div>
   </div>
 </header>
+{% if freshness and freshness.state in ('stale', 'failed') %}
+<div id="freshness-banner" role="alert" class="border-b border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-100">
+  <div class="mx-auto max-w-[1400px]">
+  {% if freshness.state == 'failed' %}
+    <b>The latest scan failed</b>{% if freshness.failed_age_text %} ({{ freshness.failed_age_text }}){% endif %}{% if freshness.failed_reason %}: {{ freshness.failed_reason }}{% endif %}.
+    {% if freshness.age_text %}The data below comes from the last complete scan, {{ freshness.age_text }}.{% else %}No scan has completed yet.{% endif %}
+  {% elif freshness.age_text %}
+    <b>This data is out of date.</b> The latest complete scan ran {{ freshness.age_text }} ({{ freshness.age_hours }} h; the limit is {{ freshness.stale_hours }} h, <code>SCAN_STALE_HOURS</code>). Check the scan schedule.
+  {% else %}
+    <b>No scan has completed yet.</b> Check the scan schedule.
+  {% endif %}
+  <a class="ml-1 underline" href="{{ u('/scans') }}">Scan history</a>
+  </div>
+</div>
+{% endif %}
 <main class="mx-auto max-w-[1400px] px-4 py-4">
 {% block content %}{% endblock %}
 </main>

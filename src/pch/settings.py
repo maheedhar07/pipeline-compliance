@@ -179,6 +179,9 @@ class Settings(BaseSettings):
     # Retention defaults for `pch scans prune` (None = disabled): keep the newest N scans / delete older than D days.
     retention_keep_scans: int | None = Field(None, ge=1)
     retention_max_age_days: int | None = Field(None, ge=1)
+    # Dashboard freshness: the header shows a warning when the latest complete scan is older than this (or the latest scan failed),
+    # so a broken schedule is visible. Set it a little above the scan interval (daily schedule -> 36).
+    scan_stale_hours: int = Field(36, ge=1, le=8760)
 
     @field_validator("log_format", "uvicorn_access_log", "retention_keep_scans", "retention_max_age_days", mode="before")
     @classmethod

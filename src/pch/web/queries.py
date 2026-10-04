@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, select
@@ -16,6 +17,7 @@ from pch.model.findings import SEVERITY_ORDER
 from pch.model.repo import PROVIDER_LABEL
 from pch.store import repository as store
 from pch.store.models import CollectionErrorRow, FindingRow, RepoResultRow, ScanRow
+from pch.timeutil import utcnow
 
 STATUS_RANK = {"NON_COMPLIANT": 0, "AT_RISK": 1, "COMPLIANT": 2, "NOT_SCANNED": 3}
 FINDING_RANK = {"FAIL": 0, "WARN": 1, "UNKNOWN": 2, "WAIVED": 3, "PASS": 4, "NOT_APPLICABLE": 5}  # nosec B105 - status rank map, not a password
@@ -39,6 +41,45 @@ def resolve_scan(s: Session, scan_id: str | None) -> ScanRow | None:
         if row:
             return row
     return store.latest_scan(s)
+
+
+def humanize_age(delta: timedelta) -> str:
+    """"just now", "5 min ago", "3 h ago", "2 d ago" (a future time, e.g. clock skew, counts as "just now")."""
+    secs = max(0, int(delta.total_seconds()))
+    if secs < 90:
+        return "just now"
+    if secs < 90 * 60:
+        return f"{round(secs / 60)} min ago"
+    if secs < 48 * 3600:
+        return f"{round(secs / 3600)} h ago"
+    return f"{secs // 86400} d ago"
+
+
+def freshness(s: Session, stale_hours: int, now: datetime | None = None) -> dict[str, Any]:
+    """How current the data is, for the header and the warning banner (a broken schedule must be visible).
+
+    ``state``: ``none`` (no scans) | ``ok`` | ``stale`` (latest complete scan older than ``stale_hours``, or none complete) |
+    ``failed`` (the newest scan failed, so the data shown is older than the last attempt)."""
+    now = now or utcnow()
+    newest = next(iter(store.list_scans(s, 1)), None)
+    if newest is None:
+        return {"state": "none"}
+    done = store.latest_scan(s)
+    out: dict[str, Any] = {"state": "ok", "stale_hours": stale_hours, "scan_id": None, "age_text": None, "mode": None, "age_hours": None, "failed_reason": None}
+    if done is not None:
+        when = done.finished_at or done.started_at
+        age = now - when
+        out.update(scan_id=done.id, mode=done.mode, age_text=humanize_age(age), age_hours=round(age.total_seconds() / 3600, 1))
+        if age > timedelta(hours=stale_hours):
+            out["state"] = "stale"
+    else:
+        out["state"] = "stale"
+    if newest.status == "failed" and (done is None or newest.started_at > done.started_at):
+        out["state"] = "failed"
+        err = (newest.summary or {}).get("error")
+        out["failed_reason"] = str(err)[:160] if err else None
+        out["failed_age_text"] = humanize_age(now - (newest.finished_at or newest.started_at))
+    return out
 
 
 def project_of(repo_key: str) -> str:

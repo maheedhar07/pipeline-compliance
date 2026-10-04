@@ -180,7 +180,8 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
     def ctx(request: Request, s, scan_id: str | None, **extra: Any) -> dict[str, Any]:
         scan = Q.resolve_scan(s, scan_id)
         scans_list = store.list_scans(s, 20)
-        return {"request": request, "scan": scan, "scans": scans_list, "scan_param": scan_id or "", "multi_host": Q.multi_host(s, scan), **extra}
+        return {"request": request, "scan": scan, "scans": scans_list, "scan_param": scan_id or "", "multi_host": Q.multi_host(s, scan),
+                "freshness": Q.freshness(s, s_.scan_stale_hours), **extra}
 
     def no_data(request: Request) -> HTMLResponse:
         return templates.TemplateResponse(request, "empty.html", {"request": request, "scan": None, "scans": [], "scan_param": ""}, status_code=200)
