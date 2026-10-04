@@ -10,6 +10,12 @@ SECRET_FIELD = re.compile(
     r"(?i)^(password|pwd|secret|client_?secret|access_?token|refresh_?token|token|api_?key|apikey|"
     r"accesskey|connection_?string|connectionstring|servicePrincipalKey|publishProfile|authorization)$"
 )
+# Field names that merely END in a secret-ish word (apiToken, authToken, privateKey, id_token, AWS_SECRET_ACCESS_KEY, ...).
+# Paging cursors are not credentials and the collectors read them back from the cached body.
+SECRET_FIELD_SUFFIX = re.compile(
+    r"(?i)(secret|password|passwd|pwd|token|api_?key|private_?key|secret_?key|secret_?access_?key|access_?key|account_?key|sas_?token)$"
+)
+NOT_SECRET_FIELD = re.compile(r"(?i)^(continuation_?token|next_?page_?token|next_?token|page_?token|token_?type)$")
 KNOWN_PREFIXES = re.compile(r"^(ghp_|gho_|github_pat_|xox[bap]-|AKIA|sk-|eyJ[A-Za-z0-9_-]{20,}\.)")
 REDACTED = "***REDACTED***"
 SUSPECTED = "<redacted:suspected-secret>"
@@ -38,15 +44,22 @@ def _entropy(s: str) -> float:
     return -sum(c / n * math.log2(c / n) for c in Counter(s).values())
 
 
+def _secret_field(name: str) -> bool:
+    return bool(SECRET_FIELD.match(name) or (SECRET_FIELD_SUFFIX.search(name) and not NOT_SECRET_FIELD.match(name)))
+
+
 def _is_var_entry(v: Any) -> bool:
     return isinstance(v, dict) and "value" in v and ("isSecret" in v or "allowOverride" in v or len(v) <= 3)
 
 
+# NOTE (ReDoS): both patterns are linear. Indentation/spacing uses [ \t] (never \s, which also spans newlines and made
+# "^\s*-?\s*" cubic on blank-line runs); the key word is found by a lookahead and consumed possessively.
+_KEYWORDS = r"(?:pass|pwd|secret|token|key|connstr|connectionstring)"
 _YAML_KV = re.compile(
-    r"(?im)^(?P<pre>\s*-?\s*['\"]?[\w.\-]*(?:pass|pwd|secret|token|key|connstr|connectionstring)[\w.\-]*['\"]?\s*:\s*)(?P<val>[^\s$#].*)$"
+    r"(?im)^(?P<pre>[ \t]*+-?[ \t]*+['\"]?(?=[\w.\-]*" + _KEYWORDS + r")[\w.\-]++['\"]?[ \t]*+:\s*+)(?P<val>[^\s$#].*)$"
 )
 _YAML_NAME_VALUE = re.compile(
-    r"(?im)^(?P<pre>\s*-?\s*name:\s*['\"]?[\w.\-]*(?:pass|pwd|secret|token|key|connstr|connectionstring)[\w.\-]*['\"]?\s*\n\s*value:\s*)(?P<val>[^\s$].*)$"
+    r"(?im)^(?P<pre>[ \t]*+-?[ \t]*+name:[ \t]*+['\"]?(?=[\w.\-]*" + _KEYWORDS + r")[\w.\-]++['\"]?[ \t]*+\n\s*+value:[ \t]*+)(?P<val>[^\s$].*)$"
 )
 
 
@@ -68,7 +81,7 @@ def redact_json(obj: Any, key_hint: str | None = None) -> Any:
                 if is_secret or (suspicious and v.get("value") not in (None, "")):
                     nv["value"] = None if is_secret else SUSPECTED
                 out[k] = nv
-            elif isinstance(k, str) and SECRET_FIELD.match(k) and isinstance(v, str | int | float):
+            elif isinstance(k, str) and _secret_field(k) and isinstance(v, str | int | float):
                 out[k] = REDACTED
             else:
                 out[k] = redact_json(v, k)

@@ -17,7 +17,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any, Literal
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi import Path as PathParam
@@ -145,6 +145,7 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
 
     templates = Jinja2Templates(directory=HERE / "templates", context_processors=[template_context])
     env = templates.env
+    app.state.templates = templates
     env.filters["pct"] = lambda v, d=1: "n/a" if v is None else f"{v:.{d}f}%"
     env.filters["tojson_safe"] = json_for_script
     env.filters["safe_url"] = safe_url
@@ -164,7 +165,8 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
         d = {k: v for k, v in params.items() if v not in (None, "")}
         if scan_param:
             d["scan"] = scan_param
-        return path + ("?" + urlencode(d) if d else "")
+        # project/repo names are inserted into the path: encode them (a "#", "?" or "%" must not change the target)
+        return quote(path, safe="/") + ("?" + urlencode(d) if d else "")
 
     env.globals["u"] = u
 

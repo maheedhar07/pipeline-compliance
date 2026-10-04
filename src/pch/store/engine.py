@@ -47,7 +47,9 @@ def build_engine(url: str | URL, settings: Settings | None = None) -> Engine:
         # Created eagerly so a missing `azuresql` extra fails at startup with a clear message; no network call happens here.
         credential = azure_sql.default_credential()
 
-    engine = create_engine(u, future=True, **kwargs)
+    # hide_parameters: DBAPI errors otherwise embed "[parameters: (...)]" (row values) in str(exc), which reaches logs,
+    # the scans table (failure reason) and OpenTelemetry exception events.
+    engine = create_engine(u, future=True, hide_parameters=True, **kwargs)
 
     if backend == "sqlite":
 

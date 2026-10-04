@@ -29,7 +29,7 @@ from pch.engine.migration import repo_readiness
 from pch.engine.registry import all_rules
 from pch.engine.runner import evaluate
 from pch.engine.scoring import apply_waivers, score_repo
-from pch.logging_setup import bind_scan
+from pch.logging_setup import bind_scan, scrub
 from pch.model.findings import Finding, Severity, Status
 from pch.model.pipeline import Pipeline
 from pch.model.repo import (
@@ -115,7 +115,7 @@ class Scanner:
         self.rules = all_rules()
 
     def err(self, source: str, subject: str, exc: BaseException | str) -> None:
-        msg = f"{type(exc).__name__}: {exc}" if isinstance(exc, BaseException) else exc
+        msg = scrub(f"{type(exc).__name__}: {exc}" if isinstance(exc, BaseException) else exc)  # persisted: never a secret
         self.errors.append((source, subject, msg[:400]))
         log.warning("collection error [%s] %s: %s", source, subject, msg)
 
@@ -175,7 +175,7 @@ class Scanner:
         repo_errors: list[tuple[str, str]] = []
 
         def rerr(source: str, exc: Exception | str) -> None:
-            msg = f"{type(exc).__name__}: {exc}" if isinstance(exc, Exception) else exc
+            msg = scrub(f"{type(exc).__name__}: {exc}" if isinstance(exc, Exception) else exc)  # persisted: never a secret
             repo_errors.append((source, msg[:300]))
             self.err(source, ref.key, exc)
 
@@ -308,7 +308,7 @@ class Scanner:
                 elif isinstance(exc, asyncio.CancelledError):
                     reason = REASON_INTERRUPTED
                 else:
-                    reason = f"{type(exc).__name__}: {exc}"
+                    reason = scrub(f"{type(exc).__name__}: {exc}")  # persisted in scans.summary: never a secret
                 try:
                     with session_scope(cfg.db_url) as s:
                         store.mark_failed(s, scan_id, reason)
@@ -398,7 +398,7 @@ class Scanner:
                     project, repo, exc = out
                     failed += 1
                     s.add(RepoResultRow(scan_id=scan_id, repo_key=f"{project}/{repo['name']}", project=project, repo=repo["name"], status="NOT_SCANNED", test_state="NOT_APPLICABLE"))
-                    s.add(FindingRow(scan_id=scan_id, repo_key=f"{project}/{repo['name']}", rule_id="COLLECTION-ERROR", category="SYS", severity="info", status="UNKNOWN", message=str(exc)[:300]))
+                    s.add(FindingRow(scan_id=scan_id, repo_key=f"{project}/{repo['name']}", rule_id="COLLECTION-ERROR", category="SYS", severity="info", status="UNKNOWN", message=scrub(str(exc))[:300]))
                     counts["NOT_SCANNED"] += 1
                     continue
                 ctx, findings, sc, mig_score, blockers = out

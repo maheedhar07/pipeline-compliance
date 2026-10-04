@@ -48,13 +48,16 @@ _AUTH_HEADER = re.compile(
 )
 _BEARER = re.compile(r"(?i)\b(?P<s>bearer)\s+(?-i:(?=[A-Za-z0-9\-._~+/]*[0-9A-Z]))[A-Za-z0-9\-._~+/]{8,}=*")
 _BASIC = re.compile(r"(?i)\b(?P<s>basic)\s+(?-i:(?=[A-Za-z0-9+/]*[A-Z])(?=[A-Za-z0-9+/]*[a-z0-9]))[A-Za-z0-9+/]{8,}={0,2}")
-_URL_CREDS = re.compile(r"(?P<s>\b[a-zA-Z][a-zA-Z0-9+.\-]*://)[^\s/@?#]+@")
+_URL_CREDS = re.compile(r"(?P<s>(?<![a-zA-Z0-9+.\-])[a-zA-Z][a-zA-Z0-9+.\-]*+://)[^\s/@?#]++@")
+# ReDoS: every pattern here must be linear on adversarial input (log lines can contain request paths and upstream
+# text). The key word is anchored at a word start (lookbehind), located by a lookahead and consumed possessively.
 _KV = re.compile(
-    r"(?i)(?P<k>[\w.\-]*" + _KEY + r"[\w.\-]*[\"']?\s*[=:]\s*)(?:(?P<q>[\"'])(?P<qv>.*?)(?P=q)|(?P<v>[^\s\"'&;,)\]}]+))"
+    r"(?i)(?<![\w.\-])(?P<k>(?=[\w.\-]*" + _KEY + r")[\w.\-]++[\"']?\s*+[=:]\s*+)"
+    r"(?:(?P<q>[\"'])(?P<qv>.*?)(?P=q)|(?P<v>[^\s\"'&;,)\]}]++))"
 )
 _KNOWN = re.compile(
     r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|"
-    r"sk-[A-Za-z0-9_\-]{20,}|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]*)"
+    r"sk-[A-Za-z0-9_\-]{20,}|eyJ[A-Za-z0-9_\-]{10,}+\.[A-Za-z0-9_\-]{10,}+\.[A-Za-z0-9_\-]*+)"
 )
 # "/" is excluded so URL paths are not mistaken for tokens (base64 tokens with "/" are still caught by key=value / exact match)
 _LONG_TOKEN = re.compile(r"[A-Za-z0-9+_\-]{24,}={0,2}")

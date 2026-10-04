@@ -1,0 +1,85 @@
+# Independent security review (T7)
+
+Scope: the T1-T6 hardening diff (`git diff 2f41ebd..HEAD`) plus the pre-existing code it sits on. Target deployment: Azure App Service
+(Linux container) behind Easy Auth / Entra ID, Azure SQL or Postgres, Key Vault, Blob, Application Insights. Properties under test:
+report-only (never writes to ADO / GitHub / Sonar / Aikido / ServiceNow), never persists secrets, fails closed.
+
+## Method
+
+* Read all of `web/` (auth, guard, security, app, health, templates, static JS), `collectors/` (transport, http, redact, every client),
+  `providers/`, `logging_setup.py`, `telemetry.py`, `settings.py`, `orchestrator.py`, `store/` (engine, locks, azure_sql, queries),
+  `retention.py`, `cli.py serve/scan`, CI workflow, Dockerfile, dependabot.
+* Exploit tests written against raw ASGI scopes (no client-side path normalisation), `httpx.MockTransport`, and adversarial strings
+  (65 KB runs) with wall-clock budgets. Every confirmed finding has a regression test in `tests/test_security_review.py`, which fails on
+  the pre-fix code.
+* Tooling (treated as leads, verified by hand): `bandit -c pyproject.toml -r src` (clean), `pip-audit` on `requirements.lock` and
+  `requirements-azure.lock` (clean), `semgrep --config p/python --config p/fastapi --config p/secrets src` (2 hits, both false
+  positives: SHA-1 used as a non-security cache key with `usedforsecurity=False`; a log line that names a secret *file*, not its value).
+
+## Findings
+
+| ID | Severity | Area | Description | Status | Test |
+|---|---|---|---|---|---|
+| SEC-01 | High | DoS / robustness | Catastrophic regex backtracking. `logging_setup.scrub` (`_KV`, `_URL_CREDS`, `_KNOWN`) was quadratic: a 65 KB request path or upstream text such as `token` x 13 000 or `a.` x 30 000 pinned the event loop for minutes, because every log line passes through it (an authenticated user could stall the whole app with one long URL; the scan could be stalled by hostile text in an upstream error). `collectors/redact.redact_text` (`_YAML_KV`, `_YAML_NAME_VALUE`) was cubic on blank-line / whitespace runs (500 newlines = 2.3 s, 1 000 = minutes), reachable by anyone who can commit a pipeline YAML / repo file the scanner fetches; `asyncio.timeout` cannot interrupt a regex, so the scan timeout would not fire. `PY_TEST_DEP` was quadratic on blank lines. All rewritten with word-start lookbehinds, lookahead key detection and possessive quantifiers; semantics preserved. | Fixed | `test_scrub_is_linear_on_adversarial_log_text`, `test_redact_text_is_linear_on_adversarial_pipeline_text`, `test_scrub_still_scrubs_after_the_linear_rewrite`, `test_redact_text_still_redacts_after_the_linear_rewrite` |
+| SEC-02 | Medium | Secrets / raw cache | `redact_json` matched secret field names exactly, so `apiToken`, `authToken`, `id_token`, `privateKey`, `bearerToken`, `AWS_SECRET_ACCESS_KEY` were written unredacted to the raw cache (local dir or Blob). Added a suffix rule (`...token/secret/password/pwd/apikey/privatekey/accesskey`); paging cursors (`continuationToken`, `nextPageToken`) and `tokenType` are exempt because the collectors read them back from the cache. | Fixed | `test_redact_json_covers_suffixed_secret_field_names_but_keeps_paging_cursors` |
+| SEC-03 | Medium | Secrets / DB | Exception text was persisted unscrubbed in `collection_errors`, `COLLECTION-ERROR` findings and `scans.summary.error`. Pydantic validation errors embed `input_value=` (raw upstream data), so a credential-bearing field could reach the database and the dashboard. All four sinks now pass through `scrub()`. | Fixed | `test_scanner_err_scrubs_before_the_text_is_kept_for_the_database`, `test_failed_scan_reason_is_scrubbed_in_the_scans_table` |
+| SEC-04 | Medium | Secrets / logs / telemetry | SQLAlchemy `DBAPIError` text includes `[parameters: (...)]` (row values) and reaches logs, `scans.summary.error` and OpenTelemetry exception events. Engine now built with `hide_parameters=True`. | Fixed | `test_sql_error_text_hides_bound_parameters` |
+| SEC-05 | Low | Secrets | `repr(Settings())` / `str()` exposed `DATABASE_URL`, which may embed a password. Field is `repr=False`. | Fixed | `test_settings_repr_does_not_contain_the_database_password` |
+| SEC-06 | Low | Injection (logic) | `findings_list(project=...)` used `LIKE 'project/%'`; `%` / `_` in the query parameter acted as wildcards (not SQL injection; values are bound). Now `startswith(..., autoescape=True)`. | Fixed | `test_findings_project_filter_treats_wildcards_literally` |
+| SEC-07 | Low | Web | The `u()` template helper put project / repo names into link paths unencoded (`#`, `?`, `%` change the link target). Path is now percent-encoded (the `href` was already HTML-escaped; no XSS). | Fixed | `test_u_helper_encodes_path_segments` |
+| SEC-08 | Medium | AuthN (platform) | Everything depends on Easy Auth stripping client-supplied `X-MS-CLIENT-PRINCIPAL*` on every non-excluded path, on `WEBSITE_AUTH_ENABLED` being exposed to the container, and on the front end being the only ingress (no private endpoint / SCM / direct container port that skips it). The code fails closed without the env flag but cannot prove the rest. | Verify on Azure | n/a (see go-live checklist) |
+| SEC-09 | Low | Telemetry | OpenTelemetry span *events* (`exception.message`, stack trace) are not passed through `RedactingFilter`; URL attributes are sanitised at span start only. Parameters are now excluded (SEC-04). | Verify on Azure | n/a |
+| SEC-10 | Low | Read-only guard | `ALLOWED_POSTS` is anchored at the end only and not bound to a host, so a POST to `<any host>/<any prefix>/api/oauth/token` passes. Not exploitable against ADO / Sonar / ServiceNow (no such mutating route), and anchoring the start would break an Aikido URL configured with a path prefix. Every client still goes through `ReadOnlyTransport` (verified: it is the only `httpx.AsyncClient` in the package, and wraps Recording / Replay / Mock transports). Lower-case and unusual methods, `/preview/..` tricks and `previewRun=false` are all blocked. | Accepted | `test_read_only_guard_blocks_mutations_in_any_spelling`, `test_every_httpx_client_is_built_through_the_read_only_wrapper` |
+| SEC-11 | Low | Config | Source base URLs may be `http://` (credentials in clear) even in prod; `SCAN_TIMEOUT_MINUTES` > `SCAN_LOCK_STALE_MINUTES` would let a second scan steal the lock from a still-running one (defaults 240 < 360 are safe). Operator-controlled settings; documented rather than rejected so on-prem installs do not break. | Accepted | `test_stale_lock_window_is_longer_than_the_scan_timeout_by_default` |
+| SEC-12 | Low | Supply chain | CI installs dev tools unpinned (`pip install -e ".[dev]"`, `pip install bandit pip-audit`); the Docker builder runs `pip install --no-deps .` whose PEP 517 build backend is fetched without hashes. Runtime dependencies are hash-locked and base images / actions are SHA-pinned (SHAs verified to exist upstream). | Accepted | n/a |
+| SEC-13 | Low | DoS | `RecordingTransport` buffers whole upstream responses; no response size cap. Upstreams are the configured, authenticated systems. The mssql engine has no connect timeout: a hung DB can occupy the sync request thread pool (health/live is async and unaffected). | Accepted | n/a |
+| SEC-14 | Info | Host header | `hostname_of` is lenient (`app.example.net:80@evil.com` passes as `app.example.net`). Verified that redirects are built from the parsed host and never reflect the attacker part; no impact. | Accepted | n/a |
+
+### Checked, no issue found
+
+* **Auth bypass probes** (raw ASGI): `/health/live/`, `/health/live/../repos`, `/health/ready/x`, upper-case health, `/api/v1/health/..`, `/static`,
+  `//static/x`, `/static/../repos`, `/static/%2e%2e/..`, backslash traversal, HEAD / OPTIONS / POST / TRACE: none reach data without a
+  principal; static traversal is 404 even when authenticated; unknown paths answer 401 (no existence leak) because auth runs before routing;
+  role match is exact and case-sensitive; malformed / oversized principal headers deny with 401; parser exceptions deny.
+* **XSS / CSP**: autoescape on, no `|safe` / `Markup` outside `json_for_script` (escapes `< > &` and U+2028/9), `safe_url` allows only `http(s)`,
+  no inline script or `innerHTML`, strict CSP on every response including error pages, swagger inline script hashed and dev-only.
+* **CSV export**: formula prefixes neutralised. **Request id**: strict regex, `fullmatch`, control characters escaped in the path log field.
+* **SSRF / traversal**: paging builds URLs from the configured base plus a `continuationToken` parameter (no absolute next-links followed);
+  redirects to another origin drop `Authorization` / basic auth (httpx behaviour, now tested for header and tuple auth);
+  `LocalArtifactStore` / `FileSecretProvider` reject `..`, absolute, backslash and escaping symlinks.
+* **DB**: no `text()` with interpolation (only `SELECT 1`); scan lock is an INSERT + compare-and-swap UPDATE; Azure SQL token never logged.
+* **Pipeline storage**: script bodies omitted, secret-looking inputs dropped, variable values never stored.
+* **CI**: `pull_request` (not `_target`), `contents: read`, `persist-credentials: false`, no `github.event.*` in `run:`, checksum-verified gitleaks.
+  **Docker**: digest-pinned base, `--require-hashes`, non-root uid 10001, `PCH_LOCKFILE` is a build-time choice only.
+
+## Residual risks
+
+* Easy Auth is the only authentication; with `AUTH_ALLOW_ANY_AUTHENTICATED=true` and a multi-tenant app registration any signed-in user
+  passes. Use the role allowlist, single tenant, and "Assignment required = Yes".
+* Regex-based redaction is best effort for free text; structured fields and exact registered secrets are the strong controls.
+* Over-scrubbing is intentional: long high-entropy identifiers (for example a Sonar project key) can show as `***REDACTED***` in logs / error rows.
+* Dashboard data (compliance findings, repo names, owners) is sensitive to anyone holding the reader role.
+
+## `# VERIFY:` markers and go-live checklist
+
+Confirm on a real App Service before go-live.
+
+**Easy Auth / ingress** (`web/auth.py`, `web/guard.py`, `settings.py`, `docs/DEPLOY_AZURE.md`)
+* `WEBSITE_AUTH_ENABLED=True` reaches the container when Authentication is on (`guard.py:62`, `settings.py:131`).
+* Client-supplied `X-MS-CLIENT-PRINCIPAL*` is stripped on every request, including excluded health paths, private endpoints and SCM (`auth.py:11`). Send a forged header to the public URL and expect 401.
+* Principal header shape and `roles` claim type (`auth.py:11`).
+* The container is reachable only through the front end, so `FORWARDED_ALLOW_IPS=*` is safe (`settings.py:121`; `DEPLOY_AZURE.md`).
+* Health probe `Host` header is allowed by `ALLOWED_HOSTS`; health check needs >= 2 instances (`DEPLOY_AZURE.md`).
+
+**Lifecycle** (`settings.py:146`, `settings.py:149`, `.env.example:100`)
+* SIGTERM to SIGKILL window (~30 s) vs `GRACEFUL_SHUTDOWN_SECONDS`; ARR idle timeout (~230 s) vs `KEEP_ALIVE_SECONDS`.
+
+**Azure data plane** (`store/azure_sql.py:98`, `DEPLOY_AZURE.md`)
+* Azure SQL token auth works after `Trusted_Connection` / `UID` / `PWD` stripping; managed identity / federated credential variables for the scan job.
+
+**Telemetry** (`telemetry.py:70`)
+* No URL query, credential or row value in Application Insights `exceptions` / `dependencies` / `requests`.
+
+**Source systems** (`collectors/aikido.py:18,20,22,39,44`, `collectors/transport.py:21,22`, `ado/service_conn.py:16`, `ado/runs.py:116`, `ado/environments.py:47`)
+* Aikido token / repository / issue endpoints and field names (the two token paths in `ALLOWED_POSTS`); ARM connection scope fields;
+  where CRQ numbers appear in release data; how the ServiceNow check shows up in environments. Re-run the collectors against fixtures after any change.

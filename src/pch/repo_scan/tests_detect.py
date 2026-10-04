@@ -20,7 +20,7 @@ APP_LANGS = set(LANG_EXT)
 IGNORED_DIRS = ("node_modules/", "bin/", "obj/", ".git/", "vendor/", "dist/", "build/", "packages/")
 DOTNET_TEST_REF = re.compile(r"xunit|nunit|MSTest|Microsoft\.NET\.Test\.Sdk", re.I)
 JS_TEST_DEP = re.compile(r'"(jest|vitest|mocha|jasmine|ava|@playwright/test|cypress)"', re.I)
-PY_TEST_DEP = re.compile(r"(?im)^\s*(pytest|unittest2|nose2?)\b|\bpytest\b")
+PY_TEST_DEP = re.compile(r"(?im)^[ \t]*+(pytest|unittest2|nose2?)\b|\bpytest\b")
 
 
 def _lang_files(paths: Iterable[str]) -> dict[str, list[str]]:

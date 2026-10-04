@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     app_env: Literal["dev", "test", "prod"] = "dev"
 
     # --- storage / paths
-    database_url: str = "sqlite:///data/pch.db"
+    database_url: str = Field("sqlite:///data/pch.db", repr=False)  # may embed a password: keep it out of repr(settings)
     data_dir: Path = Path("data")
     config_dir: Path = Path("config")
 

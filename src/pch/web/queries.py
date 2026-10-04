@@ -159,7 +159,7 @@ def findings_list(s: Session, scan_id: str, *, project: str | None = None, categ
                   status: str | None = None, severity: str | None = None, repo_key: str | None = None, limit: int = 200, offset: int = 0) -> dict[str, Any]:
     q = select(FindingRow).where(FindingRow.scan_id == scan_id)
     if project:
-        q = q.where(FindingRow.repo_key.like(f"{project}/%"))
+        q = q.where(FindingRow.repo_key.startswith(f"{project}/", autoescape=True))  # "%" / "_" are literals, not wildcards
     if category:
         q = q.where(FindingRow.category == category)
     if rule:

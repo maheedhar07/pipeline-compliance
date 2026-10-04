@@ -67,6 +67,10 @@ def strip_url(url: str) -> str:
     return urlunsplit((p.scheme, netloc, p.path, "", ""))
 
 
+# VERIFY: span *events* (``exception.message`` / ``exception.stacktrace`` recorded by the FastAPI/httpx/SQLAlchemy
+# instrumentations) are not passed through RedactingFilter; check in Application Insights (exceptions table) that no
+# URL query or credential appears there. SQLAlchemy parameters are already excluded (hide_parameters=True in
+# pch.store.engine) and URL attributes are rewritten below.
 def build_span_sanitizer() -> Any:
     """SpanProcessor that rewrites URL attributes at span start (before any exporter sees them)."""
     from opentelemetry.sdk.trace import SpanProcessor
