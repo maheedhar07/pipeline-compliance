@@ -1,2 +1,6 @@
 # Fake test secret in an already-pushed commit (history is not rewritten); the test values were replaced afterwards.
 3bd0b441b057191ea560ea3dd2ad0a93939620c7:tests/test_config_doctor.py:generic-api-key:13
+# T6: fake secrets in test_ops.py (redaction test inputs) in an already-pushed commit; the values were split afterwards.
+5038da1a11415451bcd20ced362aa5a2c1521410:tests/test_ops.py:jwt:79
+5038da1a11415451bcd20ced362aa5a2c1521410:tests/test_ops.py:generic-api-key:77
+5038da1a11415451bcd20ced362aa5a2c1521410:tests/test_ops.py:generic-api-key:185

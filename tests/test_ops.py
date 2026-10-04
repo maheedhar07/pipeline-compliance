@@ -74,9 +74,9 @@ def lines(buf: io.StringIO) -> list[dict]:
 
 # ------------------------------------------------------------------ scrubbing
 SECRETS = [
-    ("Authorization: Bearer abcDEF123456789.xyz-TOKEN", "abcDEF123456789"),
+    ("Authorization: Bearer " + "abcDEF123456789" + ".xyz-TOKEN", "abcDEF123456789"),
     ("headers={'Authorization': 'Basic dXNlcjpwYXNzd29yZA=='}", "dXNlcjpwYXNzd29yZA"),
-    ("got Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.sig_abc-123", "eyJhbGciOiJIUzI1NiJ9"),
+    ("got Bearer " + ".".join(["eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiIxMjM0NTY3ODkwIn0", "sig_abc-123"]), "eyJhbGciOiJIUzI1NiJ9"),
     ("connect pat=hunter2hunter2 failed", "hunter2hunter2"),
     ("ADO_PAT=hunter2hunter2", "hunter2hunter2"),
     ("config token: s3cr3t-value-123", "s3cr3t-value-123"),
@@ -182,7 +182,7 @@ def test_text_format_has_context_and_redaction():
     configure_logging(S(log_format="text"), stream=buf)
     token = request_id_var.set("req-abcdef123456")
     try:
-        logging.getLogger("pch.test").error("token=abcdefgh12345678")
+        logging.getLogger("pch.test").error("token=" + "abcdefgh12345678")
     finally:
         request_id_var.reset(token)
     out = buf.getvalue()
