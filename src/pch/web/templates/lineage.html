@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% from "_macros.html" import provider_badge, deploy_chip %}
+{% block title %}Lineage · Pipeline Compliance Hub{% endblock %}
+{% block content %}
+<div class="mb-3 flex flex-wrap items-baseline gap-3">
+  <h1 class="text-lg font-semibold">Lineage</h1>
+  <span class="text-xs text-slate-500 dark:text-slate-400">{{ shown }} of {{ data.summary.repos }} repos shown</span>
+  <div class="ml-auto flex gap-2 text-xs">
+    <a class="rounded border border-indigo-300 px-2 py-1 text-indigo-700 hover:bg-indigo-50 dark:border-indigo-700 dark:text-indigo-300 dark:hover:bg-slate-800" href="/lineage.csv?{{ qs(base) }}">Export CSV</a>
+    <a class="rounded border border-indigo-300 px-2 py-1 text-indigo-700 hover:bg-indigo-50 dark:border-indigo-700 dark:text-indigo-300 dark:hover:bg-slate-800" href="/lineage.xlsx?{{ qs(base) }}">Export Excel</a>
+    <a class="px-1 py-1 text-indigo-600 hover:underline dark:text-indigo-300" href="/api/v1/lineage?{{ qs(base) }}">JSON</a>
+  </div>
+</div>
+<p class="mb-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300" role="note">
+  What comes out of each repository: CI pipelines, the pipelines that consume them, releases, and every stage with its last deployment. All of it is read from <b>Azure DevOps</b>
+  (pipelines, releases, environments and their run history); a GitHub repository that no Azure DevOps pipeline builds is invisible here. People appear only as the display name of whoever triggered the last deployment.
+</p>
+{% if not data.has_data %}
+<div class="rounded-lg border border-amber-300 bg-amber-50 px-3 py-6 text-center text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-100">This scan has no lineage data (it was made before the Lineage tab existed). Run <code>pch scan</code> again, or pick a newer scan.</div>
+{% else %}
+<form id="filters" class="mb-3 grid grid-cols-2 gap-2 rounded-lg border border-slate-200 bg-white p-3 md:grid-cols-4 lg:grid-cols-8 dark:border-slate-700 dark:bg-slate-800"
+      hx-get="/lineage" hx-target="#lineage-results" hx-select="#lineage-results" hx-swap="outerHTML" hx-push-url="true" hx-trigger="change, keyup changed delay:300ms from:#q">
+  <input type="hidden" name="scan" value="{{ scan_param }}">
+  {% macro sel(name, label, opts, cur, labels=None) %}
+  <label class="flex flex-col gap-0.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">{{ label }}
+    <select name="{{ name }}" class="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs font-normal text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100">
+      <option value="">All</option>
+      {% for o in opts %}<option value="{{ o }}" {{ 'selected' if cur == o }}>{{ (labels or {}).get(o, o) | replace('_',' ') }}</option>{% endfor %}
+    </select></label>
+  {% endmacro %}
+  {{ sel('project','Project', data.options.projects, filters.project) }}
+  {{ sel('provider','Code hosted on', data.options.providers, filters.provider, data.options.provider_labels) }}
+  {{ sel('target','Deploy target', data.options.targets, filters.target, TARGET_LABEL) }}
+  {{ sel('tier','Environment tier', data.options.tiers, filters.tier) }}
+  {{ sel('has_prod','Prod deployment', ['yes','no'], filters.has_prod, {'yes':'has prod deployment','no':'no prod deployment'}) }}
+  <label class="flex flex-col gap-0.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">Orphans only
+    <select name="orphans" class="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs font-normal text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100">
+      <option value="">No</option><option value="1" {{ 'selected' if filters.orphans }}>Yes: repos without pipelines</option></select></label>
+  <label class="col-span-2 flex flex-col gap-0.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">Search repo / pipeline / resource
+    <input id="q" name="q" value="{{ filters.q or '' }}" placeholder="e.g. ledger, orders-fn, aks-prod" class="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs font-normal text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"></label>
+</form>
+
+<div id="lineage-results">
+  {% set sm = data.summary %}
+  <div class="mb-3 flex flex-wrap gap-x-5 gap-y-1 text-xs text-slate-600 dark:text-slate-300">
+    <span><b class="tnum">{{ sm.repos }}</b> repos</span><span><b class="tnum">{{ sm.pipelines }}</b> pipelines</span><span><b class="tnum">{{ sm.releases }}</b> releases</span>
+    <span><b class="tnum">{{ sm.stages }}</b> stages</span><span><b class="tnum">{{ sm.with_prod }}</b> with a successful prod deployment</span>
+    <span><b class="tnum">{{ sm.empty_repos }}</b> without any pipeline</span><a class="text-indigo-600 hover:underline dark:text-indigo-300" href="#orphans"><b class="tnum">{{ data.orphans | length }}</b> orphans</a>
+  </div>
+  <div class="overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
+    {% for r in data.repos[:limit] %}
+    {% set rp = r.repo %}
+    <details class="group border-b border-slate-100 last:border-b-0 dark:border-slate-700" hx-get="{{ u('/lineage/' ~ rp.project ~ '/' ~ rp.name, fragment=1) }}" hx-trigger="toggle once" hx-target="find .chain-slot" hx-swap="innerHTML">
+      <summary class="flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 hover:bg-slate-50 dark:hover:bg-slate-700/40">
+        <span class="font-medium">{{ rp.name }}</span>{{ provider_badge(rp.provider, rp.provider_label) }}
+        <span class="text-xs text-slate-500 dark:text-slate-400">{{ rp.project }}</span>
+        {% set sy = r.summary %}
+        <span class="text-xs text-slate-600 dark:text-slate-300">
+          {% if sy.empty %}<span class="text-slate-400">no pipelines</span>{% else %}{{ sy.pipelines }} pipeline{{ '' if sy.pipelines == 1 else 's' }} → {{ sy.releases }} release{{ '' if sy.releases == 1 else 's' }}{% endif %}</span>
+        <span class="flex flex-wrap items-center gap-1">
+          {% for c in sy.chips %}<span class="inline-flex items-center gap-1 rounded border border-slate-200 px-1 text-[11px] dark:border-slate-600">{{ c.name }} {{ deploy_chip(c.status) }}</span>{% endfor %}{% if sy.more_chips %}<span class="text-[11px] text-slate-400">+{{ sy.more_chips }} more</span>{% endif %}
+        </span>
+        {% for t in sy.targets %}<a href="{{ u('/lineage', target=t) }}" class="rounded bg-slate-100 px-1 py-0.5 text-[11px] hover:bg-slate-200 dark:bg-slate-700">{{ TARGET_LABEL.get(t, t) }}</a>{% endfor %}
+        <a class="ml-auto text-xs text-indigo-600 hover:underline dark:text-indigo-300" href="{{ u('/lineage/' ~ rp.project ~ '/' ~ rp.name) }}">open</a>
+      </summary>
+      <div class="chain-slot px-3 pb-3 text-xs text-slate-500 dark:text-slate-400">Loading the chain… <a class="text-indigo-600 hover:underline dark:text-indigo-300" href="{{ u('/lineage/' ~ rp.project ~ '/' ~ rp.name) }}">open the full page</a> if it does not appear.</div>
+    </details>
+    {% else %}
+    <p class="px-3 py-8 text-center text-slate-500">No repositories match these filters.</p>
+    {% endfor %}
+  </div>
+  {% if data.repos | length > limit %}<p class="mt-2 text-xs text-slate-500">Showing the first {{ limit }} repos; narrow the filters (the exports contain all matching rows).</p>{% endif %}
+
+  <details id="orphans" class="mt-4 rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800" {{ 'open' if filters.orphans }}>
+    <summary class="cursor-pointer px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Orphans ({{ data.orphans | length }}): pipelines without a repo, releases without a build, repos without pipelines</summary>
+    <div class="overflow-x-auto px-3 pb-3">
+      <table class="w-full text-xs">
+        <thead><tr class="text-left text-[10px] uppercase text-slate-500 dark:text-slate-400"><th class="py-1 pr-2">Type</th><th class="pr-2">Project</th><th class="pr-2">Name</th><th>Why it is an orphan</th></tr></thead>
+        <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+        {% for o in data.orphans %}
+        <tr><td class="py-1 pr-2">{{ o.type }}</td><td class="pr-2">{{ o.project }}</td>
+            <td class="pr-2 font-medium">{% if o.type == 'repo' %}<a class="text-indigo-700 hover:underline dark:text-indigo-300" href="{{ u('/lineage/' ~ o.key) }}">{{ o.name }}</a>{% else %}<a class="text-indigo-700 hover:underline dark:text-indigo-300" href="{{ o.url | safe_url }}" target="_blank" rel="noopener noreferrer">{{ o.name }}</a>{% endif %}</td>
+            <td class="text-slate-600 dark:text-slate-300">{{ o.reason }}</td></tr>
+        {% else %}
+        <tr><td colspan="4" class="py-4 text-center text-slate-500">No orphans for these filters.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+</div>
+{% endif %}
+{% endblock %}

@@ -220,13 +220,85 @@ rule engine (53 rules, registry + @rule)  ->  findings  ->  scoring + waivers  -
 FastAPI + Jinja + HTMX + Chart.js dashboard   and   /api/v1 JSON API
 ```
 
-Pages: Overview, Repos (filter/sort/CSV), Repo detail, Findings, Rules (+drill-down), Testing, Deploy targets, Migration readiness, Scans. Every number links to the findings behind it. JSON mirrors live under `/api/v1/` (see `/api/docs`).
+Pages: Overview, Repos (filter/sort/CSV), Repo detail, Findings, Rules (+drill-down), Testing, Deploy targets, Migration readiness, Scans, Lineage (last tab, with CSV/Excel export). Every number links to the findings behind it. JSON mirrors live under `/api/v1/` (see `/api/docs`).
 
 Scoring: `score = 100 * sum(weight x credit) / sum(weight x applicable)` with critical 10, high 5, medium 3, low 1. A repo is **NON_COMPLIANT** with any critical failure, otherwise **AT_RISK** below 80 or with any high failure, otherwise **COMPLIANT**. Waivers turn failures into WAIVED until they expire.
 
 Test states per repo: `TESTS_OK`, `TESTS_LOW_COVERAGE`, `TESTS_NO_COVERAGE`, `TESTS_NOT_RUN`, `NO_TESTS`, `UNKNOWN`, `NOT_APPLICABLE` (ADF / Synapse / IaC / docs repos get the validation rule TST-006 instead).
 
 **Code on GitHub, pipelines in Azure DevOps.** Repos are discovered per ADO project from Azure Repos *and* from the repositories that build definitions and classic release artifacts point at, so GitHub-hosted repos appear everywhere (named `org/repo`, with a provider badge and a "Code hosted on" filter on the Repos page). Pipeline, release, environment, Sonar, Aikido and ServiceNow rules evaluate normally. Checks that need data only GitHub has (branch protection, CODEOWNERS, repository contents for test detection) are **UNKNOWN with a reason, never FAIL**, until a read-only GitHub reader is plugged in (see [docs/CUSTOMIZING.md](docs/CUSTOMIZING.md#plug-in-a-github-reader) and ADR-13 in [docs/DECISIONS.md](docs/DECISIONS.md)). A GitHub repo that no ADO pipeline references cannot be discovered from Azure DevOps. The demo estate is ~70% GitHub-hosted.
+
+## Lineage
+
+The **Lineage** tab (last in the navigation) maps what comes out of each repository, per scan, from Azure DevOps only:
+
+```
+repo (provider badge, default branch, service connection)
+  -> CI pipelines (YAML or classic: id, name, definition path, triggers, artifacts, YAML in another repo?)
+       -> downstream pipelines (YAML `resources.pipelines`, classic build completion)
+  -> releases (classic release definitions: artifact source, CD trigger, branch filters) or YAML deployment stages
+       -> stages in order (environment, tier, depends on, targets with resource names, service connections, approvals/gates)
+            -> last deployment per stage (version, artifact version, date, result, who triggered it: display name only)
+```
+
+* List view: one row per repo with a compact chain (pipelines -> releases -> environment chips with the last-deploy status); open a row (`<details>`, loaded on first open, no inline script) for the full chain, or use `/lineage/{project}/{repo}` for one repo (linked from the Repos table and the repo page). Filters: project, code host, deploy target, environment tier, has prod deployment (a prod stage whose last deployment succeeded), orphans only, search (repo, pipeline, release, environment, service connection and target resource names), plus the scan selector.
+* **Orphans**: pipelines whose repository cannot be resolved, releases with no linked build, and repos without any pipeline or release. A GitHub repo that no Azure DevOps pipeline builds is invisible to this scan by design (ADR-13); the page says so.
+* **Unknown is not "never".** A stage whose deployment data could not be collected shows `unknown (not collected)`; `never deployed` only appears when the lookup succeeded and found nothing. Failures are collection errors (see Scans), never a crash.
+* Data: reuses what the scan already collects (definitions, expanded YAML, environments and checks, service connections, build runs) plus read-only GETs for the last deployments (ADR-14): two calls per classic release definition, one call per YAML environment. `LINEAGE_ENABLED=false` skips them (stages show as unknown); `LINEAGE_DEPLOYMENTS_TOP` sizes the lookups.
+* People: only the **display name** of whoever triggered the last deployment is stored and shown. E-mails/UPNs are dropped, approvers are summarised as counts and kinds, never named.
+
+**Export.** *Export CSV* and *Export Excel* on the page (`GET /lineage.csv`, `GET /lineage.xlsx`) honour the current filters and scan (the same query parameters as the page and `GET /api/v1/lineage`), require the same authentication as every page, are never cached (`Cache-Control: no-store`) and download as `pch-lineage[-<project>]-<scan date>.csv|xlsx`. A larger export than `EXPORT_MAX_ROWS` (default 200000 rows) is refused with HTTP 413 and a message; narrow the filters. The CSV is UTF-8 with a BOM (Excel opens it correctly), CRLF line ends, one row per repo -> pipeline -> release/deploy-stage path (a repo without pipelines or releases still gets one row; orphans are in the Excel "Orphans" sheet and the JSON API). The workbook has three sheets: **Summary** (scan info, filters, counts by project / code host / deploy target / tier / last-deploy status), **Lineage** (the CSV columns; frozen header, autofilter, column widths, real Excel dates) and **Orphans**. It is written in streaming (write-only) mode. Spreadsheet formula injection: names are attacker-influenced, so every text cell is written with an explicit string type and a value starting with `=`, `+`, `-`, `@` also gets a leading apostrophe (same rule as `/repos.csv`); a test loads the workbook and asserts that no cell is a formula.
+
+JSON: `GET /api/v1/lineage` (same filters; `repos` with the nested documents, `orphans`, `summary`, `options`) and `GET /api/v1/lineage/{project}/{repo}`.
+
+<a id="lineage-export-columns"></a>
+**Export columns** (CSV and the Excel "Lineage" sheet; the order is stable, new columns are only ever appended):
+
+| # | Column | Meaning |
+|---|---|---|
+| 1 | `project` | ADO project the repo is grouped under. |
+| 2 | `repo` | Repo name (`org/repo` for GitHub-hosted code). |
+| 3 | `provider` | `azure_repos`, `github`, `github_enterprise` or `other_git`. |
+| 4 | `default_branch` | Default branch of the repo. |
+| 5 | `repo_service_connection` | Name of the service connection ADO uses to read the code (GitHub repos). |
+| 6 | `pipeline_kind` | `yaml`, `classic_build`; empty when the row has no CI pipeline. |
+| 7 | `pipeline_id` | Build definition id. |
+| 8 | `pipeline_name` | Build definition name. |
+| 9 | `pipeline_url` | Link to the definition in Azure DevOps. |
+| 10 | `definition_path` | YAML file name, or the classic definition's folder. |
+| 11 | `yaml_repo` | Repo that holds the YAML file (YAML only). |
+| 12 | `yaml_in_other_repo` | `yes` when the YAML lives in a different repo than the code (`resources.repositories` + `checkout:`), else `no`. |
+| 13 | `defined_in_repo` | Set when this row's pipeline is defined in ANOTHER repo (the one named here) and builds this repo's code. |
+| 14 | `ci_trigger` | CI trigger: branches (and paths), `CI off`, or empty when unknown. |
+| 15 | `pr_trigger` | PR trigger branches / `PR off` (empty = not in the definition: branch policy). |
+| 16 | `schedules` | Scheduled runs. |
+| 17 | `artifacts` | What the pipeline publishes (`artifact: drop`, `image: repo`, `package: nuget`). |
+| 18 | `upstream_pipelines` | Pipelines this one consumes (`resources.pipelines`, classic build-completion trigger). |
+| 19 | `downstream_pipelines` | Pipelines that consume this one, with their repo key. |
+| 20 | `ci_last_run_status` | Result of the last completed build (`succeeded`, `failed`, ...). |
+| 21 | `ci_last_run_number` | Its build number. |
+| 22 | `ci_last_run_time_utc` | When it finished (real Excel date). |
+| 23 | `release_kind` | `classic_release` or `yaml_stages` (the stage columns belong to the YAML pipeline); empty if none. |
+| 24 | `release_id` | Classic release definition id. |
+| 25 | `release_name` | Classic release definition name. |
+| 26 | `release_url` | Link to the release definition. |
+| 27 | `release_source` | Artifact source(s): `Build: <pipeline>` or `GitHub: org/repo@branch`. |
+| 28 | `release_trigger` | Continuous-deployment trigger and branch filters, schedules. |
+| 29 | `stage_order` | 1-based position of the stage in its release / pipeline. |
+| 30 | `stage` | Stage (release environment) name. |
+| 31 | `environment` | Environment name (YAML: the `environment:` of the deployment job). |
+| 32 | `tier` | `dev`, `test`, `uat`, `prod` or `unknown`. |
+| 33 | `depends_on` | Stages this stage waits for. |
+| 34 | `deploy_targets` | Target kinds: `functionapp`, `webapp`, `aks`, `adf`, `synapse`, `sql`, `iac`, `other`. |
+| 35 | `target_resources` | Resource names from task inputs: `functionapp: orders-fn (rg x, slot staging)`, `aks: cluster (ns y)`, `sql: server/db`. |
+| 36 | `service_connections` | Service connection names used by the stage. |
+| 37 | `approvals_gates` | Approvals, checks and gates as summaries (kinds and counts, never approver names). |
+| 38 | `last_deploy_status` | `succeeded`, `partial`, `failed`, `in_progress`, `pending`, `canceled`, `never` (collected, none found) or `unknown` (not collected). |
+| 39 | `last_deploy_version` | Release name (classic) or run number (YAML). |
+| 40 | `last_deploy_artifact_version` | Build number / short commit SHA of the deployed artifact. |
+| 41 | `last_deploy_time_utc` | Completion (else start) time, UTC (real Excel date). |
+| 42 | `last_deploy_by` | Display name of whoever triggered it (never an e-mail/UPN). |
+| 43 | `last_deploy_url` | Link to the release / run. |
 
 ## Extending
 

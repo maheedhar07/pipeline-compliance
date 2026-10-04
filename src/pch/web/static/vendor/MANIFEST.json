@@ -30,7 +30,7 @@
       "source": "https://github.com/tailwindlabs/tailwindcss/releases/download/v3.4.17/ (standalone CLI, sha256 checked against sha256sums.txt)",
       "generated_by": "scripts/build_css.sh",
       "license": "MIT",
-      "sha256": "c9c7c2feeec35884050726756c9f6355152ca51b943c8e75c4d919fba7c1d85d"
+      "sha256": "f41a35153600023a083d13dba11c2f800f8c318a784cca09745389a01e40b374"
     }
   ]
 }

@@ -32,7 +32,7 @@ def client(tmp_path_factory):
     return TestClient(create_app(db))
 
 
-PAGES = ["/", "/repos", "/findings", "/rules", "/testing", "/targets", "/migration", "/scans"]
+PAGES = ["/", "/repos", "/findings", "/rules", "/testing", "/targets", "/migration", "/scans", "/lineage"]
 
 
 @pytest.mark.parametrize("path", PAGES)

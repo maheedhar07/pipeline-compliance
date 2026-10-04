@@ -10,12 +10,15 @@ import base64
 import csv
 import hashlib
 import io
+import itertools
 import json
 import logging
 import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Annotated, Any, Literal
 from urllib.parse import quote, urlencode
 
@@ -23,7 +26,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi import Path as PathParam
 from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.docs import get_swagger_ui_html
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from jinja2 import pass_context
@@ -35,6 +38,9 @@ from pch import __version__
 from pch.settings import Settings, get_settings
 from pch.store import repository as store
 from pch.store.db import dispose_engine, get_engine, session_scope
+from pch.timeutil import utcnow_naive
+from pch.web import exports as X
+from pch.web import lineage_q as LQ
 from pch.web import queries as Q
 from pch.web.auth import AuthMiddleware, build_authenticator
 from pch.web.guard import assert_safe_to_serve
@@ -50,7 +56,8 @@ from pch.web.security import (
 )
 
 HERE = Path(__file__).parent
-KNOWN_404 = {"no scans yet", "repo not found in this scan", "unknown rule", "not found", "no scans yet: run `pch seed-demo && pch scan --demo`"}
+KNOWN_404 = {"no scans yet", "repo not found in this scan", "unknown rule", "not found", "no scans yet: run `pch seed-demo && pch scan --demo`",
+             "this scan has no lineage data (it was made before the Lineage tab existed)", "lineage not found for this repo in this scan"}
 log = logging.getLogger("pch.web")
 
 # Query-parameter types: bounded lengths, whitelisted sort keys, bounded offsets (bad input -> 422/400, never 500).
@@ -63,6 +70,9 @@ Limit = Annotated[int, Query(ge=1, le=1000)]
 ProjectPath = Annotated[str, PathParam(max_length=200)]
 RepoPath = Annotated[str, PathParam(max_length=200)]  # routed with {repo:path}: GitHub-hosted repos are "org/repo"
 RulePath = Annotated[str, PathParam(max_length=64)]
+Short = Annotated[str | None, Query(max_length=8)]  # tiny enumerations from <select> (an empty value means "all"): normalised, never an error
+Flag = Annotated[str | None, Query(max_length=8)]
+LINEAGE_LIST_LIMIT = 500  # repos rendered on the list page (the exports contain every matching row)
 
 _JSON_ESCAPES = {ord("<"): "\\u003c", ord(">"): "\\u003e", ord("&"): "\\u0026", 0x2028: "\\u2028", 0x2029: "\\u2029"}
 
@@ -79,11 +89,7 @@ def safe_url(v: Any) -> str:
     return u if re.match(r"https?://[^\s]+$", u, re.I) else "#"
 
 
-def csv_cell(v: Any) -> Any:
-    """Neutralise spreadsheet formula injection (repo names etc. are attacker-influenced)."""
-    if isinstance(v, str) and v and (v[0] in "=+-@\t\r" or v.startswith(("\n",))):
-        return "'" + v
-    return v
+csv_cell = X.csv_cell  # re-exported: tests and /repos.csv use the one neutralisation rule
 
 
 def _docs_csp(html: bytes) -> str:
@@ -292,6 +298,75 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
                 return no_data(request)
             return templates.TemplateResponse(request, "scans.html", ctx(request, s, scan, data=data, nav="scans"))
 
+    # ------------------------------------------------------------------ lineage (L2)
+    def lineage_filters(project, provider, q, target, tier, has_prod, orphans) -> dict[str, Any]:
+        return {"project": project, "provider": provider, "q": q, "target": target, "tier": tier, "has_prod": has_prod if has_prod in ("yes", "no") else None,
+                "orphans": "1" if orphans == "1" else None}
+
+    def lineage_kwargs(f: dict[str, Any]) -> dict[str, Any]:
+        return {**{k: v for k, v in f.items() if k != "orphans"}, "orphans_only": bool(f.get("orphans"))}
+
+    @app.get("/lineage", response_class=HTMLResponse)
+    def page_lineage(request: Request, scan: ScanId = None, project: Text = None, provider: Text = None, q: Text = None, target: Text = None, tier: Text = None,
+                     has_prod: Short = None, orphans: Flag = None):
+        with session_scope(app.state.db_url) as s:
+            row = Q.resolve_scan(s, scan)
+            if not row:
+                return no_data(request)
+            f = lineage_filters(project, provider, q, target, tier, has_prod, orphans)
+            data = LQ.lineage_page(s, row.id, **lineage_kwargs(f))
+            return templates.TemplateResponse(request, "lineage.html", ctx(request, s, scan, data=data, filters=f, base={**f, "scan": scan}, nav="lineage",
+                                                                           limit=LINEAGE_LIST_LIMIT, shown=min(len(data["repos"]), LINEAGE_LIST_LIMIT)))
+
+    @app.get("/lineage/{project}/{repo:path}", response_class=HTMLResponse)
+    def page_lineage_repo(request: Request, project: ProjectPath, repo: RepoPath, scan: ScanId = None, fragment: Flag = None):
+        with session_scope(app.state.db_url) as s:
+            row = Q.resolve_scan(s, scan)
+            if not row:
+                return no_data(request)
+            d = LQ.lineage_repo(s, row.id, project, repo)
+            if d is None:
+                raise HTTPException(404, "lineage not found for this repo in this scan")
+            context = ctx(request, s, scan, d=d, nav="lineage")
+            return templates.TemplateResponse(request, "lineage_fragment.html" if fragment == "1" else "lineage_repo.html", context)
+
+    def export_name(started: datetime, project: str | None, ext: str) -> str:
+        slug = re.sub(r"[^A-Za-z0-9_-]+", "-", project or "").strip("-")[:40]
+        return f"pch-lineage-{slug + '-' if slug else ''}{LQ.scan_date(started)}.{ext}"
+
+    def lineage_export(scan: str | None, f: dict[str, Any], ext: str) -> Response:
+        """CSV / Excel of the (filtered) lineage: one row per repo -> pipeline -> release/deploy stage. GET only, never cached (middleware)."""
+        with session_scope(app.state.db_url) as s:
+            row = Q.resolve_scan(s, scan)
+            if not row:
+                raise HTTPException(404, "no scans yet")
+            full = LQ.load(s, row.id)
+            meta = SimpleNamespace(id=row.id, started_at=row.started_at, mode=row.mode)
+        if not full.has_data:
+            raise HTTPException(404, "this scan has no lineage data (it was made before the Lineage tab existed)")
+        data = LQ.apply_filters(full, **lineage_kwargs(f))
+        lins = [r.lin for r in data.rows]
+        limit = s_.export_max_rows
+        n = sum(1 for _ in itertools.islice(LQ.flat_rows(lins), limit + 1))
+        if n > limit:
+            raise HTTPException(413, f"The export would contain more than {limit} rows (EXPORT_MAX_ROWS). Narrow the filters (project, provider, search) and try again.")
+        headers = {"Content-Disposition": f'attachment; filename="{export_name(meta.started_at, f.get("project"), ext)}"'}
+        if ext == "csv":
+            return StreamingResponse(X.csv_lines(LQ.HEADERS, LQ.flat_rows(lins)), media_type="text/csv; charset=utf-8", headers=headers)
+        shown_filters = {k: v for k, v in f.items() if v}
+        body = X.build_xlsx(LQ.COLUMNS, LQ.flat_rows(lins), LQ.summary_rows(meta, data, shown_filters, n, utcnow_naive()), LQ.ORPHAN_COLUMNS, LQ.orphan_rows(LQ.orphan_items(data)))
+        return Response(body, media_type=X.XLSX_MIME, headers=headers)
+
+    @app.get("/lineage.csv")
+    def lineage_csv(scan: ScanId = None, project: Text = None, provider: Text = None, q: Text = None, target: Text = None, tier: Text = None,
+                    has_prod: Short = None, orphans: Flag = None):
+        return lineage_export(scan, lineage_filters(project, provider, q, target, tier, has_prod, orphans), "csv")
+
+    @app.get("/lineage.xlsx")
+    def lineage_xlsx(scan: ScanId = None, project: Text = None, provider: Text = None, q: Text = None, target: Text = None, tier: Text = None,
+                     has_prod: Short = None, orphans: Flag = None):
+        return lineage_export(scan, lineage_filters(project, provider, q, target, tier, has_prod, orphans), "xlsx")
+
     # ------------------------------------------------------------------ JSON API
     def api(fn):
         """Run fn(session, scan_row) and return JSON; 404 when there is no data."""
@@ -363,6 +438,16 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
     def api_migration(scan: ScanId = None):
         return api(lambda s, r: Q.migration(s, r.id))(scan)
 
+    @app.get("/api/v1/lineage")
+    def api_lineage(scan: ScanId = None, project: Text = None, provider: Text = None, q: Text = None, target: Text = None, tier: Text = None,
+                    has_prod: Short = None, orphans: Flag = None):
+        f = lineage_filters(project, provider, q, target, tier, has_prod, orphans)
+        return api(lambda s, r: LQ.lineage_page(s, r.id, **lineage_kwargs(f)))(scan)
+
+    @app.get("/api/v1/lineage/{project}/{repo:path}")
+    def api_lineage_repo(project: ProjectPath, repo: RepoPath, scan: ScanId = None):
+        return api(lambda s, r: LQ.lineage_repo(s, r.id, project, repo))(scan)
+
     @app.get("/api/v1/scans")
     def api_scans(selected: ScanId = None):
         with session_scope(app.state.db_url) as s:
@@ -383,8 +468,10 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error(request: Request, exc: StarletteHTTPException):
-        titles = {404: "Not found", 405: "Method not allowed", 400: "Bad request"}
-        msg = exc.detail if exc.status_code == 404 and isinstance(exc.detail, str) and exc.detail in KNOWN_404 else titles.get(exc.status_code, "Request failed")
+        titles = {404: "Not found", 405: "Method not allowed", 400: "Bad request", 413: "Export too large"}
+        msg = (exc.detail if (exc.status_code == 404 and isinstance(exc.detail, str) and exc.detail in KNOWN_404)
+               or (exc.status_code == 413 and isinstance(exc.detail, str) and exc.detail.startswith("The export would contain"))  # server-built text: row limit + advice
+               else titles.get(exc.status_code, "Request failed"))
         return error_response(request, exc.status_code, titles.get(exc.status_code, "Request failed"), msg, dict(getattr(exc, "headers", None) or {}) or None)
 
     @app.exception_handler(RequestValidationError)

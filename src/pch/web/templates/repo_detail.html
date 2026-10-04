@@ -14,6 +14,7 @@
     {% if r.url %}<a class="text-indigo-600 hover:underline dark:text-indigo-300" href="{{ r.url | safe_url }}" target="_blank" rel="noopener noreferrer">{{ 'Open in Azure DevOps' if r.provider == 'azure_repos' else 'Open on ' ~ r.provider_label }}</a>{% endif %}
     {% if d.sonar and d.sonar.url %}<a class="text-indigo-600 hover:underline dark:text-indigo-300" href="{{ d.sonar.url | safe_url }}" target="_blank" rel="noopener noreferrer">SonarQube</a>{% endif %}
     {% if d.aikido and d.aikido.onboarded %}<a class="text-indigo-600 hover:underline dark:text-indigo-300" href="{{ d.aikido.url | safe_url }}" target="_blank" rel="noopener noreferrer">Aikido</a>{% endif %}
+    <a class="text-indigo-600 hover:underline dark:text-indigo-300" href="{{ u('/lineage/' ~ r.project ~ '/' ~ r.repo) }}">Lineage</a>
     <a class="text-indigo-600 hover:underline dark:text-indigo-300" href="{{ u('/api/v1/repos/' ~ r.project ~ '/' ~ r.repo) }}">JSON</a>
   </div>
 </div>

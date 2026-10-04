@@ -52,6 +52,18 @@ report-only (never writes to ADO / GitHub / Sonar / Aikido / ServiceNow), never 
 * **CI**: `pull_request` (not `_target`), `contents: read`, `persist-credentials: false`, no `github.event.*` in `run:`, checksum-verified gitleaks.
   **Docker**: digest-pinned base, `--require-hashes`, non-root uid 10001, `PCH_LOCKFILE` is a build-time choice only.
 
+## L2 addendum: Lineage tab and exports (self-review)
+
+| ID | Severity | Area | Description | Status | Test |
+|---|---|---|---|---|---|
+| SEC-15 | Medium | Excel / CSV injection | Repo, pipeline, stage, environment and target names are attacker-influenced and now reach a spreadsheet. openpyxl turns any `str` starting with `=` into a formula cell. Every text cell is written with an explicit string type and additionally neutralised with the `/repos.csv` rule; both layers are tested independently (the string type alone, and the loaded workbook of a database with hostile names: no cell is a formula, no `<f>` element in any sheet XML). | Fixed | `test_xlsx_never_contains_formulas`, `test_string_cell_is_literal_even_without_neutralisation`, `test_csv_neutralises_formulas_in_every_cell` |
+| SEC-16 | Low | Privacy | The lineage stores people only as the display name of whoever triggered the last deployment/run; values that look like e-mails/UPNs are dropped; approvers are summarised as kinds/counts. | By design | `test_classic_chain_build_release_stages_in_order`, `test_release_deployments_last_per_environment_with_followup` |
+| SEC-17 | Low | DoS | Exports of the whole estate could be large. Row cap `EXPORT_MAX_ROWS` (413 with a clear message instead of a silent truncation), Excel written in streaming mode, list page renders at most 500 repos (chains load on demand). | Fixed | `test_export_row_cap_is_enforced_with_a_clear_message` |
+| SEC-18 | Info | Read-only | The new collectors only issue GET requests through `AdoClient`; a test asserts the lineage requests of a full scan are GETs, and the scan still sends nothing else. Exports are GET-only routes behind the same auth middleware, `no-store`, with sanitised filenames. | Verified | `test_lineage_requests_are_read_only_gets`, `test_export_and_pages_are_get_only`, `test_lineage_requires_authentication_and_role` |
+| SEC-19 | Info | XSS | All lineage text is escaped by Jinja; links go through `safe_url`; the chain loads as an HTML fragment from the same origin (no inline script, CSP unchanged). | Verified | `test_xss_escaped_everywhere_on_lineage_pages` |
+
+New `# VERIFY:` markers (confirm on first contact with real data): `release/deployments` (all-environment listing, `definitionEnvironmentId` filter), `release/releases?$expand=artifacts` version shape (GitHub artifacts: commit id in `version.id`), `environmentdeploymentrecords` (`top`, `definition`, `stageName`, `owner`, `result`), and that the preview `finalYaml` keeps `resources:`/`trigger:`/`schedules:` (`collectors/ado/deployments.py`, `collectors/ado/lineage_meta.py`).
+
 ## Residual risks
 
 * Easy Auth is the only authentication; with `AUTH_ALLOW_ANY_AUTHENTICATED=true` and a multi-tenant app registration any signed-in user

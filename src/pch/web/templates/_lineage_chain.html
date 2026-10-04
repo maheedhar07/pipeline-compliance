@@ -1,0 +1,86 @@
+{# The full lineage chain of ONE repo (d = a lineage document from lineage_q.repo_doc). Included by the repo page and the lazy list fragment. #}
+{% from "_macros.html" import provider_badge, deploy_chip %}
+{% macro dt(v) %}{{ v[:16] | replace('T', ' ') ~ ' UTC' if v else '' }}{% endmacro %}
+{% macro stage_table(stages) %}
+<div class="overflow-x-auto">
+<table class="mt-1 w-full text-xs">
+  <thead><tr class="text-left text-[10px] uppercase text-slate-500 dark:text-slate-400"><th class="py-0.5 pr-2">#</th><th class="pr-2">Stage / environment</th><th class="pr-2">Tier</th><th class="pr-2">Targets</th><th class="pr-2">Service connections</th><th class="pr-2">Approvals / gates</th><th>Last deployment</th></tr></thead>
+  <tbody class="divide-y divide-slate-100 align-top dark:divide-slate-700">
+  {% for st in stages %}
+  <tr>
+    <td class="tnum py-1 pr-2 text-slate-400">{{ loop.index }}</td>
+    <td class="py-1 pr-2 font-medium">{{ st.name }}{% if st.env_name and st.env_name != st.name %}<div class="font-normal text-slate-500 dark:text-slate-400">env {{ st.env_name }}</div>{% endif %}{% if st.depends_on %}<div class="font-normal text-slate-400">after {{ st.depends_on | join(', ') }}</div>{% endif %}</td>
+    <td class="py-1 pr-2">{{ st.env_tier }}</td>
+    <td class="py-1 pr-2">{% for t in st.targets %}<div><span class="rounded bg-slate-100 px-1 dark:bg-slate-700">{{ TARGET_LABEL.get(t.kind, t.kind) }}</span>{% if t.name %} <span class="font-mono">{{ t.name }}</span>{% endif %}{% if t.detail %} <span class="text-slate-500 dark:text-slate-400">({{ t.detail }})</span>{% endif %}</div>{% else %}–{% endfor %}</td>
+    <td class="py-1 pr-2">{{ st.service_connections | join(', ') or '–' }}</td>
+    <td class="py-1 pr-2">{% for a in st.approvals %}<div><span class="rounded bg-green-100 px-1 dark:bg-green-900/40">{{ a }}</span></div>{% endfor %}{% for g in st.gates %}<div><span class="rounded bg-sky-100 px-1 dark:bg-sky-900/40">{{ g }}</span></div>{% endfor %}{% if not st.approvals and not st.gates %}–{% endif %}</td>
+    <td class="py-1">{{ deploy_chip(st.last_deploy.status, st.last_deploy.note) }}
+      {% set ld = st.last_deploy %}
+      {% if ld.version or ld.artifact_version or ld.finished or ld.triggered_by %}<div class="mt-0.5 text-slate-600 dark:text-slate-300">{% if ld.url %}<a class="text-indigo-700 hover:underline dark:text-indigo-300" href="{{ ld.url | safe_url }}" target="_blank" rel="noopener noreferrer">{{ ld.version or 'open' }}</a>{% else %}{{ ld.version or '' }}{% endif %}{% if ld.artifact_version %} · artifact {{ ld.artifact_version }}{% endif %}</div>
+      <div class="text-slate-500 dark:text-slate-400">{{ dt(ld.finished) }}{% if ld.triggered_by %} · by {{ ld.triggered_by }}{% endif %}</div>{% endif %}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endmacro %}
+{% macro release_card(rel) %}
+<div class="mt-2 rounded border border-slate-200 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-900/40">
+  <div class="flex flex-wrap items-center gap-2">
+    <span class="rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-violet-800 dark:bg-violet-900/40 dark:text-violet-200">Release</span>
+    <a class="font-medium text-indigo-700 hover:underline dark:text-indigo-300" href="{{ rel.url | safe_url }}" target="_blank" rel="noopener noreferrer">{{ rel.name }}</a>
+    {% if rel.adopted_from %}<span class="text-[11px] text-slate-500 dark:text-slate-400">defined with {{ rel.adopted_from }}</span>{% endif %}
+    <span class="text-xs text-slate-500 dark:text-slate-400">{% if rel.cd_enabled %}continuous deployment{% if rel.cd_branches %} on {{ rel.cd_branches | join(', ') }}{% endif %}{% else %}no CD trigger (manual){% endif %}{% for sc in rel.schedules %} · schedule {{ sc }}{% endfor %}</span>
+  </div>
+  <div class="mt-0.5 text-xs text-slate-600 dark:text-slate-300">Artifact source:
+    {% for a in rel.sources %}<span class="mr-2">{{ a.type }} <b>{{ a.name }}</b>{% if a.alias %} as {{ a.alias }}{% endif %}{% if a.branch %} @ {{ a.branch }}{% endif %}</span>{% else %}none{% endfor %}</div>
+  {% if rel.stages %}{{ stage_table(rel.stages) }}{% else %}<p class="mt-1 text-xs text-slate-500">No environments defined.</p>{% endif %}
+</div>
+{% endmacro %}
+
+<div class="space-y-3">
+  <div class="flex flex-wrap items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+    {{ provider_badge(d.repo.provider, d.repo.provider_label) }}
+    <span>default branch <b>{{ d.repo.default_branch or 'n/a' }}</b></span>
+    {% if d.repo.service_connection %}<span>· read through service connection <b>{{ d.repo.service_connection }}</b></span>{% endif %}
+    {% if d.repo.url %}<a class="text-indigo-600 hover:underline dark:text-indigo-300" href="{{ d.repo.url | safe_url }}" target="_blank" rel="noopener noreferrer">open repo</a>{% endif %}
+    <a class="text-indigo-600 hover:underline dark:text-indigo-300" href="{{ u('/repos/' ~ d.repo.project ~ '/' ~ d.repo.name) }}">compliance</a>
+  </div>
+  {% if d.summary.empty %}
+  <p class="rounded border border-dashed border-slate-300 p-3 text-xs text-slate-500 dark:border-slate-600 dark:text-slate-400">No Azure DevOps pipeline or release builds this repository. Only what Azure DevOps knows is shown.</p>
+  {% endif %}
+  {% for n in d.notes %}<p class="rounded bg-amber-50 px-2 py-1 text-xs text-amber-900 dark:bg-amber-900/20 dark:text-amber-100">{{ n }}</p>{% endfor %}
+
+  {% set linked = [] %}
+  {% for p in d.pipelines %}
+  <div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
+    <div class="flex flex-wrap items-center gap-2">
+      <span class="rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-200">{{ 'YAML pipeline' if p.kind == 'yaml' else 'Classic build' }}</span>
+      <a class="font-medium text-indigo-700 hover:underline dark:text-indigo-300" href="{{ p.url | safe_url }}" target="_blank" rel="noopener noreferrer">{{ p.name }}</a>
+      <span class="text-xs text-slate-500 dark:text-slate-400">id {{ p.id }}</span>
+      {% if p.adopted_from %}<span class="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-900/40 dark:text-amber-200" title="The pipeline definition lives in another repository and builds this repository's code">defined in {{ p.adopted_from }}</span>{% endif %}
+      {% if p.yaml_in_other_repo and not p.adopted_from %}<span class="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-900/40 dark:text-amber-200" title="The YAML file lives in a different repository than the code it builds">YAML in another repo</span>{% endif %}
+      {% if p.last_run %}<span class="ml-auto text-xs text-slate-500 dark:text-slate-400">last run {{ deploy_chip(p.last_run.status) }} {{ p.last_run.version or '' }} {{ dt(p.last_run.finished) }}{% if p.last_run.triggered_by %} · by {{ p.last_run.triggered_by }}{% endif %}</span>{% endif %}
+    </div>
+    <dl class="mt-2 grid grid-cols-[auto,1fr] gap-x-3 gap-y-0.5 text-xs">
+      <dt class="text-slate-500 dark:text-slate-400">{{ 'YAML file' if p.kind == 'yaml' else 'Folder' }}</dt><dd class="font-mono">{{ p.definition_path or '–' }}{% if p.yaml_repo %} <span class="font-sans text-slate-500 dark:text-slate-400">in {{ p.yaml_repo }}</span>{% endif %}</dd>
+      {% if p.code_repos %}<dt class="text-slate-500 dark:text-slate-400">Builds code from</dt><dd>{{ p.code_repos | join(', ') }}</dd>{% endif %}
+      {% if p.template_repos %}<dt class="text-slate-500 dark:text-slate-400">Other repos used</dt><dd>{{ p.template_repos | join(', ') }}</dd>{% endif %}
+      <dt class="text-slate-500 dark:text-slate-400">CI trigger</dt><dd>{{ ('CI off' if p.trigger.ci_enabled == false else (p.trigger.ci_branches | join(', ') or 'all branches') ~ (' (paths ' ~ (p.trigger.ci_paths | join(', ')) ~ ')' if p.trigger.ci_paths else '')) if p.trigger.ci_enabled is not none else 'unknown' }}</dd>
+      <dt class="text-slate-500 dark:text-slate-400">PR trigger</dt><dd>{{ 'off' if p.trigger.pr_enabled == false else ((p.trigger.pr_branches | join(', ') or 'all branches') if p.trigger.pr_enabled else 'branch policy / not in definition') }}</dd>
+      {% if p.trigger.schedules %}<dt class="text-slate-500 dark:text-slate-400">Schedules</dt><dd>{{ p.trigger.schedules | join('; ') }}</dd>{% endif %}
+      <dt class="text-slate-500 dark:text-slate-400">Publishes</dt><dd>{{ p.artifacts | join(', ') or '–' }}</dd>
+      {% if p.upstream %}<dt class="text-slate-500 dark:text-slate-400">Consumes</dt><dd>{% for l in p.upstream %}<span class="mr-2">{% if l.repo_key %}<a class="text-indigo-700 hover:underline dark:text-indigo-300" href="{{ u('/lineage/' ~ l.repo_key) }}">{{ l.name }}</a>{% else %}{{ l.name }} <span class="text-slate-400">(not in this scan)</span>{% endif %} <span class="text-slate-500 dark:text-slate-400">{{ l.detail }}</span></span>{% endfor %}</dd>{% endif %}
+      {% if p.downstream %}<dt class="text-slate-500 dark:text-slate-400">Consumed by</dt><dd>{% for l in p.downstream %}<span class="mr-2">{% if l.repo_key %}<a class="text-indigo-700 hover:underline dark:text-indigo-300" href="{{ u('/lineage/' ~ l.repo_key) }}">{{ l.name }}</a>{% else %}{{ l.name }}{% endif %} <span class="text-slate-500 dark:text-slate-400">{{ l.detail }}</span></span>{% endfor %}</dd>{% endif %}
+    </dl>
+    {% if p.stages %}<div class="mt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Deployment stages (YAML)</div>{{ stage_table(p.stages) }}{% endif %}
+    {% for rel in d.releases if p.id in rel.source_pipeline_ids and rel.adopted_from == p.adopted_from %}{% if linked.append([rel.id, rel.adopted_from]) %}{% endif %}{{ release_card(rel) }}{% endfor %}
+  </div>
+  {% endfor %}
+  {% for rel in d.releases if [rel.id, rel.adopted_from] not in linked %}
+  <div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
+    <div class="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Release without a build pipeline in this repo{% if rel.sources and rel.sources[0].type == 'GitHub' %} (consumes the GitHub repository directly){% endif %}</div>
+    {{ release_card(rel) }}
+  </div>
+  {% endfor %}
+</div>

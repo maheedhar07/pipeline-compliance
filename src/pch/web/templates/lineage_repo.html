@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% from "_macros.html" import provider_badge, deploy_chip %}
+{% block title %}{{ d.repo.name }} lineage · Pipeline Compliance Hub{% endblock %}
+{% block content %}
+<nav class="mb-2 text-xs text-slate-500"><a class="hover:underline" href="{{ u('/lineage') }}">Lineage</a> / <a class="hover:underline" href="{{ u('/lineage', project=d.repo.project) }}">{{ d.repo.project }}</a> / {{ d.repo.name }}</nav>
+<div class="mb-3 flex flex-wrap items-center gap-3">
+  <h1 class="text-lg font-semibold">{{ d.repo.name }}</h1>
+  {{ provider_badge(d.repo.provider, d.repo.provider_label) }}
+  <span class="text-xs text-slate-500 dark:text-slate-400">{{ d.summary.pipelines }} pipelines · {{ d.summary.releases }} releases · {{ d.summary.stages }} stages</span>
+  <div class="ml-auto flex gap-3 text-xs">
+    <a class="text-indigo-600 hover:underline dark:text-indigo-300" href="{{ u('/repos/' ~ d.repo.project ~ '/' ~ d.repo.name) }}">Compliance</a>
+    <a class="text-indigo-600 hover:underline dark:text-indigo-300" href="{{ u('/api/v1/lineage/' ~ d.repo.project ~ '/' ~ d.repo.name) }}">JSON</a>
+  </div>
+</div>
+{% include "_lineage_chain.html" %}
+{% endblock %}
