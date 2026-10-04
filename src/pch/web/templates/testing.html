@@ -4,11 +4,11 @@
 {% block content %}
 <div class="mb-3 flex items-baseline gap-3"><h1 class="text-lg font-semibold">Testing</h1><span class="text-xs text-slate-500">Test state per repository: are there tests, do pipelines run them, and is coverage published?</span>
   <a class="ml-auto text-xs text-indigo-600 hover:underline dark:text-indigo-300" href="/api/v1/testing">JSON</a></div>
-<section class="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
-  {% for st in ['TESTS_OK','TESTS_LOW_COVERAGE','TESTS_NO_COVERAGE','TESTS_NOT_RUN','NO_TESTS','NOT_APPLICABLE'] %}
+<section class="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-7">
+  {% for st in ['TESTS_OK','TESTS_LOW_COVERAGE','TESTS_NO_COVERAGE','TESTS_NOT_RUN','NO_TESTS','UNKNOWN','NOT_APPLICABLE'] %}
   <a href="{{ u('/repos', test_state=st) }}" class="rounded-lg border border-slate-200 bg-white p-3 transition hover:border-indigo-400 hover:shadow dark:border-slate-700 dark:bg-slate-800">
     <div>{{ test_badge(st) }}</div><div class="tnum mt-1 text-2xl font-semibold">{{ data.counts[st] }}</div>
-    <div class="text-[11px] text-slate-500">{{ {'TESTS_OK':'tests run, coverage meets threshold','TESTS_LOW_COVERAGE':'tests run, coverage below threshold','TESTS_NO_COVERAGE':'tests run, no coverage data','TESTS_NOT_RUN':'tests exist, no pipeline runs them','NO_TESTS':'application code without tests','NOT_APPLICABLE':'ADF / Synapse / IaC / docs'}[st] }}</div></a>
+    <div class="text-[11px] text-slate-500">{{ {'TESTS_OK':'tests run, coverage meets threshold','TESTS_LOW_COVERAGE':'tests run, coverage below threshold','TESTS_NO_COVERAGE':'tests run, no coverage data','TESTS_NOT_RUN':'tests exist, no pipeline runs them','NO_TESTS':'application code without tests','UNKNOWN':'repo contents not readable (GitHub reader not configured)','NOT_APPLICABLE':'ADF / Synapse / IaC / docs'}[st] }}</div></a>
   {% endfor %}
 </section>
 <section class="mt-4 grid gap-3 lg:grid-cols-3">
@@ -16,7 +16,7 @@
   <div class="rounded-lg border border-slate-200 bg-white p-3 lg:col-span-2 dark:border-slate-700 dark:bg-slate-800"><h2 class="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Testing rules</h2>
     <table class="w-full text-xs"><tbody class="divide-y divide-slate-100 dark:divide-slate-700">{% for r in data.rules %}<tr><td class="py-1 font-mono font-semibold"><a class="text-indigo-700 hover:underline dark:text-indigo-300" href="{{ u('/rules/' ~ r.id) }}">{{ r.id }}</a></td><td>{{ r.title }}</td><td class="tnum text-right">{{ r.fail }} fail</td><td class="pl-3">{{ bar(r.pass_rate) }}</td></tr>{% endfor %}</tbody></table></div>
 </section>
-{% for st, title in [('NO_TESTS','Repos with no tests'),('TESTS_NOT_RUN','Repos with tests that are not run')] %}
+{% for st, title in [('NO_TESTS','Repos with no tests'),('TESTS_NOT_RUN','Repos with tests that are not run'),('UNKNOWN','Repos whose test state is unknown (GitHub-hosted, no pipeline runs tests)')] %}
 <section class="mt-4 overflow-x-auto rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
   <h2 class="px-3 pt-2 text-xs font-semibold uppercase tracking-wide text-slate-500">{{ title }} ({{ data.lists[st] | length }})</h2>
   <table class="mt-1 w-full text-xs"><thead class="border-b border-slate-200 text-left text-[11px] uppercase text-slate-500 dark:border-slate-700"><tr><th class="px-2 py-1">Project</th><th>Repo</th><th>Owner</th><th>Pipelines</th><th>Why</th></tr></thead>

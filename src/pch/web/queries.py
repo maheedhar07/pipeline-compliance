@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from pch.engine.registry import CATEGORY_NAMES, RuleMeta, all_rules
 from pch.model.findings import SEVERITY_ORDER
+from pch.model.repo import PROVIDER_LABEL
 from pch.store import repository as store
 from pch.store.models import CollectionErrorRow, FindingRow, RepoResultRow, ScanRow
 
@@ -20,7 +21,7 @@ PLATFORM_LABEL = {"ado_classic_build": "Classic build", "ado_classic_release": "
 TARGETS = ["functionapp", "webapp", "aks", "adf", "synapse", "sql", "iac"]
 TARGET_LABEL = {"functionapp": "Function App", "webapp": "Web App", "aks": "AKS", "adf": "Data Factory", "synapse": "Synapse", "sql": "SQL (dacpac)", "iac": "IaC"}
 TARGET_RULE_CODE = {"functionapp": "FA", "webapp": "WA", "aks": "AKS", "adf": "ADF", "synapse": "SYN", "sql": "SQL", "iac": "IAC"}
-TEST_STATES = ["TESTS_OK", "TESTS_LOW_COVERAGE", "TESTS_NO_COVERAGE", "TESTS_NOT_RUN", "NO_TESTS", "NOT_APPLICABLE"]
+TEST_STATES = ["TESTS_OK", "TESTS_LOW_COVERAGE", "TESTS_NO_COVERAGE", "TESTS_NOT_RUN", "NO_TESTS", "UNKNOWN", "NOT_APPLICABLE"]
 SORTABLE = {"project", "repo", "owner", "test_state", "coverage", "sonar_gate", "aikido_criticals", "score", "status", "critical_fails", "migration_score"}
 
 
@@ -44,10 +45,17 @@ def platform_kinds(row: RepoResultRow) -> list[str]:
     return sorted({("classic" if "classic" in p else "yaml") for p in row.platform_mix})
 
 
+def provider_of_row(r: RepoResultRow) -> str:
+    """Hosting provider of the repo (azure_repos | github | github_enterprise | other_git); scans before L1 are Azure Repos."""
+    return ((r.external or {}).get("repo") or {}).get("provider") or "azure_repos"
+
+
 def row_dict(r: RepoResultRow) -> dict[str, Any]:
     kinds = platform_kinds(r)
+    prov = provider_of_row(r)
     return {
         "key": r.repo_key, "project": r.project, "repo": r.repo, "owner": r.owner, "url": r.url,
+        "provider": prov, "provider_label": PROVIDER_LABEL.get(prov, prov),
         "platforms": [PLATFORM_LABEL.get(p, p) for p in r.platform_mix], "platform_kinds": kinds or ["none"],
         "targets": r.targets, "test_state": r.test_state, "coverage": r.coverage, "sonar_gate": r.sonar_gate,
         "aikido_criticals": r.aikido_criticals, "score": r.score, "status": r.status, "unknowns": r.unknowns,
@@ -58,13 +66,15 @@ def row_dict(r: RepoResultRow) -> dict[str, Any]:
 # ------------------------------------------------------------------ repos
 def repos(s: Session, scan_id: str, *, project: str | None = None, status: str | None = None, test_state: str | None = None,
           platform: str | None = None, target: str | None = None, sonar: str | None = None, q: str | None = None,
-          sort: str = "status", direction: str = "asc") -> list[dict[str, Any]]:
+          provider: str | None = None, sort: str = "status", direction: str = "asc") -> list[dict[str, Any]]:
     rows = [row_dict(r) for r in store.repo_results(s, scan_id)]
 
     def keep(r: dict[str, Any]) -> bool:
         if project and r["project"] != project:
             return False
         if status and r["status"] != status:
+            return False
+        if provider and r["provider"] != provider:
             return False
         if test_state and r["test_state"] != test_state:
             return False
@@ -95,10 +105,10 @@ def repos(s: Session, scan_id: str, *, project: str | None = None, status: str |
 
 
 def csv_rows(rows: list[dict[str, Any]]) -> list[list[Any]]:
-    head = ["project", "repo", "owner", "platforms", "targets", "test_state", "coverage", "sonar_gate", "aikido_criticals", "score", "status", "critical_fails", "high_fails", "unknowns", "migration_score"]
+    head = ["project", "repo", "provider", "owner", "platforms", "targets", "test_state", "coverage", "sonar_gate", "aikido_criticals", "score", "status", "critical_fails", "high_fails", "unknowns", "migration_score"]
     out: list[list[Any]] = [head]
     for r in rows:
-        out.append([r["project"], r["repo"], r["owner"] or "", "+".join(r["platforms"]), "+".join(r["targets"]), r["test_state"],
+        out.append([r["project"], r["repo"], r["provider"], r["owner"] or "", "+".join(r["platforms"]), "+".join(r["targets"]), r["test_state"],
                     "" if r["coverage"] is None else round(r["coverage"], 1), r["sonar_gate"] or "", "" if r["aikido_criticals"] is None else r["aikido_criticals"],
                     "" if r["score"] is None else r["score"], r["status"], r["critical_fails"], r["high_fails"], r["unknowns"],
                     "" if r["migration_score"] is None else r["migration_score"]])
@@ -133,23 +143,28 @@ def rule_detail(s: Session, scan_id: str, rule_id: str) -> dict[str, Any] | None
     stats = next(x for x in rule_stats(s, scan_id) if x["id"] == rule_id)
     fs = store.findings(s, scan_id, rule_id=rule_id)
     fs.sort(key=lambda f: (FINDING_RANK.get(f.status, 9), f.repo_key))
+    prov = provider_map(s, scan_id)
     return {
         "rule": {"id": meta.id, "title": meta.title, "category": meta.category, "category_name": meta.category_name, "severity": meta.severity.value,
                  "scope": meta.scope, "rationale": meta.rationale, "remediation": meta.remediation,
                  "platforms": sorted(meta.platforms or []), "targets": sorted(meta.targets or []), "tiers": sorted(meta.tiers or [])},
         "stats": stats,
-        "findings": [finding_dict(f) for f in fs if f.status != "PASS"][:500],
+        "findings": [finding_dict(f, providers=prov) for f in fs if f.status != "PASS"][:500],
         "passing_repos": sorted({f.repo_key for f in fs if f.status == "PASS"}),
     }
 
 
-def finding_dict(f: FindingRow, meta: dict[str, RuleMeta] | None = None, platform: str | None = None) -> dict[str, Any]:
+def provider_map(s: Session, scan_id: str) -> dict[str, str]:
+    return {r.repo_key: provider_of_row(r) for r in store.repo_results(s, scan_id)}
+
+
+def finding_dict(f: FindingRow, meta: dict[str, RuleMeta] | None = None, platform: str | None = None, providers: dict[str, str] | None = None) -> dict[str, Any]:
     meta = meta or rule_index()
     m = meta.get(f.rule_id)
     return {
         "rule_id": f.rule_id, "title": m.title if m else "Collection error", "category": f.category,
         "category_name": CATEGORY_NAMES.get(f.category, "System"), "severity": f.severity, "status": f.status, "repo_key": f.repo_key,
-        "project": project_of(f.repo_key), "pipeline_id": f.pipeline_id, "pipeline_name": f.pipeline_name, "stage": f.stage, "message": f.message,
+        "project": project_of(f.repo_key), "provider": (providers or {}).get(f.repo_key, "azure_repos"), "pipeline_id": f.pipeline_id, "pipeline_name": f.pipeline_name, "stage": f.stage, "message": f.message,
         "evidence": f.evidence or {}, "link": f.link, "waiver": f.waiver, "original_status": f.original_status,
         "rationale": m.rationale if m else "", "remediation": m.remediation_for(platform) if m else "",
     }
@@ -174,7 +189,8 @@ def findings_list(s: Session, scan_id: str, *, project: str | None = None, categ
     rows = list(s.scalars(q.limit(5000)))
     rows.sort(key=lambda f: (SEV_RANK.get(f.severity, 9), FINDING_RANK.get(f.status, 9), f.repo_key, f.rule_id))
     meta = rule_index()
-    return {"total": total, "limit": limit, "offset": offset, "items": [finding_dict(f, meta) for f in rows[offset : offset + limit]]}
+    prov = provider_map(s, scan_id)
+    return {"total": total, "limit": limit, "offset": offset, "items": [finding_dict(f, meta, providers=prov) for f in rows[offset : offset + limit]]}
 
 
 # ------------------------------------------------------------------ overview
@@ -235,7 +251,7 @@ def overview(s: Session, scan_id: str) -> dict[str, Any]:
 def testing(s: Session, scan_id: str) -> dict[str, Any]:
     rows = store.repo_results(s, scan_id)
     counts = Counter(r.test_state for r in rows)
-    lists = {st: [row_dict(r) | {"reason": r.test_state_reason} for r in rows if r.test_state == st] for st in ("NO_TESTS", "TESTS_NOT_RUN", "TESTS_NO_COVERAGE", "TESTS_LOW_COVERAGE")}
+    lists = {st: [row_dict(r) | {"reason": r.test_state_reason} for r in rows if r.test_state == st] for st in ("NO_TESTS", "TESTS_NOT_RUN", "TESTS_NO_COVERAGE", "TESTS_LOW_COVERAGE", "UNKNOWN")}
     for v in lists.values():
         v.sort(key=lambda r: (r["project"], r["repo"]))
     buckets: Counter[int] = Counter()
@@ -333,7 +349,7 @@ def repo_detail(s: Session, scan_id: str, project: str, repo: str) -> dict[str, 
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     cat_counts: dict[str, Counter[str]] = defaultdict(Counter)
     for f in fs:
-        d = finding_dict(f, meta, pipe_platform.get(f.pipeline_id or "", platform_hint))
+        d = finding_dict(f, meta, pipe_platform.get(f.pipeline_id or "", platform_hint), {key: provider_of_row(r)})
         groups[f.category].append(d)
         cat_counts[f.category][f.status] += 1
     for lst in groups.values():
@@ -345,13 +361,15 @@ def repo_detail(s: Session, scan_id: str, project: str, repo: str) -> dict[str, 
         scored = cc["PASS"] + cc["FAIL"] + cc["WARN"]
         categories.append({"code": c, "name": CATEGORY_NAMES.get(c, "System"), "counts": dict(cc), "rate": round(100 * (cc["PASS"] + 0.5 * cc["WARN"]) / scored, 1) if scored else None, "findings": groups[c]})
     ext = r.external or {}
-    return {"repo": row_dict(r) | {"reason": r.test_state_reason, "migration_blockers": r.migration_blockers}, "facts": r.facts, "pipelines": r.pipelines,
+    facts = r.facts or {}
+    return {"repo": row_dict(r) | {"reason": r.test_state_reason, "migration_blockers": r.migration_blockers}, "facts": facts,
+            "repo_checks_unavailable": facts.get("facts_source") == "unavailable", "repo_checks_reason": facts.get("facts_reason", ""), "pipelines": r.pipelines,
             "categories": categories, "sonar": ext.get("sonar"), "aikido": ext.get("aikido"), "policies": ext.get("policies")}
 
 
-def filter_options(s: Session, scan_id: str) -> dict[str, list[str]]:
+def filter_options(s: Session, scan_id: str) -> dict[str, Any]:
     rows = store.repo_results(s, scan_id)
-    return {"projects": sorted({r.project for r in rows}), "targets": TARGETS, "test_states": TEST_STATES, "statuses": ["NON_COMPLIANT", "AT_RISK", "COMPLIANT", "NOT_SCANNED"]}
+    return {"projects": sorted({r.project for r in rows}), "providers": sorted({provider_of_row(r) for r in rows}), "provider_labels": PROVIDER_LABEL, "targets": TARGETS, "test_states": TEST_STATES, "statuses": ["NON_COMPLIANT", "AT_RISK", "COMPLIANT", "NOT_SCANNED"]}
 
 
 def meta_counts(s: Session) -> dict[str, int]:

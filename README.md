@@ -220,7 +220,9 @@ Pages: Overview, Repos (filter/sort/CSV), Repo detail, Findings, Rules (+drill-d
 
 Scoring: `score = 100 * sum(weight x credit) / sum(weight x applicable)` with critical 10, high 5, medium 3, low 1. A repo is **NON_COMPLIANT** with any critical failure, otherwise **AT_RISK** below 80 or with any high failure, otherwise **COMPLIANT**. Waivers turn failures into WAIVED until they expire.
 
-Test states per repo: `TESTS_OK`, `TESTS_LOW_COVERAGE`, `TESTS_NO_COVERAGE`, `TESTS_NOT_RUN`, `NO_TESTS`, `NOT_APPLICABLE` (ADF / Synapse / IaC / docs repos get the validation rule TST-006 instead).
+Test states per repo: `TESTS_OK`, `TESTS_LOW_COVERAGE`, `TESTS_NO_COVERAGE`, `TESTS_NOT_RUN`, `NO_TESTS`, `UNKNOWN`, `NOT_APPLICABLE` (ADF / Synapse / IaC / docs repos get the validation rule TST-006 instead).
+
+**Code on GitHub, pipelines in Azure DevOps.** Repos are discovered per ADO project from Azure Repos *and* from the repositories that build definitions and classic release artifacts point at, so GitHub-hosted repos appear everywhere (named `org/repo`, with a provider badge and a "Code hosted on" filter on the Repos page). Pipeline, release, environment, Sonar, Aikido and ServiceNow rules evaluate normally. Checks that need data only GitHub has (branch protection, CODEOWNERS, repository contents for test detection) are **UNKNOWN with a reason, never FAIL**, until a read-only GitHub reader is plugged in (see [docs/CUSTOMIZING.md](docs/CUSTOMIZING.md#plug-in-a-github-reader) and ADR-13 in [docs/DECISIONS.md](docs/DECISIONS.md)). A GitHub repo that no ADO pipeline references cannot be discovered from Azure DevOps. The demo estate is ~70% GitHub-hosted.
 
 ## Extending
 

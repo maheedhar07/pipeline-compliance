@@ -5,14 +5,15 @@
 organization: your-org
 # Projects to scan; empty = discover all projects in the organization.
 projects: []
-# Repos to skip, as "<project>/<repo>", e.g. ["Sandbox/scratch-repo"].
+# Repos to skip, as "<project>/<repo>", e.g. ["Sandbox/scratch-repo"]. Code hosted on GitHub (built by ADO pipelines) is
+# named "<org>/<repo>": "<project>/<org>/<repo>". Matching is case-insensitive.
 exclude_repos: []
 # Stage/environment name -> tier (test/uat/prod ...), applied BEFORE the name-based regex.
 env_tiers: {}
 # Per-repo overrides (project and repo required, the rest optional):
 repos: []
 #  - project: Payments
-#    repo: payments-api
+#    repo: payments-api                 # GitHub-hosted code: org/repo
 #    sonar_key: myorg_payments-api      # SonarQube project key
 #    aikido_repo: payments-api          # repo name in Aikido
 #    owner: team-payments@example.com

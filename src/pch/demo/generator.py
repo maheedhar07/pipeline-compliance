@@ -37,6 +37,8 @@ DOMAIN_WORDS = {
 SUFFIX = {"functionapp": ["func", "fn", "processor"], "webapp": ["web", "api", "portal"], "aks": ["svc", "service", "gateway"],
           "adf": ["adf"], "synapse": ["synapse", "dwh"], "sql": ["db", "sqlproj"], "iac": ["infra", "iac", "tf"],
           "lib": ["lib", "sdk", "common"], "docs": ["docs", "runbooks", "wiki"]}
+GITHUB_SHARE = 0.70  # share of repos whose code lives on GitHub (pipelines stay in Azure DevOps)
+GH_ARTIFACT_SHARE = 0.25  # of GitHub-hosted classic repos with a release: releases consuming the GitHub repo directly (no build)
 APP_KINDS = {"functionapp", "webapp", "aks", "lib", "sql"}
 SECRET_WORDS = ["dbPassword", "apiKey", "clientSecret", "storageConnectionString", "sasToken"]
 
@@ -64,13 +66,39 @@ class RepoSpec:
     tests: str  # none | notrun | ok | low | nocov | na
     t: dict[str, bool] = field(default_factory=dict)  # boolean traits
     n: dict[str, Any] = field(default_factory=dict)  # numeric / enum traits
+    host: str = "azure_repos"  # azure_repos | github
+    gh_artifact: bool = False  # classic release consumes the GitHub repo directly (no build definition)
 
     def has(self, trait: str) -> bool:
         return self.t.get(trait, False)
 
     @property
     def key(self) -> str:
-        return f"{self.project}/{self.name}"
+        return f"{self.project}/{self.repo_name}"
+
+    @property
+    def github(self) -> bool:
+        return self.host == "github"
+
+    @property
+    def repo_name(self) -> str:
+        """Name the scanner uses: "org/repo" for GitHub-hosted code, the repo name for Azure Repos."""
+        return f"contoso-{self.project.lower()}/{self.name}" if self.github else self.name
+
+    @property
+    def connection_id(self) -> str:
+        return f"ep-{self.project.lower()}-github"
+
+    def repository_block(self) -> dict[str, Any]:
+        """The ``repository`` object of a build definition (TfsGit or GitHub)."""
+        branch = f"refs/heads/{self.default_branch}"
+        if not self.github:
+            return {"id": self.repo_id, "name": self.name, "type": "TfsGit", "defaultBranch": branch}
+        full = self.repo_name
+        return {"id": full, "name": full, "type": "GitHub", "url": f"https://github.com/{full}.git", "defaultBranch": branch, "clean": None,
+                "properties": {"apiUrl": f"https://api.github.com/repos/{full}", "cloneUrl": f"https://github.com/{full}.git",
+                               "connectedServiceId": self.connection_id, "defaultBranch": self.default_branch, "fullName": full,
+                               "manageUrl": f"https://github.com/{full}", "orgName": full.split("/")[0], "shortName": self.name}}
 
 
 def build_plan(repos: int) -> list[tuple[str, str]]:
@@ -130,6 +158,9 @@ def make_spec(seed: int, idx: int, project: str, kind: str, qshift: float, used_
             tests = "ok"
     spec = RepoSpec(idx=idx, seed=seed, project=project, name=name, kind=kind, lang=lang, q=q, repo_id=f"repo-{idx:04d}",
                     default_branch="master" if u("branch") < 0.1 else "main", style=style, tests=tests)
+
+    spec.host = "github" if u("host") < GITHUB_SHARE else "azure_repos"
+    spec.gh_artifact = spec.github and style == "classic" and kind in DEPLOY_KINDS and u("ghart") < GH_ARTIFACT_SHARE
 
     def b(trait: str, p: float) -> None:
         spec.t[trait] = u(trait) < clamp(p, 0.0, 1.0)
@@ -421,6 +452,17 @@ def iso(d: datetime) -> str:
     return d.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def release_artifact(s: RepoSpec, build_id: int | None) -> dict[str, Any]:
+    """A classic release artifact: the CI build, or (GitHub-hosted code, no build in between) the GitHub repo itself."""
+    if build_id is None:
+        full = s.repo_name
+        return {"sourceId": f"{s.connection_id}:{full}", "type": "GitHub", "alias": full.replace("/", "_"), "isPrimary": True, "isRetained": False,
+                "definitionReference": {"definition": {"id": full, "name": full}, "connection": {"id": s.connection_id, "name": "github-contoso"},
+                                        "branches": {"id": s.default_branch, "name": s.default_branch},
+                                        "defaultVersionBranch": {"id": s.default_branch, "name": s.default_branch}}}
+    return {"alias": "_build", "type": "Build", "isPrimary": True, "definitionReference": {"definition": {"id": str(build_id), "name": f"{s.name}-CI"}, "project": {"name": s.project}}}
+
+
 class WorldBuilder:
     def __init__(self, seed: int, repos: int, qshift: float, now: datetime):
         self.seed, self.n_repos, self.qshift, self.now = seed, repos, qshift, now
@@ -458,6 +500,9 @@ class WorldBuilder:
                     pr["endpoints"].append(ep)
                     open_p = _u(self.seed, zlib.crc32(nm.encode()), "allp") < clamp(0.2 - 0.15 * PROJECT_PLAN[name][0] + self.qshift * -0.3, 0.03, 0.5)
                     pr["perms"][eid] = {"resource": {"id": eid, "type": "endpoint"}, "allPipelines": {"authorized": open_p}, "pipelines": []}
+        pr["endpoints"].append({"id": f"ep-{name.lower()}-github", "name": "github-contoso", "type": "github", "authorization": {"scheme": "InstallationToken"},
+                                "data": {"AvatarUrl": "https://avatars.githubusercontent.com/u/1"}, "isShared": False, "isReady": True})
+        pr["perms"][f"ep-{name.lower()}-github"] = {"allPipelines": {"authorized": False}}
         pr["endpoints"].append({"id": f"ep-{name.lower()}-sonar", "name": "sonarqube-conn", "type": "sonarqube", "authorization": {"scheme": "Token"}, "data": {}})
         pr["perms"][f"ep-{name.lower()}-sonar"] = {"allPipelines": {"authorized": False}}
         pr["variable_groups"] = [
@@ -477,17 +522,19 @@ class WorldBuilder:
     def add_repo(self, s: RepoSpec) -> None:
         pr = self.project(s.project)
         paths, contents = repo_files(s)
-        pr["repos"].append({"id": s.repo_id, "name": s.name, "project": {"name": s.project}, "defaultBranch": f"refs/heads/{s.default_branch}",
-                            "isDisabled": s.has("disabled"), "webUrl": f"{WEB}/{s.project}/_git/{s.name}", "size": 1000 + s.idx})
-        if not s.has("empty_repo"):
-            pr["items"][s.repo_id] = [{"objectId": f"{s.idx:040x}", "gitObjectType": "tree", "path": "/", "isFolder": True}] + [
-            {"objectId": f"{zlib.crc32(p.encode()):040x}", "gitObjectType": "blob", "path": "/" + p} for p in paths]
-        pr["files"][s.repo_id] = {"/" + k: v for k, v in contents.items()}
-        self.policies(pr, s)
+        if not s.github:  # GitHub-hosted code is NOT in Azure Repos: ADO only knows it through the pipelines that build it
+            pr["repos"].append({"id": s.repo_id, "name": s.name, "project": {"name": s.project}, "defaultBranch": f"refs/heads/{s.default_branch}",
+                                "isDisabled": s.has("disabled"), "webUrl": f"{WEB}/{s.project}/_git/{s.name}", "size": 1000 + s.idx})
+            if not s.has("empty_repo"):
+                pr["items"][s.repo_id] = [{"objectId": f"{s.idx:040x}", "gitObjectType": "tree", "path": "/", "isFolder": True}] + [
+                {"objectId": f"{zlib.crc32(p.encode()):040x}", "gitObjectType": "blob", "path": "/" + p} for p in paths]
+            pr["files"][s.repo_id] = {"/" + k: v for k, v in contents.items()}
+            self.policies(pr, s)
         build_id = None
         if s.style != "none":
             if s.style == "classic":
-                build_id = self.classic_build(pr, s)
+                if not s.gh_artifact:
+                    build_id = self.classic_build(pr, s)
                 if s.kind in DEPLOY_KINDS:
                     self.classic_release(pr, s, build_id)
             else:
@@ -522,7 +569,7 @@ class WorldBuilder:
             variables["apiKey"] = {"value": None, "isSecret": True, "allowOverride": True}
         defn = {
             "id": did, "name": f"{s.name}-CI", "path": f"\\{s.project}", "type": "build", "revision": 3 + s.idx % 11,
-            "project": {"name": s.project}, "repository": {"id": s.repo_id, "name": s.name, "type": "TfsGit", "defaultBranch": f"refs/heads/{s.default_branch}"},
+            "project": {"name": s.project}, "repository": s.repository_block(),
             "process": {"type": 1, "phases": [{"name": "Agent job 1", "refName": "Phase_1", "condition": "succeeded()", "target": {"type": 1}, "steps": steps}]},
             "queue": {"name": "Azure Pipelines" if s.idx % 9 else "OnPrem-Pool", "pool": {"name": "Azure Pipelines" if s.idx % 9 else "OnPrem-Pool", "isHosted": bool(s.idx % 9)}},
             "variables": variables,
@@ -542,7 +589,7 @@ class WorldBuilder:
         return {"displayName": n, "uniqueName": n.lower().replace(" ", ".") + "@contoso.com"}
 
     # ---- classic release
-    def classic_release(self, pr: dict[str, Any], s: RepoSpec, build_id: int) -> None:
+    def classic_release(self, pr: dict[str, Any], s: RepoSpec, build_id: int | None) -> None:
         did = self.rid()
         tiers = s.n["tiers"]
         envs = []
@@ -585,11 +632,12 @@ class WorldBuilder:
                 "retentionPolicy": {"daysToKeep": 365 if (is_prod and s.has("retention_ok")) else 30, "releasesToKeep": 3, "retainBuild": True},
                 "variables": env_vars, "variableGroups": groups,
             })
+        artifact = release_artifact(s, build_id)
         trig_cond = [{"sourceBranch": s.default_branch, "tags": [], "useBuildDefinitionBranch": False}] if s.has("branch_filter") else []
         defn = {
             "id": did, "name": f"{s.name}-CD", "path": f"\\{s.project}",
-            "artifacts": [{"alias": "_build", "type": "Build", "isPrimary": True, "definitionReference": {"definition": {"id": str(build_id), "name": f"{s.name}-CI"}, "project": {"name": s.project}}}],
-            "triggers": [{"triggerType": "artifactSource", "artifactAlias": "_build", "triggerConditions": trig_cond}] if trig_cond else [],
+            "artifacts": [artifact],
+            "triggers": [{"triggerType": "artifactSource", "artifactAlias": artifact["alias"], "triggerConditions": trig_cond}] if trig_cond else [],
             "environments": envs, "variables": {}, "variableGroups": [1],
             "modifiedBy": self.author(s), "createdBy": self.author(s), "_links": P.web_link(s.project, "release", did),
         }
@@ -627,7 +675,7 @@ class WorldBuilder:
         text = "\n".join(lines) + "\n"
         defn = {
             "id": did, "name": f"{s.name}", "path": f"\\{s.project}", "type": "build", "project": {"name": s.project},
-            "repository": {"id": s.repo_id, "name": s.name, "type": "TfsGit", "defaultBranch": f"refs/heads/{s.default_branch}"},
+            "repository": s.repository_block(),
             "process": {"type": 2, "yamlFilename": "azure-pipelines.yml"}, "queue": {"pool": {"name": "Azure Pipelines", "isHosted": True}},
             "retentionRules": [{"branches": ["+refs/heads/*"], "daysToKeep": 400 if s.has("retention_ok") else 30}],
             "authoredBy": self.author(s), "_links": P.web_link(s.project, "build", did),
@@ -636,7 +684,8 @@ class WorldBuilder:
         pr["yaml"][did] = text
         if s.has("preview_fails"):
             pr["yaml_preview_fail"].append(did)
-            pr["files"][s.repo_id]["/azure-pipelines.yml"] = text
+            if not s.github:  # the Items-API fallback exists for Azure Repos only
+                pr["files"][s.repo_id]["/azure-pipelines.yml"] = text
         # environments + checks
         for env, tier in env_defs:
             eid = self.rid()
@@ -753,7 +802,7 @@ class WorldBuilder:
         if s.kind == "docs" or not s.has("aikido"):
             return
         self.aikido_id += 1
-        self.world["aikido"]["repos"].append({"id": self.aikido_id, "name": s.name, "provider": "azure_devops", "active": True})
+        self.world["aikido"]["repos"].append({"id": self.aikido_id, "name": s.name, "provider": "github" if s.github else "azure_devops", "active": True})
         n = int(_u(s.seed, s.idx, "aik") ** 2 * 6 * (1.1 - s.q))
         for i in range(n):
             r = _u(s.seed, s.idx, f"aiks{i}")
@@ -765,7 +814,7 @@ class WorldBuilder:
             })
 
     def scope_entry(self, s: RepoSpec) -> None:
-        e: dict[str, Any] = {"project": s.project, "repo": s.name}
+        e: dict[str, Any] = {"project": s.project, "repo": s.repo_name}
         if s.has("has_owner"):
             e["owner"] = f"team-{s.project.lower()}-{s.idx % 5}@contoso.com"
         if s.has("sonar_key_override"):
@@ -785,5 +834,6 @@ def generate_world(seed: int = 42, repos: int = 280, quality_shift: float = 0.0,
         wb.add_repo(spec)
     # a deliberately disabled / empty repo exercises collection-error tolerance
     wb.world["meta"]["projects"] = list(wb.world["ado"])
+    wb.world["meta"]["github_share"] = GITHUB_SHARE
     # normalise through JSON so a freshly generated world is identical to one loaded from disk (str keys)
     return json.loads(json.dumps(wb.world))

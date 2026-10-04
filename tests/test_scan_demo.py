@@ -51,7 +51,18 @@ def test_world_is_deterministic_and_raw_payloads(world):
 
 def test_world_shape_280():
     w = generate_world(seed=1, repos=280)
-    assert sum(len(p["repos"]) for p in w["ado"].values()) == 280 and len(w["ado"]) == 6
+    from pch.collectors.ado.repo_discovery import discover
+
+    assert len(w["ado"]) == 6
+    discovered = [r for p in w["ado"].values() for r in discover(p["repos"], list(p["build_defs"].values()), list(p["release_defs"].values())).repos]
+    azure = [r for r in discovered if not r.external]
+    github = [r for r in discovered if r.provider == "github"]
+    assert len(azure) == sum(len(p["repos"]) for p in w["ado"].values()) and len(azure) + len(github) == len(discovered)
+    # ~70% of the estate lives on GitHub (repos without any ADO pipeline are invisible to Azure DevOps by definition)
+    assert 0.55 < len(github) / 280 < 0.75 and len(azure) > 60 and len(discovered) > 250
+    assert all(r.url.startswith("https://github.com/") and not r.url.endswith(".git") and r.service_connection_id for r in github)
+    assert not any("/" in r["name"] for p in w["ado"].values() for r in p["repos"])  # Azure Repos names never look like org/repo
+    assert sum(1 for p in w["ado"].values() for d in p["release_defs"].values() if d["artifacts"][0]["type"] == "GitHub") >= 5
     kinds = {"classic": 0, "yaml": 0}
     for pr in w["ado"].values():
         for d in pr["build_defs"].values():
@@ -182,3 +193,53 @@ def test_cli_seed_and_scan(tmp_path):
 def test_scan_without_credentials_fails_cleanly():
     r = CliRunner().invoke(app, ["scan"], env={"ADO_ORG": ""})
     assert r.exit_code == 2 and "ADO_ORG" in r.output
+
+
+def test_demo_github_estate_is_scanned_through_real_collectors(world, tmp_path):
+    """~70% of the demo estate is GitHub-hosted: pipelines/releases live in ADO, the code does not."""
+    seen: list[str] = []
+
+    class Spy(DemoTransport):
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            seen.append(request.url.path)
+            return await super().handle_async_request(request)
+
+    from pch.collectors.ado.client import AdoClient
+    from pch.demo import payloads as P
+    from pch.sources import Sources
+
+    src = Sources(ado=AdoClient(P.ORG, "demo", transport=Spy(world), backoff_base=0, max_attempts=1))
+    db = f"sqlite:///{tmp_path}/gh.db"
+    cfg = ScanConfig(scope=Scope(projects=world["meta"]["projects"]), policy=Policy(approved_registries=["contosoacr.azurecr.io"]), db_url=db, mode="demo", now=parse_world_time(world))
+
+    async def go():
+        try:
+            return await Scanner(src, cfg).run("gh")
+        finally:
+            await src.aclose()
+
+    asyncio.run(go())
+    with session_scope(db) as s:
+        rows = store.repo_results(s, "gh")
+        gh = [r for r in rows if r.external["repo"]["provider"] == "github"]
+        az = [r for r in rows if r.external["repo"]["provider"] == "azure_repos"]
+        assert len(gh) > len(az) > 5 and all("/" in r.repo and r.url.startswith("https://github.com/") for r in gh)
+        assert not any("/" in r.repo for r in az)
+        errs = [e.message for e in store.collection_errors(s, "gh")]
+        assert not any("not linked" in m for m in errs)  # releases consuming GitHub repos (directly or via a build) are linked
+        assert any(p["platform"] == "ado_classic_release" for r in gh for p in r.pipelines)
+        assert any(p["platform"] == "ado_yaml" for r in gh for p in r.pipelines) and any(p["platform"] == "ado_classic_build" for r in gh for p in r.pipelines)
+        assert all(r.facts["facts_source"] == "unavailable" for r in gh) and all(r.facts["facts_source"] == "ado_items" for r in az)
+        gh_keys = {r.repo_key for r in gh}
+        by = {}
+        for f in store.findings(s, "gh"):
+            if f.repo_key in gh_keys:
+                by.setdefault(f.rule_id, set()).add(f.status)
+        assert by["SRC-001"] == {"UNKNOWN"} and by["SRC-002"] == {"UNKNOWN"} and by["SRC-003"] == {"UNKNOWN"}
+        assert "FAIL" not in by.get("TST-001", set()) and "FAIL" not in by.get("TST-002", set())
+        assert {r.test_state for r in gh} <= {"UNKNOWN", "TESTS_OK", "TESTS_LOW_COVERAGE", "TESTS_NO_COVERAGE", "NOT_APPLICABLE"}  # never NO_TESTS / TESTS_NOT_RUN
+        assert any(r.test_state == "UNKNOWN" for r in gh)
+        assert by["SRC-004"] & {"FAIL", "PASS"}  # pipeline-definition rules evaluate normally
+    gh_ids = {r["id"] for p in world["ado"].values() for d in p["build_defs"].values() if d["repository"]["type"] == "GitHub" for r in [d["repository"]]}
+    assert gh_ids
+    assert not any("/git/repositories/" in p and any(i in p for i in gh_ids) for p in seen)  # no Items API call for GitHub repos

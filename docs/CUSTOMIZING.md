@@ -204,6 +204,16 @@ Example: a new system "Acme". Read-only by construction; follow `collectors/sona
 
 Verify: `pytest -q`, `pch seed-demo && pch scan --demo`, `pch doctor`.
 
+### Plug in a GitHub reader
+
+Repo-level checks for GitHub-hosted repos are UNKNOWN today (ADR-13) because nothing reads GitHub. A reader fills the gap without touching the rules:
+
+1. Implement the read-only contract in `collectors/github/` (`GitHubAdapter`; all HTTP through `SourceClient`, a new `Settings` source following recipe 5 above, a `github.com`/Enterprise base URL, token via the secret provider).
+2. In `Scanner.scan_repo` (`orchestrator.py`), where `unavailable_facts(ref.provider)` is used for `ref.external`, call the reader instead: build a populated `RepoFacts` with `facts_source="github"` (tree to `analyze_repo(paths, contents)`, CODEOWNERS) and map branch protection / rulesets to `BranchPolicies(available=True, min_reviewers=..., reset_on_push=..., build_validation=..., ...)`. Keep `facts_source="unavailable"` / `available=False` when the call fails (and record a collection error), so a flaky reader yields UNKNOWN, never FAIL.
+3. SRC-001..003/006 and TST-001..003/006 then evaluate normally: they only switch to UNKNOWN on `facts_source == "unavailable"` or `policies.available == False`. `classify_test_state` stops using the "pipeline proves tests" shortcut as soon as facts are available.
+4. The same reader can enumerate the GitHub organisation to add repos that no ADO pipeline references (extend `collect_project` / `discover`).
+5. Tests: respx fixtures for the GitHub API; reuse `tests/test_external_repos.py` (replace the `unavailable_facts` context with reader output) and keep `test_demo_github_estate_is_scanned_through_real_collectors` green after pointing the demo transport at a fake `api.github.com` host.
+
 ---
 
 ## 6. Rules, policy and data files

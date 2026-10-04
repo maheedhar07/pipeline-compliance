@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import status_badge, sev_badge %}
+{% from "_macros.html" import status_badge, sev_badge, provider_badge %}
 {% block title %}Findings · Pipeline Compliance Hub{% endblock %}
 {% block content %}
 <div class="mb-3 flex items-baseline gap-3"><h1 class="text-lg font-semibold">Findings</h1><span class="text-xs text-slate-500">{{ data.total }} match · showing {{ data['items'] | length }}</span>
@@ -22,7 +22,7 @@
   {% for f in data['items'] %}
   <tr class="align-top hover:bg-slate-50 dark:hover:bg-slate-700/40"><td class="px-2 py-1">{{ sev_badge(f.severity) }}</td><td class="py-1">{{ status_badge(f.status) }}</td>
     <td class="py-1 pr-2 text-xs"><a class="font-mono font-semibold text-indigo-700 hover:underline dark:text-indigo-300" href="{{ u('/rules/' ~ f.rule_id) }}">{{ f.rule_id }}</a><div class="text-slate-500">{{ f.title }}</div></td>
-    <td class="py-1 pr-2"><a class="text-indigo-700 hover:underline dark:text-indigo-300" href="{{ u('/repos/' ~ f.repo_key) }}">{{ f.repo_key }}</a></td>
+    <td class="py-1 pr-2"><a class="text-indigo-700 hover:underline dark:text-indigo-300" href="{{ u('/repos/' ~ f.repo_key) }}">{{ f.repo_key }}</a> {{ provider_badge(f.provider, {'azure_repos':'Azure Repos','github':'GitHub','github_enterprise':'GitHub Enterprise','other_git':'Other Git'}.get(f.provider, f.provider)) }}</td>
     <td class="py-1 pr-2 text-xs">{{ f.pipeline_name or '–' }}{% if f.stage %} / {{ f.stage }}{% endif %}</td><td class="py-1 pr-2 text-xs">{{ f.message }}</td></tr>
   {% else %}<tr><td colspan="6" class="px-3 py-8 text-center text-slate-500">No findings match.</td></tr>{% endfor %}
   </tbody>

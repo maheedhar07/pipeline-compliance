@@ -61,7 +61,7 @@ Direction = Literal["asc", "desc"]
 Offset = Annotated[int, Query(ge=0, le=1_000_000)]
 Limit = Annotated[int, Query(ge=1, le=1000)]
 ProjectPath = Annotated[str, PathParam(max_length=200)]
-RepoPath = Annotated[str, PathParam(max_length=200)]
+RepoPath = Annotated[str, PathParam(max_length=200)]  # routed with {repo:path}: GitHub-hosted repos are "org/repo"
 RulePath = Annotated[str, PathParam(max_length=64)]
 
 _JSON_ESCAPES = {ord("<"): "\\u003c", ord(">"): "\\u003e", ord("&"): "\\u0026", 0x2028: "\\u2028", 0x2029: "\\u2029"}
@@ -187,18 +187,18 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
                 return no_data(request)
             return templates.TemplateResponse(request, "overview.html", ctx(request, s, scan, data=Q.overview(s, row.id), nav="overview"))
 
-    def repo_filters(project, status, test_state, platform, target, sonar, q):
-        return {"project": project, "status": status, "test_state": test_state, "platform": platform, "target": target, "sonar": sonar, "q": q}
+    def repo_filters(project, status, test_state, platform, target, sonar, q, provider=None):
+        return {"project": project, "status": status, "test_state": test_state, "platform": platform, "target": target, "sonar": sonar, "q": q, "provider": provider}
 
     @app.get("/repos", response_class=HTMLResponse)
     def page_repos(request: Request, scan: ScanId = None, project: Text = None, status: Text = None, test_state: Text = None,
-                   platform: Text = None, target: Text = None, sonar: Text = None, q: Text = None,
+                   platform: Text = None, target: Text = None, sonar: Text = None, q: Text = None, provider: Text = None,
                    sort: SortKey = "status", dir: Direction = "asc"):
         with session_scope(app.state.db_url) as s:
             row = Q.resolve_scan(s, scan)
             if not row:
                 return no_data(request)
-            filters = repo_filters(project, status, test_state, platform, target, sonar, q)
+            filters = repo_filters(project, status, test_state, platform, target, sonar, q, provider)
             rows = Q.repos(s, row.id, sort=sort, direction=dir, **filters)
             return templates.TemplateResponse(request, "repos.html", ctx(
                 request, s, scan, rows=rows, filters=filters, sort=sort, dir=dir, options=Q.filter_options(s, row.id), nav="repos",
@@ -206,18 +206,18 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
 
     @app.get("/repos.csv", response_class=PlainTextResponse)
     def repos_csv(scan: ScanId = None, project: Text = None, status: Text = None, test_state: Text = None,
-                  platform: Text = None, target: Text = None, sonar: Text = None, q: Text = None,
+                  platform: Text = None, target: Text = None, sonar: Text = None, q: Text = None, provider: Text = None,
                   sort: SortKey = "status", dir: Direction = "asc"):
         with session_scope(app.state.db_url) as s:
             row = Q.resolve_scan(s, scan)
             if not row:
                 raise HTTPException(404, "no scans yet")
-            rows = Q.repos(s, row.id, sort=sort, direction=dir, **repo_filters(project, status, test_state, platform, target, sonar, q))
+            rows = Q.repos(s, row.id, sort=sort, direction=dir, **repo_filters(project, status, test_state, platform, target, sonar, q, provider))
         buf = io.StringIO()
         csv.writer(buf).writerows([[csv_cell(c) for c in r] for r in Q.csv_rows(rows)])
         return PlainTextResponse(buf.getvalue(), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=repos.csv"})
 
-    @app.get("/repos/{project}/{repo}", response_class=HTMLResponse)
+    @app.get("/repos/{project}/{repo:path}", response_class=HTMLResponse)
     def page_repo(request: Request, project: ProjectPath, repo: RepoPath, scan: ScanId = None):
         with session_scope(app.state.db_url) as s:
             row = Q.resolve_scan(s, scan)
@@ -329,11 +329,11 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
 
     @app.get("/api/v1/repos")
     def api_repos(scan: ScanId = None, project: Text = None, status: Text = None, test_state: Text = None,
-                  platform: Text = None, target: Text = None, sonar: Text = None, q: Text = None,
+                  platform: Text = None, target: Text = None, sonar: Text = None, q: Text = None, provider: Text = None,
                   sort: SortKey = "status", dir: Direction = "asc"):
-        return api(lambda s, r: {"repos": Q.repos(s, r.id, sort=sort, direction=dir, **repo_filters(project, status, test_state, platform, target, sonar, q))})(scan)
+        return api(lambda s, r: {"repos": Q.repos(s, r.id, sort=sort, direction=dir, **repo_filters(project, status, test_state, platform, target, sonar, q, provider))})(scan)
 
-    @app.get("/api/v1/repos/{project}/{repo}")
+    @app.get("/api/v1/repos/{project}/{repo:path}")
     def api_repo(project: ProjectPath, repo: RepoPath, scan: ScanId = None):
         return api(lambda s, r: Q.repo_detail(s, r.id, project, repo))(scan)
 

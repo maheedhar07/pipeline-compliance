@@ -63,7 +63,7 @@ def test_repos_filters_sort_and_csv(client):
     page = client.get("/repos", params={"project": "Payments", "status": "NON_COMPLIANT"}).text
     assert 'hx-get="/repos"' in page
     csv = client.get("/repos.csv", params={"project": "Payments"})
-    assert csv.status_code == 200 and csv.text.startswith("project,repo,owner") and "Payments" in csv.text
+    assert csv.status_code == 200 and csv.text.startswith("project,repo,provider,owner") and "Payments" in csv.text
     assert "text/csv" in csv.headers["content-type"]
 
 
@@ -101,7 +101,7 @@ def test_findings_filters(client):
 
 def test_testing_targets_migration_json(client):
     t = client.get("/api/v1/testing").json()
-    assert set(t["counts"]) == {"TESTS_OK", "TESTS_LOW_COVERAGE", "TESTS_NO_COVERAGE", "TESTS_NOT_RUN", "NO_TESTS", "NOT_APPLICABLE"} and t["lists"]["NO_TESTS"]
+    assert set(t["counts"]) == {"TESTS_OK", "TESTS_LOW_COVERAGE", "TESTS_NO_COVERAGE", "TESTS_NOT_RUN", "NO_TESTS", "UNKNOWN", "NOT_APPLICABLE"} and t["lists"]["NO_TESTS"]
     tg = client.get("/api/v1/targets").json()
     assert {x["target"] for x in tg["targets"]} == {"functionapp", "webapp", "aks", "adf", "synapse", "sql", "iac"}
     assert any(x["rules"] for x in tg["targets"])
@@ -133,3 +133,66 @@ def test_empty_database_shows_guidance(tmp_path):
     r = c.get("/")
     assert r.status_code == 200 and "pch seed-demo" in r.text
     assert c.get("/repos").status_code == 200 and c.get("/api/v1/overview").status_code == 404
+
+
+# ------------------------------------------------------------------ GitHub-hosted repos ("org/repo" names with a slash)
+@pytest.fixture(scope="module")
+def gh_row(client):
+    rows = client.get("/api/v1/repos").json()["repos"]
+    gh = [r for r in rows if r["provider"] == "github"]
+    assert len(gh) > 20 and any(r["provider"] == "azure_repos" for r in rows)
+    return next(r for r in gh if r["platforms"])
+
+
+def test_github_repo_detail_page_json_and_banner(client, gh_row):
+    assert gh_row["repo"].count("/") == 1 and gh_row["key"] == f"{gh_row['project']}/{gh_row['repo']}"
+    page = client.get(f"/repos/{gh_row['project']}/{gh_row['repo']}")
+    assert page.status_code == 200
+    assert "Repo-level checks unavailable: GitHub reader not configured" in page.text and "Open on GitHub" in page.text
+    assert "Findings by category" in page.text
+    js = client.get(f"/api/v1/repos/{gh_row['project']}/{gh_row['repo']}").json()
+    assert js["repo"]["repo"] == gh_row["repo"] and js["repo_checks_unavailable"] and js["facts"]["facts_source"] == "unavailable"
+    assert client.get(f"/repos/{gh_row['project']}/{gh_row['repo']}/nope").status_code == 404
+    az = next(r for r in client.get("/api/v1/repos").json()["repos"] if r["provider"] == "azure_repos")
+    assert "GitHub reader not configured" not in client.get(f"/repos/{az['project']}/{az['repo']}").text
+
+
+def test_github_repo_links_are_encoded_and_resolve(client, gh_row):
+    html = client.get("/repos", params={"provider": "github"}).text
+    assert f'href="/repos/{gh_row["project"]}/{gh_row["repo"]}"' in html  # slash kept, path-encoded elsewhere
+    assert ">GitHub</span>" in html
+    odd = client.get("/repos/Payments/org/re%23po%3Fx")  # "#" and "?" in a name never change the target
+    assert odd.status_code == 404
+
+
+def test_provider_filter_csv_and_api(client):
+    gh = client.get("/api/v1/repos", params={"provider": "github"}).json()["repos"]
+    az = client.get("/api/v1/repos", params={"provider": "azure_repos"}).json()["repos"]
+    total = client.get("/api/v1/repos").json()["repos"]
+    assert gh and az and len(gh) + len(az) == len(total) and all(r["provider"] == "github" for r in gh)
+    csv = client.get("/repos.csv", params={"provider": "github"}).text.splitlines()
+    assert csv[0].startswith("project,repo,provider") and len(csv) == len(gh) + 1 and all(",github," in line for line in csv[1:])
+    assert client.get("/repos", params={"provider": "x" * 300}).status_code == 400
+
+
+def test_github_findings_filter_and_badge(client, gh_row):
+    d = client.get("/api/v1/findings", params={"repo": gh_row["key"], "limit": 1000}).json()
+    assert d["total"] > 0 and all(f["repo_key"] == gh_row["key"] and f["provider"] == "github" for f in d["items"])
+    page = client.get("/findings", params={"repo": gh_row["key"]})
+    assert page.status_code == 200 and "GitHub" in page.text
+    byproj = client.get("/api/v1/findings", params={"project": gh_row["project"], "limit": 1000}).json()
+    assert any(f["repo_key"] == gh_row["key"] for f in byproj["items"])
+
+
+def test_github_repos_have_unknown_not_fail_for_repo_level_checks(client):
+    rows = {r["key"]: r for r in client.get("/api/v1/repos").json()["repos"] if r["provider"] == "github"}
+    unk = 0
+    for rule in ("SRC-001", "SRC-002", "SRC-003"):
+        d = client.get("/api/v1/findings", params={"rule": rule, "limit": 1000}).json()["items"]
+        for f in d:
+            if f["repo_key"] in rows:
+                assert f["status"] == "UNKNOWN", (f["repo_key"], rule, f["status"])
+                unk += 1
+    assert unk > 50
+    assert not any(r["test_state"] == "NO_TESTS" for r in rows.values())
+    assert any(r["test_state"] == "UNKNOWN" for r in rows.values())

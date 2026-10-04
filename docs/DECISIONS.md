@@ -6,7 +6,7 @@ Choices made where `docs/PLAN.md` was ambiguous or silent. Revisit them when rea
 - **Per-rule aggregation.** A rule can produce many findings (one per pipeline or stage). For scoring the worst finding per (repo, rule) wins (`FAIL > WARN > PASS > WAIVED > UNKNOWN > NOT_APPLICABLE`), so a repo with five failing pipelines is not penalised five times. All individual findings are still stored and shown.
 - **WARN counts as half credit**, WAIVED/UNKNOWN/NOT_APPLICABLE are excluded from numerator and denominator. `info` severity has weight 0.
 - **Status** follows PLAN section 8 exactly. WARN never makes a repo NON_COMPLIANT. A repo whose scan crashed is stored as `NOT_SCANNED`.
-- **Waivers** match `rule` + `repo` (`Project/repo`, bare repo name or `*`) and convert FAIL/WARN to WAIVED while `expires` is in the future (or empty). Expired waivers leave the finding failing and add an "expired" badge.
+- **Waivers** match `rule` + `repo` (`Project/repo`, bare repo name or `*`; GitHub-hosted repos: `Project/org/repo` or `org/repo`) and convert FAIL/WARN to WAIVED while `expires` is in the future (or empty). Expired waivers leave the finding failing and add an "expired" badge.
 
 ## Rules (interpretation of the catalog)
 - **TGT-FA-001 / TGT-WA-001** (slot + swap) only apply to `prod` stages. Requiring slots in dev would be noise.
@@ -172,3 +172,34 @@ Format: context, decision, consequences, how to reverse.
 - **Decision.** The environment-variable table in the README is generated from `Settings` (`pch config reference`); `tests/test_docs.py` fails if a setting is undocumented, the README table or `docs/RULES.md` is stale, `.env.example` omits a setting, or a relative markdown link is broken.
 - **Consequences.** Adding a setting means one entry in `src/pch/config_reference.py`, one mention in `.env.example` and a regenerated README.
 - **Reverse.** Delete the tests.
+
+### ADR-13 GitHub-hosted code, Azure DevOps pipelines: include the repos, UNKNOWN (never FAIL) for what only GitHub knows (L1)
+- **Context.** The owner's code lives on GitHub while every pipeline (YAML and Classic build/release) is in Azure DevOps. The scanner used to iterate only `_apis/git/repositories` and link build definitions by `repository.id`, so GitHub-hosted repos and their releases were silently dropped.
+- **Decision.** Per ADO project the set of repos is: Azure Repos repositories, plus external repos referenced by that project's build definitions (`repository.type != "TfsGit"`: `GitHub`, `GitHubEnterprise`, anything else is `other_git`), plus GitHub repos used directly as classic release artifacts (`artifacts[].type == "GitHub"`, no build in between). Grouping stays per ADO project (scope.yaml, waivers and existing URLs are per project). The repo **name is the full name `org/repo`**, so the repo key is `Project/org/repo` and web routes are `/repos/{project}/{repo:path}` (the `u()` helper keeps `/` and encodes everything else). Repos are de-duplicated case-insensitively on (provider, full name) per project; build definitions link by (provider, id), releases via their primary artifact first (Build artifact to build definition to repo, or the GitHub artifact). A release that cannot be linked (for example built from a repo in another project) stays a collection error. `RepoRef` gained `provider`, `full_name`, `service_connection_id` (web URL derived to `https://github.com/org/repo`, no `.git`); the provider is stored in the existing `repo_results.external_summary` JSON, so there is **no schema change** (no migration).
+- **Facts are "not collected", not "empty".** For external repos the Items API tree fetch and ADO branch policies are not called. `RepoFacts.facts_source = "unavailable"` with the reason *GitHub-hosted: repository contents/branch protection need the GitHub reader (not configured)*, and `BranchPolicies.available = False` with the same `unavailable_reason`. A future reader returns populated facts with its own `facts_source` and the rules evaluate normally (CUSTOMIZING, "Plug in a GitHub reader").
+- **Test state.** New `TestState.UNKNOWN`. For an external repo: if a pipeline effectively runs tests that proves tests exist and the usual semantics apply (`TESTS_OK` / `TESTS_LOW_COVERAGE` / `TESTS_NO_COVERAGE`, coverage from Sonar); otherwise `UNKNOWN`. It is never `NO_TESTS` or `TESTS_NOT_RUN` because that needs the file tree. ADF / Synapse / IaC repos are recognised from what their pipelines deploy (all deploy targets of one such kind) so they stay `NOT_APPLICABLE` and TST-006 applies.
+- **YAML expansion** through `pipelines/{id}/preview` still works (ADO fetches the file through the service connection); the Items-API fallback is skipped for external repos and produces an info collection error.
+- **Sonar / Aikido matching** for `org/repo`: Sonar keys also try `Project_repo`, `repo` and `org_repo`; Aikido tries `org/repo` then `repo`. `scope.yaml` overrides and `exclude_repos` match the full name case-insensitively (`Project/org/repo`); a waiver `repo` matches `Project/org/repo` or `org/repo` (a bare short name does not).
+- **Known limit.** A GitHub repo that no ADO pipeline or release references is invisible to Azure DevOps and therefore not scanned until a GitHub reader enumerates the organisation (the demo shows ~5% of its estate as such repos, absent from the report).
+- **Reverse.** Drop the `RepoEntry` discovery of external repos in `orchestrator._run` (Azure Repos behaviour is unchanged).
+
+Rule behaviour for externally hosted (GitHub) repos:
+
+| Rule | Behaviour for a GitHub-hosted repo |
+|---|---|
+| SRC-001, SRC-002, SRC-003 | **UNKNOWN** (reason above): ADO branch policies do not apply, GitHub branch protection needs the reader |
+| SRC-004 | Normal (pipeline definition in ADO / source control) |
+| SRC-005 | Normal (release artifact branch filters, environment branch-control checks) |
+| SRC-006 | **UNKNOWN** when an ADO YAML pipeline exists (CODEOWNERS lives in the repo); NOT_APPLICABLE when there is no YAML pipeline in ADO (a YAML file in GitHub that no ADO pipeline uses is not assessed) |
+| TST-001, TST-002 | PASS when a pipeline effectively runs tests (proof); otherwise **UNKNOWN**; never FAIL |
+| TST-003 | Normal when a pipeline runs tests (a missing coverage report is a real FAIL, from pipeline/Sonar data); **UNKNOWN** otherwise |
+| TST-004, TST-005 | Normal (pipeline / stage definitions) |
+| TST-006 | Normal when the repo is recognised as ADF / Synapse / IaC from its pipelines' deploy targets; NOT_APPLICABLE when pipelines deploy application targets; **UNKNOWN** when neither is known |
+| QLT-001..005, QLT-008 | Normal (pipeline + Sonar data). NOT_APPLICABLE for ADF/Synapse/IaC repos works through the inferred kind above |
+| QLT-006, QLT-007 | Normal (Aikido); "docs-only" repos cannot be recognised without contents, so they are evaluated |
+| SEC-001..005 | Normal (pipeline variables, variable groups, service connections) |
+| DEP-001..006 | Normal (stages, approvals, ServiceNow) |
+| SUP-001..005 | Normal (pipeline steps) |
+| TGT-* | Normal (deploy steps); ADF/Synapse refinement from repo contents is not applied |
+| HYG-001..003 | Normal (run history, owner) |
+| Migration readiness (MIG) | Normal (pipeline-based) |

@@ -9,8 +9,13 @@
 {%- endmacro %}
 
 {% macro test_badge(s) -%}
-{%- set cls = {'TESTS_OK':'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300','TESTS_LOW_COVERAGE':'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300','TESTS_NO_COVERAGE':'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-200','TESTS_NOT_RUN':'bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300','NO_TESTS':'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300','NOT_APPLICABLE':'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'} -%}
+{%- set cls = {'TESTS_OK':'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300','TESTS_LOW_COVERAGE':'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300','TESTS_NO_COVERAGE':'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-200','TESTS_NOT_RUN':'bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300','NO_TESTS':'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300','UNKNOWN':'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200','NOT_APPLICABLE':'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'} -%}
 <span class="inline-block whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-semibold {{ cls.get(s, 'bg-slate-100') }}">{{ s | replace('TESTS_','') | replace('_',' ') }}</span>
+{%- endmacro %}
+
+{% macro provider_badge(p, label) -%}
+{%- set cls = {'github':'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200','github_enterprise':'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200','other_git':'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200','azure_repos':'bg-sky-200 text-sky-900 dark:bg-sky-800 dark:text-sky-100'} -%}
+<span class="inline-block whitespace-nowrap rounded px-1 py-0.5 text-[10px] font-semibold {{ cls.get(p, 'bg-slate-200') }}" title="Code hosted on {{ label }}">{{ label }}</span>
 {%- endmacro %}
 
 {% macro bar(rate) -%}
