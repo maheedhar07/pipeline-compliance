@@ -300,6 +300,7 @@ def scan(
     db: str | None = typer.Option(None, "--db", help="Database URL (default DATABASE_URL / sqlite:///data/pch.db)"),
     scope_file: str = typer.Option("config/scope.yaml", "--scope"),
     policy_file: str = typer.Option("config/policy.yaml", "--policy"),
+    features_file: str | None = typer.Option(None, "--features", help="features.yaml with the switch defaults (default <CONFIG_DIR>/features.yaml); UI/CLI overrides in the database win"),
 ) -> None:
     """Collect, evaluate and store a compliance scan snapshot (read-only)."""
     import asyncio
@@ -335,6 +336,9 @@ def scan(
 
     async def go() -> None:
         artifacts = get_artifact_store(settings, data_path)
+        flags = _effective_features(db_url, settings, features_file)  # read once, at scan start; snapshotted into scans.summary.features
+        if off := sorted(k for k, v in flags.items() if not v):
+            typer.echo(f"Features off (Settings): {', '.join(off)}", err=True)
         if demo:
             from pch.demo.generator import generate_world
             from pch.demo.transport import load_world, parse_world_time
@@ -355,9 +359,9 @@ def scan(
             for w, now in snapshots:
                 scan_id = new_scan_id(now, "demo")
                 record = PrefixedStore(artifacts, scan_id) if cache else None
-                src = demo_sources(w, record_to=record)
+                src = demo_sources(w, record_to=record, features=flags)
                 cfg = ScanConfig(scope=scope, policy=policy, db_url=db_url, mode="demo", now=now, stale_after=stale, timeout_s=timeout_s,
-                                  lineage=settings.lineage_enabled, lineage_top=settings.lineage_deployments_top)
+                                  lineage=settings.lineage_enabled, lineage_top=settings.lineage_deployments_top, features=flags)
                 typer.echo(f"Scanning demo estate {scan_id} ...", err=True)
                 try:
                     res = await Scanner(src, cfg, progress).run(scan_id)
@@ -369,14 +373,14 @@ def scan(
         live_settings = settings.model_copy(update={"ado_org": resolve_ado_org(settings, scope)[0]})  # ConfigError on a conflict (exit 2)
         now = utcnow_naive()
         if from_cache:
-            scan_id, src = new_scan_id(now, "cache"), cache_sources(PrefixedStore(artifacts, from_cache), live_settings)
+            scan_id, src = new_scan_id(now, "cache"), cache_sources(PrefixedStore(artifacts, from_cache), live_settings, features=flags)
             mode = "cache"
         else:
             scan_id = new_scan_id(now, "live")
-            src = live_sources(live_settings, record_to=PrefixedStore(artifacts, scan_id) if cache is not False else None)
+            src = live_sources(live_settings, record_to=PrefixedStore(artifacts, scan_id) if cache is not False else None, features=flags)
             mode = "live"
         cfg = ScanConfig(scope=scope, policy=policy, db_url=db_url, mode=mode, now=now, stale_after=stale, timeout_s=timeout_s,
-                         lineage=settings.lineage_enabled, lineage_top=settings.lineage_deployments_top)
+                         lineage=settings.lineage_enabled, lineage_top=settings.lineage_deployments_top, features=flags)
         try:
             res = await Scanner(src, cfg, progress).run(scan_id)
         finally:
@@ -416,6 +420,18 @@ def scan(
         typer.echo(f"Scan failed: could not persist to the database ({type(exc).__name__}: {msg}); scan marked failed, lock released.", err=True)
         raise typer.Exit(exitcodes.SCHEMA_NOT_READY if unreachable else exitcodes.FAILED) from None
     sys.stdout.flush()
+
+
+def _effective_features(db_url: str, settings: Settings, features_file: str | None = None) -> dict[str, bool]:
+    """Switch values for this process: ``features.yaml`` defaults, overridden by the database (UI / ``pch features set``)."""
+    from pathlib import Path
+
+    from pch.features import effective_flags, load_feature_defaults
+    from pch.store.db import session_scope
+
+    defaults = load_feature_defaults(Path(features_file) if features_file else settings.config_dir / "features.yaml")
+    with session_scope(db_url) as s:
+        return effective_flags(s, defaults)
 
 
 def _ado_org_known(settings: Settings, scope_file: str) -> bool:
@@ -523,6 +539,60 @@ def scans_prune(
     typer.echo(f"{len(report.outcomes) - report.errors} scan(s) {summary}" + (" (dry run)" if dry_run else "") + (f", {report.errors} failed" if report.errors else ""))
     if report.errors:
         raise typer.Exit(exitcodes.FAILED)
+
+
+features_app = typer.Typer(help="Feature switches (the Settings page): list, set, reset", no_args_is_help=True)
+app.add_typer(features_app, name="features")
+
+
+@features_app.command("list")
+def features_list(
+    db: str | None = typer.Option(None, "--db", help="Database URL (default DATABASE_URL)"),
+    features_file: str | None = typer.Option(None, "--features", help="Default <CONFIG_DIR>/features.yaml"),
+) -> None:
+    """Show every switch: effective value and where it comes from (file default or an override with who/when)."""
+    from pathlib import Path
+
+    from pch.features import effective_states, load_feature_defaults
+    from pch.settings import ConfigError, get_settings
+    from pch.store.db import session_scope
+
+    s_ = get_settings()
+    try:
+        defaults = load_feature_defaults(Path(features_file) if features_file else s_.config_dir / "features.yaml")
+    except ConfigError as exc:
+        typer.echo(f"Config error: {exc}", err=True)
+        raise typer.Exit(exitcodes.CONFIG) from None
+    url = db or s_.database_url
+    _open_db(url)
+    with session_scope(url) as s:
+        for st in effective_states(s, defaults):
+            when = "next scan" if st.timing == "next_scan" else "immediately"
+            typer.echo(f"{st.key:<20} {'on' if st.enabled else 'off':<4} {st.source_text}  (takes effect {when})")
+
+
+@features_app.command("set")
+def features_set(
+    key: str = typer.Argument(..., help="migration | gha_scanning | source_sonar | source_aikido | source_servicenow"),
+    value: str = typer.Argument(..., help="on | off | default (remove the override, use features.yaml)"),
+    db: str | None = typer.Option(None, "--db", help="Database URL (default DATABASE_URL)"),
+) -> None:
+    """Change one switch in the app's own database (audited, actor \"cli\"). Never touches an upstream system."""
+    from pch.features import BY_KEY, CLI_ACTOR, set_override
+    from pch.settings import get_settings
+    from pch.store.db import session_scope
+
+    if key not in BY_KEY:
+        typer.echo(f"Unknown feature {key!r}. Known: {', '.join(BY_KEY)}", err=True)
+        raise typer.Exit(exitcodes.CONFIG)
+    if value not in ("on", "off", "default"):
+        typer.echo("Value must be exactly on, off or default.", err=True)
+        raise typer.Exit(exitcodes.CONFIG)
+    url = db or get_settings().database_url
+    _open_db(url)
+    with session_scope(url) as s:
+        changed = set_override(s, key, None if value == "default" else value == "on", CLI_ACTOR, "cli")
+    typer.echo(f"{key}: {value}" + ("" if changed else " (no change)"))
 
 
 @app.command()

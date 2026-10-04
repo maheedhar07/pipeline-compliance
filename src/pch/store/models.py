@@ -121,3 +121,28 @@ class ScanLockRow(Base):
     name: Mapped[str] = mapped_column(Unicode(64), primary_key=True)
     holder: Mapped[str] = mapped_column(Unicode(200))
     acquired_at: Mapped[datetime] = mapped_column(UTCDateTime())
+
+
+class FeatureFlagRow(Base):
+    """An override of a feature switch set in the UI / CLI (a missing row means: the ``config/features.yaml`` default applies).
+    The column is ``feature_key``, not ``key``: KEY is a reserved word in T-SQL."""
+
+    __tablename__ = "feature_flags"
+    feature_key: Mapped[str] = mapped_column(Unicode(40), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean)
+    updated_by: Mapped[str] = mapped_column(Unicode(100), default="")  # display name only (never an e-mail / UPN)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime())
+
+
+class FeatureAuditRow(Base):
+    """Append-only trail of switch changes: nothing in the app updates or deletes these rows."""
+
+    __tablename__ = "feature_audit"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    feature_key: Mapped[str] = mapped_column(Unicode(40), index=True)
+    old_value: Mapped[str] = mapped_column(Unicode(8))  # on | off | default (no override)
+    new_value: Mapped[str] = mapped_column(Unicode(8))
+    actor_id_hash: Mapped[str] = mapped_column(Unicode(64))  # SHA-256 of the principal id
+    actor_display_name: Mapped[str] = mapped_column(Unicode(100), default="")
+    at: Mapped[datetime] = mapped_column(UTCDateTime())
+    source: Mapped[str] = mapped_column(Unicode(8))  # ui | cli

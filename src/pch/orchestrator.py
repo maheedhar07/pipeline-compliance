@@ -39,8 +39,9 @@ from pch.collectors.redact import SECRET_NAME, value_looks_secret
 from pch.engine.migration import migration_summary, repo_readiness
 from pch.engine.reasons import compute_reasons
 from pch.engine.registry import all_rules, rule_params
-from pch.engine.runner import evaluate, policy_effects
+from pch.engine.runner import evaluate, policy_effects, rules_for_features
 from pch.engine.scoring import apply_waivers, score_repo
+from pch.features import ALL_ON
 from pch.logging_setup import bind_scan, scrub
 from pch.model.findings import Finding, Severity, Status
 from pch.model.gha import ActionsRead
@@ -96,6 +97,7 @@ class ScanConfig:
     timeout_s: float | None = None  # overall limit for one scan (SCAN_TIMEOUT_MINUTES); None = unlimited
     lineage: bool = True  # collect the last deployment per stage (LINEAGE_ENABLED); False: stages are "unknown"
     lineage_top: int = 200  # deployments / environment records per lookup (LINEAGE_DEPLOYMENTS_TOP)
+    features: dict[str, bool] = field(default_factory=lambda: dict(ALL_ON))  # Settings switches read at scan start (pch.features); a missing key means on
 
 
 @dataclass
@@ -143,7 +145,8 @@ class Scanner:
         self.errors: list[tuple[str, str, str]] = []  # (source, subject, message)
         self.catalog = TaskCatalog()
         self.aikido_data: tuple[list, list] | None = None
-        self.rules = all_rules()
+        self.flags = {**ALL_ON, **cfg.features}
+        self.rules = rules_for_features(all_rules(), self.flags)  # a rule whose source switch is off is not evaluated (and so not scored)
         self.yaml_meta: dict[str, YamlMeta] = {}  # "<project>:<definition id>" -> triggers/resources parsed from the expanded YAML
         self.lineages: dict[str, RepoLineage] = {}  # repo key -> lineage
         self.orphans: dict[str, list[LOrphan]] = {}  # project -> unlinked pipelines / releases
@@ -276,7 +279,7 @@ class Scanner:
                 ref.url = gh.web_url
             if ref.owner is None and gh.owner:
                 ref.owner = gh.owner  # CODEOWNERS default rule; scope.yaml owner wins
-            if gh.default_branch:  # GitHub Actions: workflows, environments, runs, last deployments (read-only; failures are reasons, never FAIL)
+            if gh.default_branch and self.flags["gha_scanning"]:  # GitHub Actions: workflows, environments, runs, last deployments (read-only; failures are reasons, never FAIL)
                 try:
                     actions = await read_actions(self.src.github, ref.name, gh.default_branch, now=cfg.now, run_days=cfg.run_days,
                                                  known_paths=facts.pipeline_files, with_deployments=cfg.lineage)
@@ -408,7 +411,7 @@ class Scanner:
         findings = evaluate(ctx, cfg.policy, self.rules)
         apply_waivers(findings, ref.key, cfg.policy, cfg.now.date())
         sc = score_repo(findings, cfg.policy)
-        mig_score, blockers = repo_readiness(ctx)
+        mig_score, blockers = repo_readiness(ctx) if self.flags["migration"] else (None, [])
         for source, msg in repo_errors:
             findings.append(Finding(rule_id="COLLECTION-ERROR", repo_key=ref.key, category="SYS", severity=Severity.INFO,
                                     status=Status.UNKNOWN, message=f"{source}: {msg}", evidence={"source": source}))
@@ -609,7 +612,7 @@ class Scanner:
                         "repo": {"provider": ctx.repo.provider, "full_name": ctx.repo.full_name, "service_connection_id": ctx.repo.service_connection_id},
                         "policies": ctx.policies.model_dump(mode="json"),
                         "protection": ctx.protection.model_dump(mode="json") if ctx.protection else None,
-                        "migration": migration_summary(ctx.pipelines),
+                        **({"migration": migration_summary(ctx.pipelines)} if self.flags["migration"] else {}),
                         "reasons": compute_reasons(findings, self.rules),  # why the repo is not compliant (pages/exports read this)
                     },
                 ))
@@ -636,7 +639,7 @@ class Scanner:
                 row.findings_total = n_findings
                 row.duration_s = round(duration, 2)
                 row.summary = {"status_counts": dict(counts), "category_fails": dict(cat_fail), "errors": len(self.errors), "providers": sorted(providers), "github_reader": self.src.github is not None,
-                               "policy": policy_effects(cfg.policy, self.rules)}
+                               "policy": policy_effects(cfg.policy, self.rules), "features": dict(self.flags)}
         return ScanResult(scan_id, len(results), n_findings, len(self.errors), round(duration, 2), dict(counts))
 
 

@@ -1,0 +1,13 @@
+# Defaults for the feature switches on the Settings page. Every key is optional; a missing key (or a missing file) means "on".
+# A change made on the Settings page (or with `pch features set`) is stored in the database and wins over this file;
+# `pch features set <key> default` (or "Reset to default" on the page) goes back to the value below. Unknown keys are errors.
+# Display switches apply immediately; scan switches apply from the next scan. See docs/STANDARDS.md.
+
+# ADO -> GitHub Actions migration: Migration tab, overview donut, readiness and "candidate to retire" hints, repos filter, API, exports.
+migration: true
+# GitHub Actions scanning: workflows, environments, deployments; the GHA-only rules SUP-006, SEC-006..SEC-009.
+gha_scanning: true
+# Sources. Off = the client is not built even if credentials are configured, and the rules that depend on it are not evaluated or scored.
+source_sonar: true        # QLT-003, QLT-004, QLT-005
+source_aikido: true       # QLT-006, QLT-007
+source_servicenow: true   # DEP-005

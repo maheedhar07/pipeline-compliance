@@ -49,6 +49,7 @@ class RuleMeta:
     targets: frozenset[str] | None = None  # restrict to deploy targets
     tiers: frozenset[str] | None = None  # restrict to environment tiers
     params: dict[str, Any] = field(default_factory=dict)  # tunable knobs and their defaults (policy.yaml rules.<ID>.params)
+    requires_sources: frozenset[str] = frozenset()  # sources the verdict depends on (sonar, aikido, servicenow, gha): the Settings switch of each one off => not evaluated
     extra: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -76,11 +77,15 @@ def rule(
     targets: set[str] | None = None,
     tiers: set[str] | None = None,
     params: dict[str, Any] | None = None,
+    requires_sources: set[str] | None = None,
 ) -> Callable[[RuleFn], RuleFn]:
     """Register a deterministic rule. The category is the id prefix (SRC, QLT, ...).
 
     ``params`` declares the rule's tunable knobs with their defaults; an org overrides them in ``policy.yaml``
-    (``rules: {ID: {params: {...}}}``) and the rule reads the merged values with ``rule_params(policy, id)``."""
+    (``rules: {ID: {params: {...}}}``) and the rule reads the merged values with ``rule_params(policy, id)``.
+
+    ``requires_sources`` names the sources the verdict rests on (``sonar``, ``aikido``, ``servicenow``, ``gha``; see ``pch.features.SOURCE_FEATURE``).
+    When the matching switch on the Settings page is off the rule is not evaluated and not scored, like a rule disabled by policy."""
 
     def deco(fn: RuleFn) -> RuleFn:
         if id in REGISTRY:
@@ -98,6 +103,7 @@ def rule(
             targets=frozenset(targets) if targets else None,
             tiers=frozenset(tiers) if tiers else None,
             params=dict(params or {}),
+            requires_sources=frozenset(requires_sources or ()),
         )
         return fn
 

@@ -121,7 +121,7 @@ def dep_004(ctx, policy: Policy, t) -> RuleResult:
     "DEP-005", "Every prod deployment in the last 90 days maps to an approved ServiceNow CRQ", "high", "repo",
     "Detective control: proves production changes were authorised and inside their change window.",
     {"any": "Put the CRQ number in the release name/description (or a pipeline parameter) and make the CRQ gate mandatory."},
-    tiers={"prod"},
+    tiers={"prod"}, requires_sources={"servicenow"},
     params={"crq_pattern": r"\b(CHG\d{6,9}|CRQ\d{6,12})\b", "window_slack_hours": 2},
 )
 def dep_005(ctx: RepoContext, policy: Policy) -> RuleResult:

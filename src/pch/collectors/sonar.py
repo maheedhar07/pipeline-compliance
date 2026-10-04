@@ -36,10 +36,10 @@ def _num(v: Any, cast=float):
 
 class SonarClient:
     def __init__(self, base_url: str, token: str = "", *, transport: httpx.AsyncBaseTransport | None = None,  # nosec B107 - empty default means 'not configured'; real values come from env
-                 concurrency: int = 8, backoff_base: float = 0.5, max_attempts: int = 4):
+                 concurrency: int = 8, backoff_base: float = 0.5, max_attempts: int = 4, timeout: float = 30.0):
         self.base_url = base_url.rstrip("/")
         self.http = SourceClient(self.base_url, transport=transport, auth=(token, "") if token else None,
-                                 concurrency=concurrency, backoff_base=backoff_base, max_attempts=max_attempts)
+                                 concurrency=concurrency, backoff_base=backoff_base, max_attempts=max_attempts, timeout=timeout)
 
     async def aclose(self) -> None:
         await self.http.aclose()

@@ -156,9 +156,9 @@ def test_live_sources_wrap_the_network_transport_with_the_cap(monkeypatch):
     seen = {}
     real = sources._live
 
-    def spy(settings, transport, kw, secrets):
+    def spy(settings, transport, kw, secrets, features=None):
         seen["t"] = transport
-        return real(settings, transport, kw, secrets)
+        return real(settings, transport, kw, secrets, features)
 
     monkeypatch.setattr(sources, "_live", spy)
     s = S(ado_org="o", http_max_response_mb=7)

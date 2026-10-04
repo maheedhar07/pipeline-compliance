@@ -220,7 +220,7 @@ def protect_handlers() -> None:
 
 def register_settings_secrets(s: Settings) -> None:
     """Exact-match scrubbing for the secrets that live in settings (credentials, DB password, App Insights key)."""
-    for field in ("ado_pat", "sonar_token", "aikido_client_secret", "servicenow_password", "applicationinsights_connection_string"):
+    for field in ("ado_pat", "sonar_token", "aikido_client_secret", "servicenow_password", "applicationinsights_connection_string", "settings_signing_key"):
         register_secret(getattr(s, field, None))
     with contextlib.suppress(Exception):
         from sqlalchemy.engine import make_url

@@ -56,13 +56,13 @@ def normalize_issue(raw: dict[str, Any]) -> tuple[str | None, AikidoIssue] | Non
 class AikidoClient:
     def __init__(self, base_url: str, client_id: str = "", client_secret: str = "", *,  # nosec B107 - empty default means 'not configured'; real values come from env
                  transport: httpx.AsyncBaseTransport | None = None, concurrency: int = 8,
-                 backoff_base: float = 0.5, max_attempts: int = 4):
+                 backoff_base: float = 0.5, max_attempts: int = 4, timeout: float = 30.0):
         self.base_url = base_url.rstrip("/")
         self.client_id = client_id
         self._secret = client_secret
         self._token: str | None = None  # kept in memory only, never persisted
         self.http = SourceClient(self.base_url, transport=transport, concurrency=concurrency,
-                                 backoff_base=backoff_base, max_attempts=max_attempts)
+                                 backoff_base=backoff_base, max_attempts=max_attempts, timeout=timeout)
 
     async def aclose(self) -> None:
         await self.http.aclose()

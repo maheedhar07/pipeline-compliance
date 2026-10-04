@@ -72,6 +72,7 @@ def qlt_002(ctx: RepoContext, policy: Policy) -> RuleResult:
     "QLT-003", "Current Sonar quality gate status is OK", "high", "repo",
     "A failing quality gate means the latest analysed code does not meet the quality bar.",
     {"any": "Open the project in SonarQube and fix the failing gate conditions (new code coverage, new issues, hotspots)."},
+    requires_sources={"sonar"},
 )
 def qlt_003(ctx: RepoContext, policy: Policy) -> RuleResult:
     if (na := _na_kind(ctx)) is not None:
@@ -95,6 +96,7 @@ def qlt_003(ctx: RepoContext, policy: Policy) -> RuleResult:
     "QLT-004", "Project uses the company quality gate", "medium", "repo",
     "Using the default 'Sonar way' gate bypasses the company's agreed thresholds.",
     {"any": "In SonarQube: Project Settings > Quality Gate > select the company gate."},
+    requires_sources={"sonar"},
 )
 def qlt_004(ctx: RepoContext, policy: Policy) -> RuleResult:
     if (na := _na_kind(ctx)) is not None:
@@ -113,6 +115,7 @@ def qlt_004(ctx: RepoContext, policy: Policy) -> RuleResult:
     "QLT-005", "Last Sonar analysis is recent", "medium", "repo",
     "A stale analysis means the gate status no longer reflects the code that is shipping.",
     {"any": "Check that the CI pipeline still runs Sonar analysis on the default branch."},
+    requires_sources={"sonar"},
 )
 def qlt_005(ctx: RepoContext, policy: Policy) -> RuleResult:
     if (na := _na_kind(ctx)) is not None:
@@ -133,6 +136,7 @@ def qlt_005(ctx: RepoContext, policy: Policy) -> RuleResult:
     "QLT-006", "Repo is onboarded to Aikido", "high", "repo",
     "Aikido provides SCA/secret/IaC scanning that SonarQube does not.",
     {"any": "Connect the repository in Aikido (Settings > Code repositories)."},
+    requires_sources={"aikido"},
 )
 def qlt_006(ctx: RepoContext, policy: Policy) -> RuleResult:
     if ctx.facts.kind == "docs":
@@ -148,6 +152,7 @@ def qlt_006(ctx: RepoContext, policy: Policy) -> RuleResult:
     "QLT-007", "No open Aikido issues past their SLA", "critical", "repo",
     "Known vulnerabilities left open beyond the SLA are a direct compliance breach.",
     {"any": "Triage and fix (or formally snooze with justification) the overdue issues in Aikido."},
+    requires_sources={"aikido"},
 )
 def qlt_007(ctx: RepoContext, policy: Policy) -> RuleResult:
     a = ctx.aikido

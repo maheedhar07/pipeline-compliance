@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from pch.engine.registry import RuleMeta, all_rules, is_content_rule
+from pch.features import feature_off_for_rule
 from pch.model.findings import Finding, RuleResult, Severity, Status
 from pch.model.pipeline import Pipeline, Stage
 from pch.model.repo import RepoContext
@@ -56,6 +58,12 @@ def effective_severity(meta: RuleMeta, policy: Policy) -> Severity:
 def rule_enabled(meta: RuleMeta, policy: Policy) -> bool:
     ov = policy.rules.get(meta.id)
     return ov is None or ov.enabled
+
+
+def rules_for_features(rules: list[RuleMeta], flags: Mapping[str, bool]) -> list[RuleMeta]:
+    """The rules that are still evaluated when the Settings switches are ``flags``: a rule whose source switch is off is dropped
+    (no findings, not scored: exactly what a policy-disabled rule gets)."""
+    return [m for m in rules if not feature_off_for_rule(m.requires_sources, flags)]
 
 
 def policy_effects(policy: Policy, rules: list[RuleMeta] | None = None) -> dict[str, Any]:

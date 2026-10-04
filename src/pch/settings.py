@@ -150,6 +150,12 @@ class Settings(BaseSettings):
     auth_mode: Literal["none", "easyauth"] = "none"
     auth_allowed_roles: str = ""  # comma-separated app roles, e.g. "PCH.Reader"
     auth_allow_any_authenticated: bool = False  # explicit opt-in to "any signed-in user" when no role allowlist is set
+    # App roles that may change the feature switches on the Settings page (the only write path of the app). Empty in easyauth = nobody can
+    # (the page is read-only for everyone). In AUTH_MODE=none (dev, loopback only) the local principal is the admin.
+    auth_admin_roles: str = ""  # comma-separated app roles, e.g. "PCH.Admin"
+    # HMAC key for the Settings form tokens (CSRF). Resolved through the secret provider. Unset: dev/test generate a random per-process key; prod
+    # has no key and the Settings page is read-only (writes disabled). At least 32 characters.
+    settings_signing_key: SecretStr = SecretStr("")
     # Easy Auth only strips/overwrites X-MS-* when it is enabled; the app refuses to start unless the platform says so.
     # # VERIFY: App Service exposes WEBSITE_AUTH_ENABLED=True to the container when Authentication is turned on.
     website_auth_enabled: str = ""  # env WEBSITE_AUTH_ENABLED (set by the platform; do not set by hand)
@@ -256,6 +262,10 @@ class Settings(BaseSettings):
     @property
     def allowed_roles(self) -> list[str]:
         return [r.strip() for r in self.auth_allowed_roles.split(",") if r.strip()]
+
+    @property
+    def admin_roles(self) -> list[str]:
+        return [r.strip() for r in self.auth_admin_roles.split(",") if r.strip()]
 
     @property
     def allowed_host_list(self) -> list[str]:

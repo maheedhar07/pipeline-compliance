@@ -97,6 +97,8 @@ Settings are environment variables (or a `.env` file; copy `.env.example`). Inva
 | `AUTH_MODE` | `none` | `none` (dev only, loopback only) or `easyauth` (App Service Authentication + Entra app roles). |
 | `AUTH_ALLOWED_ROLES` | (empty) | Comma-separated Entra app role values allowed to use the app, e.g. `PCH.Reader`. Exact, case-sensitive match. |
 | `AUTH_ALLOW_ANY_AUTHENTICATED` | `false` | Explicit opt-in: any signed-in user passes when no role allowlist is set. |
+| `AUTH_ADMIN_ROLES` | (empty) | Comma-separated Entra app role values (e.g. `PCH.Admin`) that may change the feature switches on the Settings page. Empty with `easyauth`: nobody can (read-only for all). An admin role also grants read access. With `AUTH_MODE=none` the local developer is the admin. |
+| `SETTINGS_SIGNING_KEY` | (empty) | Secret (>= 32 characters, via the secret provider) that signs the Settings form tokens (CSRF). Unset: dev/test use a random per-process key; prod has no key, so the Settings page is read-only. |
 | `WEBSITE_AUTH_ENABLED` | (empty) | Set by App Service when Authentication is on; do not set by hand. `easyauth` refuses to start unless it is `True`. |
 | `AUTH_EASYAUTH_ASSUME_ENABLED` | `false` | Local testing of `easyauth` only; refused in prod. |
 | `AUTH_NONE_ALLOW_CONTAINER_BIND` | `false` | Dev only (docker compose): allow `AUTH_MODE=none` on `0.0.0.0`. Refused in prod. |

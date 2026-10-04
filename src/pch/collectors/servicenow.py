@@ -62,11 +62,11 @@ def window_covers(cr: ChangeRequest, when: datetime, slack_hours: int = 2) -> bo
 class ServiceNowClient:
     def __init__(self, base_url: str, user: str = "", password: str = "", *,  # nosec B107 - empty default means 'not configured'; real values come from env
                  transport: httpx.AsyncBaseTransport | None = None, concurrency: int = 8,
-                 backoff_base: float = 0.5, max_attempts: int = 4):
+                 backoff_base: float = 0.5, max_attempts: int = 4, timeout: float = 30.0):
         self.base_url = base_url.rstrip("/")
         self.http = SourceClient(self.base_url, transport=transport, auth=(user, password) if user else None,
                                  headers={"Accept": "application/json"}, concurrency=concurrency,
-                                 backoff_base=backoff_base, max_attempts=max_attempts)
+                                 backoff_base=backoff_base, max_attempts=max_attempts, timeout=timeout)
 
     async def aclose(self) -> None:
         await self.http.aclose()

@@ -16,6 +16,8 @@ Fail-closed matrix (every row not listed as "ok" refuses to start):
                       AUTH_EASYAUTH_ASSUME_ENABLED=true in prod     -> refuse
   APP_ENV=prod        ALLOWED_HOSTS empty or containing "*"         -> refuse
                       AUTH_NONE_ALLOW_CONTAINER_BIND=true           -> refuse
+
+``guard_warnings`` lists what only makes the Settings page read-only (no AUTH_ADMIN_ROLES in easyauth, no SETTINGS_SIGNING_KEY in prod).
 """
 
 from __future__ import annotations
@@ -79,6 +81,20 @@ def guard_problems(s: Settings, host: str) -> list[str]:
         if s.auth_none_allow_container_bind:
             p.append("AUTH_NONE_ALLOW_CONTAINER_BIND=true is forbidden when APP_ENV=prod.")
     return p
+
+
+def guard_warnings(s: Settings) -> list[str]:
+    """Not reasons to refuse to start, but the Settings page (the app's only write path) is read-only because of them. Fail closed, say so loudly."""
+    from pch.web.csrf import resolve_signing_key
+
+    w: list[str] = []
+    if s.auth_mode == "easyauth" and not s.admin_roles:
+        w.append("AUTH_ADMIN_ROLES is empty: nobody can change the feature switches, the Settings page is read-only for everyone.")
+    if s.auth_mode == "none" and s.admin_roles:
+        w.append("AUTH_ADMIN_ROLES is ignored with AUTH_MODE=none (the local developer is the admin).")
+    if s.is_prod and (sk := resolve_signing_key(s)).key is None:
+        w.append(f"Settings writes are disabled: {sk.reason}. Set SETTINGS_SIGNING_KEY (>= 32 characters, via the secret provider) to allow admins to change the feature switches.")
+    return w
 
 
 def assert_safe_to_serve(s: Settings, host: str) -> None:

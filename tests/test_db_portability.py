@@ -125,6 +125,25 @@ def test_models_and_migrations_in_sync(url):
     assert diff == [], diff
 
 
+def test_feature_switch_tables_roundtrip_and_survive_scan_deletion(url):
+    """Overrides and the append-only audit round-trip (unicode names, tz-aware UTC) on every dialect; deleting a scan leaves them alone."""
+    from pch import features as F
+
+    who = F.Actor("oid-1", "Zoë 日本")
+    with session_scope(url) as s:
+        store.create_scan(s, "f1", "demo")
+        assert F.set_override(s, "gha_scanning", False, who, "ui")
+        assert F.set_override(s, "gha_scanning", None, who, "ui")
+        assert F.set_override(s, "source_sonar", False, F.CLI_ACTOR, "cli")
+    with session_scope(url) as s:
+        store.delete_scan(s, "f1")
+    with session_scope(url) as s:
+        assert F.effective_flags(s, F.ALL_ON) == {**F.ALL_ON, "source_sonar": False}
+        rows = list(reversed(F.audit_entries(s)))
+        assert [(r.feature_key, r.old_value, r.new_value, r.source) for r in rows] == [("gha_scanning", "default", "off", "ui"), ("gha_scanning", "off", "default", "ui"), ("source_sonar", "default", "off", "cli")]
+        assert rows[0].actor_display_name == "Zoë 日本" and rows[0].at.utcoffset() == timedelta(0)
+
+
 # ------------------------------------------------------------------ full demo scan write + read
 def test_demo_scan_roundtrip(url):
     world = generate_world(seed=7, repos=12, now=datetime(2026, 10, 1, 12, 0, 0))

@@ -96,6 +96,8 @@ FIELD_DOCS: dict[str, list[tuple[str, str]]] = {
         ("auth_mode", "`none` (dev only, loopback only) or `easyauth` (App Service Authentication + Entra app roles)."),
         ("auth_allowed_roles", "Comma-separated Entra app role values allowed to use the app, e.g. `PCH.Reader`. Exact, case-sensitive match."),
         ("auth_allow_any_authenticated", "Explicit opt-in: any signed-in user passes when no role allowlist is set."),
+        ("auth_admin_roles", "Comma-separated Entra app role values (e.g. `PCH.Admin`) that may change the feature switches on the Settings page. Empty with `easyauth`: nobody can (read-only for all). An admin role also grants read access. With `AUTH_MODE=none` the local developer is the admin."),
+        ("settings_signing_key", "Secret (>= 32 characters, via the secret provider) that signs the Settings form tokens (CSRF). Unset: dev/test use a random per-process key; prod has no key, so the Settings page is read-only."),
         ("website_auth_enabled", "Set by App Service when Authentication is on; do not set by hand. `easyauth` refuses to start unless it is `True`."),
         ("auth_easyauth_assume_enabled", "Local testing of `easyauth` only; refused in prod."),
         ("auth_none_allow_container_bind", "Dev only (docker compose): allow `AUTH_MODE=none` on `0.0.0.0`. Refused in prod."),

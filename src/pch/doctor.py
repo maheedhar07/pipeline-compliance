@@ -358,6 +358,46 @@ def check_auth(s: Settings) -> Check:
     return Check("auth", WARN if s.auth_mode == "none" else OK, detail)
 
 
+def check_features(s: Settings, features_path: Path | None = None) -> Check:
+    """Effective feature switches and where each value comes from (file default or an override with who and when)."""
+    from sqlalchemy.orm import Session
+
+    from pch.features import effective_states, load_feature_defaults
+    from pch.store.engine import build_engine
+
+    path = features_path or s.config_dir / "features.yaml"
+    try:
+        defaults = load_feature_defaults(path)
+    except ConfigError as exc:
+        return Check("features", FAIL, str(exc))
+    note = ""
+    try:
+        engine = build_engine(s.database_url, s)
+        try:
+            with Session(engine) as db:
+                states = effective_states(db, defaults)
+        finally:
+            engine.dispose()
+    except Exception as exc:  # noqa: BLE001 - doctor never fails because the overrides could not be read; it says so
+        from pch.features import FEATURES, FeatureState
+
+        states = [FeatureState(f.key, f.label, f.description, f.timing, bool(defaults[f.key]), bool(defaults[f.key]), False) for f in FEATURES]
+        note = f"; overrides not readable ({type(exc).__name__}): showing the file defaults"
+    parts = [f"{st.key}={'on' if st.enabled else 'off'} ({st.source_text})" for st in states]
+    return Check("features", OK, ", ".join(parts) + note)
+
+
+def check_settings_writes(s: Settings) -> Check:
+    """Can an admin change the switches from the Settings page? WARN when it is read-only for everyone (fail closed)."""
+    from pch.web.guard import guard_warnings
+
+    warnings = guard_warnings(s)
+    if warnings:
+        return Check("settings_writes", WARN, " ".join(warnings))
+    who = "the local developer" if s.auth_mode == "none" else f"app roles {', '.join(s.admin_roles)}"
+    return Check("settings_writes", OK, f"admins: {who}")
+
+
 def check_serve_guard(s: Settings) -> Check:
     """Would ``pch serve`` / ``create_app`` start with this configuration (bind host from HOST)?"""
     from pch.web.guard import UnsafeServeConfig, assert_safe_to_serve
@@ -425,6 +465,8 @@ def run_checks(scope_path: Path | None = None, policy_path: Path | None = None, 
     if mig is not None:
         checks.append(mig)
     checks.append(check_auth(s))
+    checks.append(check_settings_writes(s))
+    checks.append(check_features(s))
     checks.append(check_serve_guard(s))
     checks.append(check_logging(s))
     checks.append(check_telemetry(s))
