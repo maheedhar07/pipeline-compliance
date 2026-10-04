@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import typer
 
+from pch import exitcodes
+
 app = typer.Typer(help="Pipeline Compliance Hub (report-only)", no_args_is_help=True)
 rules_app = typer.Typer(help="Inspect the rule catalog", no_args_is_help=True)
 app.add_typer(rules_app, name="rules")
@@ -12,6 +14,20 @@ app.add_typer(rules_app, name="rules")
 @app.callback()
 def main() -> None:
     """Pipeline Compliance Hub: report-only CI/CD compliance scoring."""
+
+
+def _bootstrap(settings, service: str):
+    """Logging (redacting) + optional Application Insights for a long-running command; exits 2 on config errors."""
+    from pch.logging_setup import configure_logging
+    from pch.settings import ConfigError
+    from pch.telemetry import setup_telemetry
+
+    configure_logging(settings)
+    try:
+        setup_telemetry(settings, service)
+    except ConfigError as exc:
+        typer.echo(f"Config error: {exc}", err=True)
+        raise typer.Exit(exitcodes.CONFIG) from None
 
 
 @app.command()
@@ -60,7 +76,7 @@ def rules_docs(
     if check:
         if not target.exists() or target.read_text() != text:
             typer.echo(f"{write} is out of date: run `pch rules docs --write {write}`", err=True)
-            raise typer.Exit(1)
+            raise typer.Exit(exitcodes.FAILED)
         typer.echo(f"{write} is up to date")
         return
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -73,8 +89,12 @@ db_app = typer.Typer(help="Database migrations (Alembic)", no_args_is_help=True)
 app.add_typer(db_app, name="db")
 
 
-def _open_db(url: str):
-    """Engine with the schema policy applied; exits with a clear message when the DB is not usable."""
+def _open_db(url: str, *, tolerate_unreachable: bool = False):
+    """Engine with the schema policy applied; exits with a clear message when the DB is not usable.
+    ``tolerate_unreachable`` (``pch serve``): a database that cannot be reached yet is reported by /health/ready
+    instead of stopping the container (returns None)."""
+    from sqlalchemy.exc import InterfaceError, OperationalError
+
     from pch.store.azure_sql import AzureSqlUnavailable
     from pch.store.db import SchemaNotReadyError, get_engine
 
@@ -82,10 +102,16 @@ def _open_db(url: str):
         return get_engine(url)
     except SchemaNotReadyError as exc:
         typer.echo(f"Database is not ready: {exc}", err=True)
-        raise typer.Exit(3) from None
+        raise typer.Exit(exitcodes.SCHEMA_NOT_READY) from None
+    except (OperationalError, InterfaceError) as exc:
+        if tolerate_unreachable:
+            typer.echo(f"warning: database is unreachable ({type(exc).__name__}); serving anyway, /health/ready reports 503", err=True)
+            return None
+        typer.echo(f"Database is unreachable ({type(exc).__name__}). Check DATABASE_URL and network access.", err=True)
+        raise typer.Exit(exitcodes.SCHEMA_NOT_READY) from None
     except (AzureSqlUnavailable, ValueError) as exc:
         typer.echo(str(exc), err=True)
-        raise typer.Exit(3) from None
+        raise typer.Exit(exitcodes.SCHEMA_NOT_READY) from None
 
 
 def _raw_db(db: str | None):
@@ -97,7 +123,7 @@ def _raw_db(db: str | None):
         return get_raw_engine(db or get_settings().database_url)
     except (AzureSqlUnavailable, ValueError) as exc:
         typer.echo(str(exc), err=True)
-        raise typer.Exit(3) from None
+        raise typer.Exit(exitcodes.SCHEMA_NOT_READY) from None
 
 
 @db_app.command("upgrade")
@@ -113,7 +139,7 @@ def db_upgrade(
         migrate.upgrade(engine, revision)
     except migrate.SchemaNotReadyError as exc:
         typer.echo(f"Cannot upgrade: {exc}", err=True)
-        raise typer.Exit(3) from None
+        raise typer.Exit(exitcodes.SCHEMA_NOT_READY) from None
     typer.echo(f"database is at {migrate.db_state(engine).current}")
 
 
@@ -135,7 +161,7 @@ def db_check(db: str | None = typer.Option(None, "--db")) -> None:
     st = migrate.db_state(_raw_db(db))
     if not st.at_head:
         typer.echo(f"NOT at head: {migrate.not_ready_reason(st)}", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(exitcodes.FAILED)
     typer.echo(f"ok: at head {st.head}")
 
 
@@ -225,6 +251,7 @@ def scan(
     from pch.timeutil import utcnow_naive
 
     settings = get_settings()
+    _bootstrap(settings, "pch-scan")
     # An explicitly configured DATABASE_URL always wins. Only when it is still the built-in default does a
     # non-default --data-dir relocate the sqlite file next to the data.
     from pch.settings import Settings
@@ -238,6 +265,7 @@ def scan(
         db_url = settings.database_url
     data_path = Path(data_dir)
     stale = timedelta(minutes=settings.scan_lock_stale_minutes)
+    timeout_s = settings.scan_timeout_minutes * 60.0
 
     def progress(done: int, total: int) -> None:
         typer.echo(f"  scanned {done}/{total} repos", err=True)
@@ -251,7 +279,7 @@ def scan(
             d, world_f, scope_f, policy_f = _demo_paths(data_dir)
             if not world_f.exists():
                 typer.echo("No demo data found, run `pch seed-demo` first.", err=True)
-                raise typer.Exit(1)
+                raise typer.Exit(exitcodes.FAILED)
             scope, policy = load_scope(scope_f), load_policy(policy_f if policy_f.exists() else policy_file)
             world = load_world(world_f)
             meta = world["meta"]
@@ -265,7 +293,7 @@ def scan(
                 scan_id = f"{now:%Y%m%d-%H%M%S}-demo"
                 record = PrefixedStore(artifacts, scan_id) if cache else None
                 src = demo_sources(w, record_to=record)
-                cfg = ScanConfig(scope=scope, policy=policy, db_url=db_url, mode="demo", now=now, stale_after=stale)
+                cfg = ScanConfig(scope=scope, policy=policy, db_url=db_url, mode="demo", now=now, stale_after=stale, timeout_s=timeout_s)
                 typer.echo(f"Scanning demo estate {scan_id} ...", err=True)
                 try:
                     res = await Scanner(src, cfg, progress).run(scan_id)
@@ -282,7 +310,7 @@ def scan(
             scan_id = f"{now:%Y%m%d-%H%M%S}-live"
             src = live_sources(settings, record_to=PrefixedStore(artifacts, scan_id) if cache is not False else None)
             mode = "live"
-        cfg = ScanConfig(scope=scope, policy=policy, db_url=db_url, mode=mode, now=now, stale_after=stale)
+        cfg = ScanConfig(scope=scope, policy=policy, db_url=db_url, mode=mode, now=now, stale_after=stale, timeout_s=timeout_s)
         try:
             res = await Scanner(src, cfg, progress).run(scan_id)
         finally:
@@ -291,21 +319,95 @@ def scan(
 
     if not demo and not from_cache and not settings.ado_org:
         typer.echo("ADO_ORG is not set. Copy .env.example to .env, or try `pch seed-demo && pch scan --demo`.", err=True)
-        raise typer.Exit(2)
+        raise typer.Exit(exitcodes.CONFIG)
+    from pch.scanrun import ScanInterrupted, ScanTimeout, run_guarded
     from pch.settings import ConfigError
     from pch.store.locks import ScanLockHeld, scan_lock
 
     engine = _open_db(db_url)  # refuses to run when the schema is not at head (unless auto-migrate applies)
     try:
-        with scan_lock(engine, stale_after=stale):
-            asyncio.run(go())
+        with scan_lock(engine, stale_after=stale):  # released on every exit path, including SIGTERM / timeout
+            asyncio.run(run_guarded(go()))
+    except ScanInterrupted as exc:
+        typer.echo(f"Scan {exc} and marked failed (reason: interrupted); lock released.", err=True)
+        raise typer.Exit(exitcodes.INTERRUPTED) from None
+    except ScanTimeout as exc:
+        typer.echo(f"Scan failed: {exc} (SCAN_TIMEOUT_MINUTES={settings.scan_timeout_minutes}); lock released.", err=True)
+        raise typer.Exit(exitcodes.INTERRUPTED) from None
     except ScanLockHeld as exc:
         typer.echo(f"Another scan is already running: {exc}. Not starting a second one.", err=True)
-        raise typer.Exit(4) from None
+        raise typer.Exit(exitcodes.LOCK_HELD) from None
     except ConfigError as exc:
         typer.echo(f"Config error: {exc}", err=True)
-        raise typer.Exit(2) from None
+        raise typer.Exit(exitcodes.CONFIG) from None
     sys.stdout.flush()
+
+
+scans_app = typer.Typer(help="Stored scan snapshots", no_args_is_help=True)
+app.add_typer(scans_app, name="scans")
+
+
+@scans_app.command("prune")
+def scans_prune(
+    keep: int | None = typer.Option(None, "--keep", min=1, help="Keep the newest N scans (default RETENTION_KEEP_SCANS)"),
+    older_than: int | None = typer.Option(None, "--older-than", min=1, help="Only delete scans older than DAYS (default RETENTION_MAX_AGE_DAYS)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print what would be deleted; change nothing"),
+    data_dir: str = typer.Option("data", help="Data directory (local artifact store)"),
+    db: str | None = typer.Option(None, "--db", help="Database URL (default DATABASE_URL)"),
+) -> None:
+    """Delete old scans (DB rows + their raw cache in the artifact store). With both options a scan must be outside the
+    newest N AND older than DAYS. Never deletes the latest complete scan or a live `running` scan. Holds the scan lock."""
+    import asyncio
+    from datetime import timedelta
+    from pathlib import Path
+
+    from pch import retention
+    from pch.providers import ProviderError, get_artifact_store
+    from pch.settings import Settings, get_settings
+    from pch.store.db import session_scope
+    from pch.store.locks import ScanLockHeld, scan_lock
+
+    settings = get_settings()
+    _bootstrap(settings, "pch-scan")
+    keep = keep if keep is not None else settings.retention_keep_scans
+    older_than = older_than if older_than is not None else settings.retention_max_age_days
+    if keep is None and older_than is None:
+        typer.echo("Nothing to do: pass --keep and/or --older-than, or set RETENTION_KEEP_SCANS / RETENTION_MAX_AGE_DAYS.", err=True)
+        raise typer.Exit(exitcodes.CONFIG)
+    default_url = Settings.model_fields["database_url"].default
+    db_url = db or (f"sqlite:///{data_dir}/pch.db" if data_dir != "data" and settings.database_url == default_url else settings.database_url)
+    stale = timedelta(minutes=settings.scan_lock_stale_minutes)
+    try:
+        artifacts = get_artifact_store(settings, Path(data_dir))
+    except ProviderError as exc:
+        typer.echo(f"Config error: {exc}", err=True)
+        raise typer.Exit(exitcodes.CONFIG) from None
+    engine = _open_db(db_url)
+
+    def run() -> retention.PruneReport:
+        with session_scope(db_url) as s:
+            cands, protected = retention.plan_prune(s, keep, older_than, stale)
+        return asyncio.run(retention.execute_prune(db_url, artifacts, cands, protected, dry_run=dry_run))
+
+    try:
+        if dry_run:
+            report = run()  # read-only: no lock needed
+        else:
+            with scan_lock(engine, stale_after=stale):  # never races a running scan
+                report = run()
+    except ScanLockHeld as exc:
+        typer.echo(f"A scan is running: {exc}. Not pruning now.", err=True)
+        raise typer.Exit(exitcodes.LOCK_HELD) from None
+    verb = "would delete" if dry_run else "deleted"
+    summary = "would be deleted" if dry_run else "deleted"
+    for o in report.outcomes:
+        tail = f"error: {o.error}" if o.error else (f"{o.artifacts} artifacts" if dry_run else f"{o.rows} rows, {o.artifacts} artifacts")
+        typer.echo(f"{'FAILED ' if o.error else ''}{verb} {o.scan_id}  [{o.status}, {o.started_at:%Y-%m-%d %H:%M} UTC]  {tail}")
+    for sid in report.kept_protected:
+        typer.echo(f"kept    {sid}  (latest complete or live running scan is never deleted)")
+    typer.echo(f"{len(report.outcomes) - report.errors} scan(s) {summary}" + (" (dry run)" if dry_run else "") + (f", {report.errors} failed" if report.errors else ""))
+    if report.errors:
+        raise typer.Exit(exitcodes.FAILED)
 
 
 @app.command()
@@ -333,12 +435,17 @@ def serve(
         assert_safe_to_serve(s, bind_host)
     except ConfigError as exc:
         typer.echo(f"Error: {exc}", err=True)
-        raise typer.Exit(2) from None
-    _open_db(db or s.database_url)  # fail fast with a clear message instead of a traceback inside the worker
+        raise typer.Exit(exitcodes.CONFIG) from None
+    _bootstrap(s, "pch-web")
+    # Fail fast (exit 3) when the schema is not at head; a database that is merely unreachable is served as "not ready".
+    _open_db(db or s.database_url, tolerate_unreachable=True)
     web = create_app(db or s.database_url, settings=s, host=bind_host)
     # proxy_headers: trust X-Forwarded-* only from FORWARDED_ALLOW_IPS. server_header=False: do not advertise uvicorn.
-    uvicorn.run(web, host=bind_host, port=bind_port, log_level="info", proxy_headers=True,
-                forwarded_allow_ips=s.forwarded_allow_ips, server_header=False)
+    # log_config=None: uvicorn's loggers propagate to the root handler (redacting, JSON in prod). The access log is off in
+    # prod (the app writes one structured request line). SIGTERM drains in-flight requests for graceful_shutdown_seconds.
+    uvicorn.run(web, host=bind_host, port=bind_port, log_config=None, log_level=s.log_level.lower(), access_log=s.access_log_enabled,
+                proxy_headers=True, forwarded_allow_ips=s.forwarded_allow_ips, server_header=False,
+                timeout_graceful_shutdown=s.graceful_shutdown_seconds, timeout_keep_alive=s.keep_alive_seconds)
 
 
 @app.command()
@@ -361,4 +468,4 @@ def doctor(
         for c in checks:
             typer.echo(f"{c.status:<5} {c.name:<{w}}  {c.detail}")
     if any(c.status == FAIL for c in checks):
-        raise typer.Exit(1)
+        raise typer.Exit(exitcodes.FAILED)

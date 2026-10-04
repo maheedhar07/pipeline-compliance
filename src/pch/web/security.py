@@ -10,11 +10,19 @@ import html
 import json
 import logging
 import re
+import time
 import uuid
 from collections.abc import Callable
 from typing import Any
 
+from pch.logging_setup import request_id_var
+from pch.web.auth import HEALTH_PATHS
+
 log = logging.getLogger("pch.web.security")
+access_log = logging.getLogger("pch.web.access")
+# An inbound X-Request-ID is adopted only if it looks like an id (no spaces/control chars/log-injection payloads).
+_CTRL = re.compile(r"[\x00-\x1f\x7f]")
+REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{7,63}$")
 
 CSP = (
     "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; "
@@ -33,6 +41,24 @@ IMMUTABLE = b"public, max-age=31536000, immutable"
 VERSIONED = re.compile(r"-\d+\.\d+\.\d+[.\-]")
 ALLOWED_METHODS = ("GET", "HEAD")
 GENERIC_500 = ("Something went wrong", "An internal error occurred. Quote the reference below when reporting it.")
+
+
+def principal_hash(principal: Any) -> str:
+    """Stable pseudonym for log lines: never the name / e-mail."""
+    import hashlib
+
+    pid = getattr(principal, "id", None)
+    return hashlib.sha256(str(pid).encode()).hexdigest()[:12] if pid else "-"
+
+
+def incoming_request_id(scope: dict) -> str:
+    for k, v in scope.get("headers", []):
+        if k == b"x-request-id":
+            cand = v.decode("latin-1")
+            if REQUEST_ID_RE.fullmatch(cand):
+                return cand
+            break
+    return uuid.uuid4().hex
 
 
 def request_id_of(scope: dict) -> str:
@@ -85,10 +111,13 @@ class SecurityMiddleware:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        scope.setdefault("state", {})["request_id"] = uuid.uuid4().hex
+        scope.setdefault("state", {})["request_id"] = incoming_request_id(scope)
         path = scope.get("path", "")
         qs = scope.get("query_string", b"").decode("latin-1")
         started = False
+        status = 500  # what the client sees if nothing was sent (the last-resort handler below answers 500)
+        t0 = time.perf_counter()
+        rid_token = request_id_var.set(scope["state"]["request_id"])
 
         def decorate(headers: list[tuple[bytes, bytes]]) -> list[tuple[bytes, bytes]]:
             drop = {b"server", b"content-security-policy", b"cache-control", b"x-request-id"}
@@ -107,9 +136,10 @@ class SecurityMiddleware:
             return out
 
         async def wrapped_send(message: dict) -> None:
-            nonlocal started
+            nonlocal started, status
             if message["type"] == "http.response.start":
                 started = True
+                status = int(message["status"])
                 message = {**message, "headers": decorate(list(message.get("headers", [])))}
             await send(message)
 
@@ -120,6 +150,20 @@ class SecurityMiddleware:
                 return
             log.exception("unhandled error (request_id=%s)", scope["state"]["request_id"])
             await send_error(scope, wrapped_send, 500, *GENERIC_500)
+        finally:
+            self._log_request(scope, path, status, (time.perf_counter() - t0) * 1000)
+            request_id_var.reset(rid_token)
+
+    @staticmethod
+    def _log_request(scope: dict, path: str, status: int, ms: float) -> None:
+        """One structured line per request: path WITHOUT the query string, hashed principal (never name/e-mail)."""
+        method = scope.get("method", "-")
+        method = method if method.isalpha() and len(method) <= 16 else "?"
+        path = _CTRL.sub(lambda m: f"\\x{ord(m.group()):02x}", path)[:300]  # no forged log lines via %0A in the path
+        fields = {"method": method, "path": path, "status": status, "duration_ms": round(ms, 1),
+                  "principal": principal_hash(scope.get("state", {}).get("principal"))}
+        quiet = path in HEALTH_PATHS or path.startswith("/static/")  # probes and assets would drown the log
+        access_log.log(logging.DEBUG if quiet else logging.INFO, "%s %s %s %.1fms", method, path, status, ms, extra={"pch_fields": fields})
 
 
 class MethodGuardMiddleware:
@@ -159,7 +203,7 @@ class TrustedHostMiddleware:
 
     LOOPBACK = frozenset({"localhost", "127.0.0.1", "[::1]"})
 
-    def __init__(self, app: Any, hosts: list[str], health_paths: frozenset[str] = frozenset({"/api/v1/health"})):
+    def __init__(self, app: Any, hosts: list[str], health_paths: frozenset[str] = HEALTH_PATHS):
         self.app = app
         self.match = host_matcher(hosts)
         self.health_paths = health_paths

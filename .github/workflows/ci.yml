@@ -49,7 +49,7 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install -e ".[dev,postgres,azuresql,azure-keyvault,azure-blob]"
+      - run: pip install -e ".[dev,postgres,azuresql,azure-keyvault,azure-blob,azure-monitor]"
       - run: ruff check .
       - run: mypy src
       - run: pytest -p no:warnings -rs
@@ -58,7 +58,7 @@ jobs:
           python -m venv "$RUNNER_TEMP/lockcheck"
           "$RUNNER_TEMP/lockcheck/bin/pip" install --require-hashes --no-deps -r requirements-azure.lock
           "$RUNNER_TEMP/lockcheck/bin/pip" install --no-deps .
-          "$RUNNER_TEMP/lockcheck/bin/python" -c "import azure.identity, azure.keyvault.secrets, azure.storage.blob, pch.providers"
+          "$RUNNER_TEMP/lockcheck/bin/python" -c "import azure.identity, azure.keyvault.secrets, azure.storage.blob, azure.monitor.opentelemetry, opentelemetry.instrumentation.httpx, opentelemetry.instrumentation.sqlalchemy, pch.providers, pch.telemetry"
 
   pip-audit:
     name: pip-audit (both lockfiles)

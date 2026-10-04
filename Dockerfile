@@ -10,7 +10,7 @@ RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # PCH_LOCKFILE selects the hash-locked dependency set: requirements.lock (default: core + postgres) or
-# requirements-azure.lock (adds azuresql, azure-keyvault, azure-blob; see README "Dependency lockfile").
+# requirements-azure.lock (adds azuresql, azure-keyvault, azure-blob, azure-monitor; see README "Dependency lockfile").
 # Regenerate with: pip-compile --generate-hashes --extra postgres -o requirements.lock pyproject.toml
 ARG PCH_LOCKFILE=requirements.lock
 COPY ${PCH_LOCKFILE} ./requirements.lock
@@ -40,6 +40,7 @@ EXPOSE 8000
 # non-loopback address unless authentication is configured (see README "Security").
 #   * App Service: set HOST=0.0.0.0, APP_ENV=prod, AUTH_MODE=easyauth, AUTH_ALLOWED_ROLES, ALLOWED_HOSTS, WEBSITES_PORT (docs/DEPLOY_AZURE.md)
 #   * local compose: APP_ENV=dev, AUTH_MODE=none, AUTH_NONE_ALLOW_CONTAINER_BIND=true, port published to 127.0.0.1 only
-# The probe may use a loopback Host header: the trusted-host check allows exactly /api/v1/health for that.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s CMD python -c "import os,sys,urllib.request as u; p=os.environ.get('PORT') or os.environ.get('WEBSITES_PORT') or '8000'; sys.exit(0 if u.urlopen('http://127.0.0.1:'+p+'/api/v1/health', timeout=3).status == 200 else 1)"
+# The probe may use a loopback Host header: the trusted-host check allows exactly the health paths for that.
+# /health/live = process only (a DB outage must not restart the container); the platform probe uses /health/ready.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s CMD python -c "import os,sys,urllib.request as u; p=os.environ.get('PORT') or os.environ.get('WEBSITES_PORT') or '8000'; sys.exit(0 if u.urlopen('http://127.0.0.1:'+p+'/health/live', timeout=3).status == 200 else 1)"
 CMD ["pch", "serve"]

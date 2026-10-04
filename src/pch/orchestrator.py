@@ -29,6 +29,7 @@ from pch.engine.migration import repo_readiness
 from pch.engine.registry import all_rules
 from pch.engine.runner import evaluate
 from pch.engine.scoring import apply_waivers, score_repo
+from pch.logging_setup import bind_scan
 from pch.model.findings import Finding, Severity, Status
 from pch.model.pipeline import Pipeline
 from pch.model.repo import (
@@ -43,6 +44,7 @@ from pch.model.repo import (
 from pch.normalize.target_detect import enrich_pipeline
 from pch.repo_scan.files import fetch_contents, fetch_file, fetch_tree, select_content_paths
 from pch.repo_scan.tests_detect import analyze_repo, classify_test_state
+from pch.scanrun import REASON_INTERRUPTED, REASON_TIMEOUT, ScanTimeout
 from pch.settings import Policy, Scope
 from pch.sources import Sources
 from pch.store import repository as store
@@ -63,6 +65,7 @@ class ScanConfig:
     concurrency: int = 16
     run_days: int = 90
     stale_after: timedelta = timedelta(hours=6)  # `running` scans older than this are orphans of a crashed process
+    timeout_s: float | None = None  # overall limit for one scan (SCAN_TIMEOUT_MINUTES); None = unlimited
 
 
 @dataclass
@@ -289,18 +292,32 @@ class Scanner:
         together with ``status=complete``. Any failure (including cancellation) rolls that back and the scan row
         is marked ``failed``, so a scan is never left ``running`` by an error."""
         cfg = self.cfg
-        with session_scope(cfg.db_url) as s:
-            store.fail_orphaned_scans(s, cfg.stale_after, exclude=scan_id)
-            store.create_scan(s, scan_id, cfg.mode, cfg.now)
-        try:
-            return await self._run(scan_id)
-        except BaseException as exc:
+        with bind_scan(scan_id):
+            with session_scope(cfg.db_url) as s:
+                store.fail_orphaned_scans(s, cfg.stale_after, exclude=scan_id)
+                store.create_scan(s, scan_id, cfg.mode, cfg.now)
+            log.info("scan started (mode=%s)", cfg.mode)
+            limit = asyncio.timeout(cfg.timeout_s)
             try:
-                with session_scope(cfg.db_url) as s:
-                    store.mark_failed(s, scan_id, f"{type(exc).__name__}: {exc}")
-            except Exception:  # noqa: BLE001 - keep the original error; orphan cleanup recovers the row
-                log.exception("could not mark scan %s as failed", scan_id)
-            raise
+                async with limit:
+                    return await self._run(scan_id)
+            except BaseException as exc:
+                timed_out = isinstance(exc, TimeoutError) and limit.expired()
+                if timed_out:
+                    reason = f"{REASON_TIMEOUT}: exceeded {cfg.timeout_s / 60:g} minutes" if cfg.timeout_s else REASON_TIMEOUT
+                elif isinstance(exc, asyncio.CancelledError):
+                    reason = REASON_INTERRUPTED
+                else:
+                    reason = f"{type(exc).__name__}: {exc}"
+                try:
+                    with session_scope(cfg.db_url) as s:
+                        store.mark_failed(s, scan_id, reason)
+                except Exception:  # noqa: BLE001 - keep the original error; orphan cleanup recovers the row
+                    log.exception("could not mark scan %s as failed", scan_id)
+                log.error("scan failed: %s", reason)
+                if timed_out:
+                    raise ScanTimeout(reason) from None
+                raise
 
     async def _run(self, scan_id: str) -> ScanResult:
         t0 = time.time()

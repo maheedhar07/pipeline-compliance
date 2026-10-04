@@ -31,3 +31,12 @@ def catalog():
     cat = TaskCatalog.from_payload(load_json("ado", "tasks.json"))
     cat.add_task_groups(load_json("ado", "taskgroups.json"))
     return cat
+
+
+@pytest.fixture(autouse=True)
+def _reset_logging_state():
+    """configure_logging / register_secret are process-global: undo them after every test."""
+    yield
+    from pch.logging_setup import reset_logging
+
+    reset_logging()

@@ -36,8 +36,9 @@ ID_CLAIM_TYPES = ("http://schemas.microsoft.com/identity/claims/objectidentifier
 LOCAL_PRINCIPAL_ID = "local-dev"
 
 # Reachable without a principal. Everything else (pages, JSON API, CSV, openapi/docs) requires authentication.
-# T6 adds /health/live (and /health/ready) here. /api/v1/health must stay data-free (status + version only).
-PUBLIC_EXACT = frozenset({"/api/v1/health"})
+# The health endpoints are data-free (status [+ version] / generic reason code only).
+HEALTH_PATHS = frozenset({"/api/v1/health", "/health/live", "/health/ready"})
+PUBLIC_EXACT = HEALTH_PATHS
 PUBLIC_PREFIXES = ("/static/",)
 
 

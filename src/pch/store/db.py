@@ -21,7 +21,7 @@ from pch.store import migrate
 from pch.store.engine import build_engine
 from pch.store.migrate import SchemaNotReadyError
 
-__all__ = ["SchemaNotReadyError", "db_ready", "ensure_schema", "get_engine", "get_raw_engine", "reset_engines", "session_scope"]
+__all__ = ["SchemaNotReadyError", "db_ready", "db_ready_code", "dispose_engine", "ensure_schema", "get_engine", "get_raw_engine", "reset_engines", "session_scope"]
 
 _raw: dict[str, Engine] = {}
 _ready: set[str] = set()
@@ -73,15 +73,31 @@ def reset_engines() -> None:
         _ready.clear()
 
 
-def db_ready(url: str) -> tuple[bool, str]:
-    """Readiness probe (T6 ``/health/ready``): DB reachable and migrated to head. Never migrates."""
+def dispose_engine(url: str) -> None:
+    """Dispose and forget the engine for ``url`` only (application shutdown)."""
+    with _lock:
+        eng = _raw.pop(url, None)
+        _ready.discard(url)
+    if eng is not None:
+        eng.dispose()
+
+
+def db_ready_code(url: str) -> tuple[str, str]:
+    """``(code, detail)``: code is ``ok`` | ``db_unreachable`` | ``schema_not_ready`` (safe to expose); ``detail`` is for
+    logs/CLI only. Never migrates."""
     try:
         st = migrate.db_state(get_raw_engine(url))
     except Exception as exc:  # noqa: BLE001 - reason must not echo the URL/credentials
-        return False, f"database unreachable ({type(exc).__name__})"
+        return "db_unreachable", f"database unreachable ({type(exc).__name__})"
     if st.at_head:
-        return True, f"at head {st.head}"
-    return False, migrate.not_ready_reason(st)
+        return "ok", f"at head {st.head}"
+    return "schema_not_ready", migrate.not_ready_reason(st)
+
+
+def db_ready(url: str) -> tuple[bool, str]:
+    """Readiness probe (T6 ``/health/ready``): DB reachable and migrated to head. Never migrates."""
+    code, detail = db_ready_code(url)
+    return code == "ok", detail
 
 
 @contextmanager

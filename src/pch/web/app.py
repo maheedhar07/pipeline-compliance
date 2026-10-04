@@ -1,7 +1,7 @@
 """FastAPI application factory: server-rendered pages + JSON API (report-only, no mutation endpoints).
 
 Security layers (see pch.web.guard / auth / security): startup guard, security headers, trusted hosts, GET/HEAD only,
-authentication + role authorisation on everything except /api/v1/health and /static/*.
+authentication + role authorisation on everything except the health endpoints and /static/*.
 """
 
 from __future__ import annotations
@@ -13,6 +13,8 @@ import io
 import json
 import logging
 import re
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import urlencode
@@ -26,15 +28,17 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from jinja2 import pass_context
 from markupsafe import Markup
+from sqlalchemy.exc import InterfaceError, OperationalError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from pch import __version__
 from pch.settings import Settings, get_settings
 from pch.store import repository as store
-from pch.store.db import get_engine, session_scope
+from pch.store.db import dispose_engine, get_engine, session_scope
 from pch.web import queries as Q
 from pch.web.auth import AuthMiddleware, build_authenticator
 from pch.web.guard import assert_safe_to_serve
+from pch.web.health import ReadinessProbe
 from pch.web.security import (
     CSP,
     GENERIC_500,
@@ -111,11 +115,27 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
     s_ = settings or get_settings()
     assert_safe_to_serve(s_, host if host is not None else s_.host)  # fail closed before anything is built
     prod = s_.is_prod
+    db_url_ = db_url or s_.database_url
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        yield
+        # Graceful shutdown (uvicorn drained in-flight requests first): release pooled DB connections.
+        dispose_engine(db_url_)
+        log.info("shutdown complete")
+
     app = FastAPI(title="Pipeline Compliance Hub", version=__version__, docs_url=None, redoc_url=None,
-                  openapi_url=None if prod else "/openapi.json")
-    app.state.db_url = db_url or s_.database_url
+                  openapi_url=None if prod else "/openapi.json", lifespan=lifespan)
+    app.state.db_url = db_url_
     # Verify (or, per policy, migrate) the schema at startup: raises SchemaNotReadyError with a clear message in prod.
-    get_engine(app.state.db_url)
+    # A database that is merely unreachable does not stop the app from starting: /health/live stays 200, /health/ready
+    # reports 503 until it is back, and the engine re-checks the schema on the next request.
+    try:
+        get_engine(db_url_)
+    except (OperationalError, InterfaceError) as exc:
+        log.error("database unreachable at startup (%s); starting anyway, /health/ready will report 503", type(exc).__name__)
+    probe = ReadinessProbe(db_url_, s_.health_ready_timeout_seconds, s_.health_ready_cache_seconds)
+    app.state.readiness = probe
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     asset_v = _asset_version()
     docs_enabled = not prod
@@ -289,6 +309,17 @@ def create_app(db_url: str | None = None, settings: Settings | None = None, host
     @app.get("/api/v1/health")
     def api_health():
         return {"status": "ok", "version": __version__}
+
+    @app.get("/health/live", include_in_schema=False)
+    async def health_live():
+        return JSONResponse({"status": "ok"})
+
+    @app.get("/health/ready", include_in_schema=False)
+    async def health_ready():
+        code = await probe.code()
+        if code == "ok":
+            return JSONResponse({"status": "ok"})
+        return JSONResponse({"status": "unavailable", "reason": code}, status_code=503)
 
     @app.get("/api/v1/overview")
     def api_overview(scan: ScanId = None):

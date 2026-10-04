@@ -27,6 +27,13 @@ postgres = ["psycopg[binary]>=3.1,<4"]
 azuresql = ["pyodbc>=5,<6", "azure-identity>=1.15,<2"]
 azure-keyvault = ["azure-keyvault-secrets>=4.7,<5", "azure-identity>=1.15,<2"]
 azure-blob = ["azure-storage-blob>=12.19,<13", "azure-identity>=1.15,<2"]
+# Application Insights export. httpx/SQLAlchemy instrumentation is listed explicitly (the distro does not pull the
+# SQLAlchemy one); the 0.x instrumentation releases are version-locked to the distro's OpenTelemetry release by pip.
+azure-monitor = [
+  "azure-monitor-opentelemetry>=1.6,<2",
+  "opentelemetry-instrumentation-httpx>=0.47b0",
+  "opentelemetry-instrumentation-sqlalchemy>=0.47b0",
+]
 dev = [
   "pytest>=8",
   "pytest-asyncio>=0.23",

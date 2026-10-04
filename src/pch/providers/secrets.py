@@ -3,7 +3,8 @@
 ``env`` (default) reads the already-loaded Settings, ``file`` reads one file per secret from a mounted
 directory (Kubernetes / CSI driver), ``azure_keyvault`` (extra ``azure-keyvault``) reads Azure Key Vault with
 a managed identity. Providers are explicit: they are never mixed, so a missing secret is an error instead of a
-silent fallback to another source. Secret values are never logged.
+silent fallback to another source. Secret values are never logged; every value a provider hands out is also registered with the log redaction filter
+(``pch.logging_setup.register_secret``) for exact-match scrubbing.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from typing import Protocol
 
 from pydantic import SecretStr
 
+from pch.logging_setup import register_secret
 from pch.providers.errors import ProviderUnavailable, SecretNotFound
 from pch.settings import Settings
 
@@ -54,7 +56,9 @@ class EnvSecretProvider:
     def get(self, name: str) -> str | None:
         v = getattr(self._settings, name.lower(), None)
         if isinstance(v, SecretStr):
-            return v.get_secret_value() or None
+            value = v.get_secret_value()
+            register_secret(value)  # exact-match scrubbing in every log line from now on
+            return value or None
         return None
 
 
@@ -89,6 +93,7 @@ class FileSecretProvider:
             self._warned.add(name)
             log.warning("secret file for %s is world-readable; restrict its permissions (chmod 640/600)", name)
         value = raw.rstrip("\r\n")
+        register_secret(value)
         return value or None
 
 

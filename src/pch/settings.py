@@ -133,6 +133,42 @@ class Settings(BaseSettings):
     auth_easyauth_assume_enabled: bool = False  # local testing only; forbidden when APP_ENV=prod
     auth_none_allow_container_bind: bool = False  # dev only: allow non-loopback bind for AUTH_MODE=none (docker compose)
 
+    # --- operability (T6; see README "Operations")
+    # LOG_FORMAT unset -> json when APP_ENV=prod, text otherwise.
+    log_format: Literal["text", "json"] | None = None
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    # Optional Application Insights export (extra `azure-monitor`). A secret: it contains the instrumentation key.
+    applicationinsights_connection_string: SecretStr = SecretStr("")
+    # Uvicorn access log (full URLs incl. query strings): off in prod by default; the app writes its own structured
+    # request line (method, path without query, status, duration, request id, hashed principal) in every environment.
+    uvicorn_access_log: bool | None = None
+    # SIGTERM -> uvicorn stops accepting, drains in-flight requests for at most this long, then exits.
+    # # VERIFY: App Service Linux sends SIGTERM and waits ~30 s (WEBSITES_CONTAINER_STOP_TIME_LIMIT, max 1800) before SIGKILL.
+    graceful_shutdown_seconds: int = Field(20, ge=1, le=600)
+    # Idle keep-alive of client connections. Must exceed the front end's idle reuse window to avoid racing 502s.
+    # # VERIFY: the App Service front end (ARR) idles upstream connections after ~230 s.
+    keep_alive_seconds: int = Field(65, ge=1, le=600)
+    # A scan running longer than this is cancelled, marked `failed` (reason `timeout`) and releases the scan lock.
+    scan_timeout_minutes: int = Field(240, ge=1)
+    # /health/ready: DB probe time budget and result cache (probe-storm protection).
+    health_ready_timeout_seconds: float = Field(2.5, gt=0, le=30)
+    health_ready_cache_seconds: float = Field(5.0, ge=0, le=300)
+    # Retention defaults for `pch scans prune` (None = disabled): keep the newest N scans / delete older than D days.
+    retention_keep_scans: int | None = Field(None, ge=1)
+    retention_max_age_days: int | None = Field(None, ge=1)
+
+    @field_validator("log_format", "uvicorn_access_log", "retention_keep_scans", "retention_max_age_days", mode="before")
+    @classmethod
+    def _blank_is_unset(cls, v: Any) -> Any:
+        return None if isinstance(v, str) and not v.strip() else v
+
+    @field_validator("log_format", "log_level", mode="before")
+    @classmethod
+    def _lower_upper(cls, v: Any, info: Any) -> Any:
+        if not isinstance(v, str):
+            return v
+        return v.strip().lower() if info.field_name == "log_format" else v.strip().upper()
+
     @field_validator(
         "ado_base_url", "ado_vsrm_url", "sonar_url", "aikido_url", "servicenow_url", "keyvault_url", "artifact_blob_account_url"
     )
@@ -171,6 +207,10 @@ class Settings(BaseSettings):
     @property
     def easyauth_platform_enabled(self) -> bool:
         return self.website_auth_enabled.strip().lower() == "true"
+
+    @property
+    def access_log_enabled(self) -> bool:
+        return (not self.is_prod) if self.uvicorn_access_log is None else self.uvicorn_access_log
 
     @property
     def is_prod(self) -> bool:

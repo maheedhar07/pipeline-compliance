@@ -206,6 +206,23 @@ def check_serve_guard(s: Settings) -> Check:
     return Check("serve_guard", OK, f"safe to serve on {s.host}:{s.effective_port}")
 
 
+def check_logging(s: Settings) -> Check:
+    from pch.logging_setup import effective_format
+
+    return Check("logging", OK, f"format={effective_format(s)}, level={s.log_level}")
+
+
+def check_telemetry(s: Settings) -> Check:
+    """Application Insights: disabled (no connection string), enabled (string + extra), FAIL when the extra is missing."""
+    from pch.telemetry import EXTRA_HINT, connection_string, sdk_available
+
+    if not connection_string(s):
+        return Check("telemetry", OK, "disabled (APPLICATIONINSIGHTS_CONNECTION_STRING not set)")
+    if not sdk_available():
+        return Check("telemetry", FAIL, f"extra missing: {EXTRA_HINT}")
+    return Check("telemetry", OK, "enabled (Application Insights; connection string set)")
+
+
 def check_data_dir(s: Settings) -> Check:
     d = s.data_dir
     try:
@@ -233,6 +250,8 @@ def run_checks(scope_path: Path | None = None, policy_path: Path | None = None) 
         checks.append(mig)
     checks.append(check_auth(s))
     checks.append(check_serve_guard(s))
+    checks.append(check_logging(s))
+    checks.append(check_telemetry(s))
     checks.append(check_data_dir(s))
     checks.append(check_artifact_store(s))
     return checks

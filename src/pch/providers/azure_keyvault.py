@@ -11,6 +11,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from pch.logging_setup import register_secret
 from pch.providers.errors import ProviderUnavailable, SecretBackendError
 from pch.settings import Settings
 
@@ -75,6 +76,7 @@ class KeyVaultSecretProvider:
             ) from None
         if not value:
             return None
+        register_secret(value)
         with self._lock:
             self._cache[name] = (now, value)
         return str(value)
