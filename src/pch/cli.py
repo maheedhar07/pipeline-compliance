@@ -42,20 +42,40 @@ def version() -> None:
 def rules_list(
     category: str | None = typer.Option(None, "--category", "-c", help="Filter by category prefix, e.g. DEP"),
     json_out: bool = typer.Option(False, "--json", help="Emit JSON"),
+    params: bool = typer.Option(False, "--params", help="Also print each rule's tunable params and their defaults"),
+    policy_file: str | None = typer.Option(None, "--policy", help="Apply this policy.yaml: disabled rules, severity overrides, effective params (default: built-in defaults)"),
 ) -> None:
-    """List every registered rule."""
+    """List every registered rule (with --policy: as that policy.yaml configures it)."""
     import json
+    from pathlib import Path
 
-    from pch.engine.registry import all_rules
+    from pch.engine.registry import all_rules, rule_params
+    from pch.engine.runner import effective_severity, rule_enabled
+    from pch.settings import ConfigError, Policy, load_policy
 
+    try:
+        policy = load_policy(Path(policy_file)) if policy_file else Policy()
+    except ConfigError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(exitcodes.CONFIG) from None
     rules = [r for r in all_rules() if not category or r.category == category.upper()]
     if json_out:
-        typer.echo(json.dumps([{"id": r.id, "title": r.title, "severity": r.severity.value, "scope": r.scope, "category": r.category} for r in rules], indent=2))
+        typer.echo(json.dumps([{"id": r.id, "title": r.title, "severity": effective_severity(r, policy).value, "default_severity": r.severity.value,
+                                "enabled": rule_enabled(r, policy), "scope": r.scope, "category": r.category,
+                                "params": rule_params(policy, r.id), "default_params": r.params} for r in rules], indent=2))
         return
     typer.echo(f"{'ID':<13}{'SEVERITY':<10}{'SCOPE':<10}TITLE")
     for r in rules:
-        typer.echo(f"{r.id:<13}{r.severity.value:<10}{r.scope:<10}{r.title}")
-    typer.echo(f"\n{len(rules)} rules")
+        sev = effective_severity(r, policy)
+        mark = "*" if sev != r.severity else ""
+        off = "  [disabled by policy]" if not rule_enabled(r, policy) else ""
+        typer.echo(f"{r.id:<13}{sev.value + mark:<10}{r.scope:<10}{r.title}{off}")
+        if params and r.params:
+            eff = rule_params(policy, r.id)
+            for k, default in r.params.items():
+                changed = f"  (default: {default!r})" if eff[k] != default else ""
+                typer.echo(f"{'':<13}  - {k} = {eff[k]!r}{changed}")
+    typer.echo(f"\n{len(rules)} rules" + ("   (* severity overridden by policy)" if policy.rules else ""))
 
 
 @rules_app.command("docs")

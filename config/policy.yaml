@@ -39,3 +39,23 @@ compliant_score_threshold: 80
 # Waivers turn a FAIL into WAIVED until `expires` (ISO date). repo is "<project>/<repo>".
 waivers: []
 #  - {rule: SRC-004, repo: "Payments/payments-api", reason: "Classic until GHA migration", owner: "jane@example.com", expires: 2027-03-31}
+
+# ---------------------------------------------------------------------------------------------------------------
+# Rules as configuration (see docs/STANDARDS.md). Every rule can be switched off, re-rated or tuned without code:
+#   * enabled: false   -> the rule is not evaluated and not scored (the Rules page shows "disabled by policy")
+#   * severity: ...    -> critical | high | medium | low | info; changes scoring and repo status (marked "overridden" in the UI)
+#   * params: {...}    -> the rule's tunable knobs; list them with `pch rules list --params`
+# Unknown rule ids, keys, severities or params are rejected at load time (`pch doctor`).
+# rules:
+#   QLT-004: {enabled: false}                       # we do not mandate a custom Sonar quality gate
+#   DEP-001: {severity: high}                       # production approval is high, not critical, for us
+#   DEP-005:
+#     params: {window_slack_hours: 4, crq_pattern: "\\b(CHG\\d{7})\\b"}   # CRQ number format and change-window slack
+#   DEP-004:
+#     params: {lower_tiers: [test, uat]}              # which tiers count as "lower environment" before prod
+
+# Scoring (defaults reproduce the built-in behaviour: severity weights 10/5/3/1/0, categories equal, WARN half credit).
+# scoring:
+#   severity_weights: {critical: 10, high: 5, medium: 3, low: 1, info: 0}
+#   category_weights: {SEC: 2, HYG: 0.5}            # multiplier per category: SRC QLT TST SUP SEC DEP TGT HYG
+#   warn_credit: 0.5

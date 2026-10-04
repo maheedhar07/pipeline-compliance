@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 from pch.engine.registry import RuleMeta, all_rules
-from pch.model.findings import Finding, RuleResult, Status
+from pch.model.findings import Finding, RuleResult, Severity, Status
 from pch.model.pipeline import Pipeline, Stage
 from pch.model.repo import RepoContext
 from pch.settings import Policy
@@ -46,12 +47,36 @@ def _repo_matches(meta: RuleMeta, ctx: RepoContext) -> bool:
     return not (meta.tiers and not any(s.env_tier in meta.tiers for p in ctx.pipelines for s in p.stages))
 
 
-def _finding(meta: RuleMeta, ctx: RepoContext, res: RuleResult, p: Pipeline | None, st: Stage | None) -> Finding:
+def effective_severity(meta: RuleMeta, policy: Policy) -> Severity:
+    """The rule's severity after ``policy.yaml`` ``rules.<ID>.severity`` (scoring and status use this one)."""
+    ov = policy.rules.get(meta.id)
+    return ov.severity if ov is not None and ov.severity is not None else meta.severity
+
+
+def rule_enabled(meta: RuleMeta, policy: Policy) -> bool:
+    ov = policy.rules.get(meta.id)
+    return ov is None or ov.enabled
+
+
+def policy_effects(policy: Policy, rules: list[RuleMeta] | None = None) -> dict[str, Any]:
+    """What policy.yaml did to the catalog, snapshotted into ``scans.summary["policy"]`` so pages can mark it per scan:
+    ``{"disabled": [ids], "severity": {id: {"from": default, "to": effective}}}``."""
+    disabled: list[str] = []
+    severity: dict[str, dict[str, str]] = {}
+    for meta in rules if rules is not None else all_rules():
+        if not rule_enabled(meta, policy):
+            disabled.append(meta.id)
+        elif (eff := effective_severity(meta, policy)) != meta.severity:
+            severity[meta.id] = {"from": meta.severity.value, "to": eff.value}
+    return {"disabled": sorted(disabled), "severity": severity}
+
+
+def _finding(meta: RuleMeta, ctx: RepoContext, res: RuleResult, p: Pipeline | None, st: Stage | None, severity: Severity) -> Finding:
     return Finding(
         rule_id=meta.id,
         repo_key=ctx.repo.key,
         category=meta.category,
-        severity=meta.severity,
+        severity=severity,
         status=res.status,
         message=res.message,
         pipeline_id=p.id if p else None,
@@ -73,19 +98,23 @@ def _call(meta: RuleMeta, ctx: RepoContext, policy: Policy, target: object | Non
 
 
 def evaluate_rule(meta: RuleMeta, ctx: RepoContext, policy: Policy) -> list[Finding]:
+    """Findings of one rule. A rule disabled by policy is not evaluated at all (no findings, not scored)."""
     out: list[Finding] = []
+    if not rule_enabled(meta, policy):
+        return out
+    sev = effective_severity(meta, policy)
     if meta.scope == "repo":
         if _repo_matches(meta, ctx):
             res = _call(meta, ctx, policy, None)
             if res.status != Status.NOT_APPLICABLE:
-                out.append(_finding(meta, ctx, res, None, None))
+                out.append(_finding(meta, ctx, res, None, None, sev))
     elif meta.scope == "pipeline":
         for p in ctx.pipelines:
             if not _pipeline_matches(meta, p):
                 continue
             res = _call(meta, ctx, policy, p)
             if res.status != Status.NOT_APPLICABLE:
-                out.append(_finding(meta, ctx, res, p, None))
+                out.append(_finding(meta, ctx, res, p, None, sev))
     else:
         for p in ctx.pipelines:
             if meta.platforms and p.platform not in meta.platforms:
@@ -95,7 +124,7 @@ def evaluate_rule(meta: RuleMeta, ctx: RepoContext, policy: Policy) -> list[Find
                     continue
                 res = _call(meta, ctx, policy, StageTarget(p, st))
                 if res.status != Status.NOT_APPLICABLE:
-                    out.append(_finding(meta, ctx, res, p, st))
+                    out.append(_finding(meta, ctx, res, p, st, sev))
     return out
 
 

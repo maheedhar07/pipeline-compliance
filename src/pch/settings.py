@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
@@ -19,6 +20,8 @@ from pydantic import (
     model_validator,
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from pch.model.findings import SEVERITY_WEIGHT, Severity
 
 
 class ConfigError(Exception):
@@ -362,6 +365,62 @@ class AikidoSla(_Strict):
     low: int = 180
 
 
+def param_type_ok(default: Any, value: Any) -> bool:
+    """A rule param must have the type of its registry default (bool is not an int; a list holds the default's element type)."""
+    if isinstance(default, bool):
+        return isinstance(value, bool)
+    if isinstance(default, int):
+        return isinstance(value, int) and not isinstance(value, bool)
+    if isinstance(default, float):
+        return isinstance(value, int | float) and not isinstance(value, bool)
+    if isinstance(default, str):
+        return isinstance(value, str)
+    if isinstance(default, list):
+        elem = type(default[0]) if default else str
+        return isinstance(value, list) and all(isinstance(x, elem) and not isinstance(x, bool) for x in value)
+    return isinstance(value, type(default))
+
+
+class RuleOverride(_Strict):
+    """``policy.yaml`` ``rules: {RULE-ID: {enabled, severity, params}}``: tune a rule without touching code."""
+
+    enabled: bool = True
+    severity: Severity | None = None
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class ScoringConfig(_Strict):
+    """``policy.yaml`` ``scoring:``. Defaults reproduce the built-in scoring (severity weights 10/5/3/1/0, categories equal, WARN half credit)."""
+
+    severity_weights: dict[Severity, float] = Field(default_factory=dict)  # partial: unlisted severities keep their default
+    category_weights: dict[str, float] = Field(default_factory=dict)  # multiplier per rule category (SRC, QLT, ...), default 1
+    warn_credit: float = Field(0.5, ge=0, le=1)
+
+    @field_validator("severity_weights", "category_weights")
+    @classmethod
+    def _non_negative(cls, v: dict[Any, float]) -> dict[Any, float]:
+        bad = [str(k) for k, w in v.items() if w < 0]
+        if bad:
+            raise ValueError("weights must be >= 0: " + ", ".join(bad))
+        return v
+
+    @field_validator("category_weights")
+    @classmethod
+    def _known_categories(cls, v: dict[str, float]) -> dict[str, float]:
+        from pch.engine.registry import CATEGORY_NAMES
+
+        unknown = sorted(set(v) - set(CATEGORY_NAMES))
+        if unknown:
+            raise ValueError(f"unknown rule categories {unknown} (known: {', '.join(CATEGORY_NAMES)})")
+        return v
+
+    def severity_weight(self, sev: Severity) -> float:
+        return float(self.severity_weights.get(sev, SEVERITY_WEIGHT[sev]))
+
+    def category_weight(self, category: str) -> float:
+        return float(self.category_weights.get(category, 1.0))
+
+
 class Policy(_Strict):
     coverage_threshold: float = 80.0
     sonar_staleness_days: int = 14
@@ -377,12 +436,48 @@ class Policy(_Strict):
     waivers: list[Waiver] = Field(default_factory=list)
     smoke_check_required_tiers: list[str] = Field(default_factory=lambda: ["test", "uat", "prod"])
     compliant_score_threshold: float = 80.0
+    rules: dict[str, RuleOverride] = Field(default_factory=dict)  # per-rule enabled / severity / params
+    scoring: ScoringConfig = Field(default_factory=ScoringConfig)
+
+    @field_validator("rules")
+    @classmethod
+    def _known_rules(cls, v: dict[str, RuleOverride]) -> dict[str, RuleOverride]:
+        """Unknown rule ids / params and wrongly typed params are errors that name their path (``rules.DEP-001.params.x``)."""
+        if not v:
+            return v
+        from pch.engine.registry import all_rules
+
+        known = {r.id: r for r in all_rules()}
+        errs: list[str] = []
+        for rid, ov in v.items():
+            meta = known.get(rid)
+            if meta is None:
+                errs.append(f"@rules.{rid}: unknown rule id (run `pch rules list`)")
+                continue
+            for k, val in ov.params.items():
+                path = f"@rules.{rid}.params.{k}"
+                if k not in meta.params:
+                    errs.append(f"{path}: unknown param (this rule's params: {', '.join(sorted(meta.params)) or 'none'})")
+                elif not param_type_ok(meta.params[k], val):
+                    errs.append(f"{path}: expected {type(meta.params[k]).__name__} like the default")
+                elif k.endswith("_pattern"):
+                    try:
+                        re.compile(val)
+                    except re.error as exc:
+                        errs.append(f"{path}: invalid regular expression ({exc.msg})")
+        if errs:
+            raise ValueError("\n".join(errs))
+        return v
 
 
 def format_validation_error(label: str, exc: ValidationError) -> str:
     """``label: a.b.0.c: message`` per error. Uses only loc + msg so input values never leak."""
-    parts = []
+    parts: list[str] = []
     for e in exc.errors(include_input=False, include_url=False):
+        msg = e["msg"].removeprefix("Value error, ")
+        if msg.startswith("@"):  # a validator that reports full paths itself ("@rules.X: ..." per line)
+            parts.extend(f"{label}: {line[1:]}" for line in msg.splitlines() if line.startswith("@"))
+            continue
         loc = ".".join(str(x) for x in e["loc"]) or "(root)"
         parts.append(f"{label}: {loc}: {e['msg']}")
     return "; ".join(parts)

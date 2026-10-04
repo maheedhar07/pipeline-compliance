@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pch.engine.registry import rule
+from pch.engine.registry import rule, rule_params
 from pch.model.findings import RuleResult
 from pch.model.pipeline import Pipeline
 from pch.model.repo import RepoContext, TestState
@@ -68,6 +68,7 @@ def tst_003(ctx: RepoContext, policy: Policy) -> RuleResult:
     "Published results give traceable evidence that tests ran and what they covered.",
     {"classic": "Add Publish Test Results and Publish Code Coverage Results tasks.",
      "yaml": "Add PublishTestResults@2 and PublishCodeCoverageResults@1 (or --logger trx plus coverage publish)."},
+    params={"required_published": ["test-results-publish", "coverage-publish"]},
 )
 def tst_004(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
     if p.platform == "ado_classic_release":
@@ -75,7 +76,7 @@ def tst_004(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
     caps = p.capabilities()
     if "unit-test" not in caps:
         return RuleResult.na("pipeline does not run tests")
-    missing = [c for c in ("test-results-publish", "coverage-publish") if c not in caps]
+    missing = [c for c in rule_params(policy, "TST-004")["required_published"] if c not in caps]
     if missing:
         return RuleResult.failed("not published: " + ", ".join(missing), missing=missing)
     return RuleResult.passed("test results and coverage published")

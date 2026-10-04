@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from pch.model.findings import (
-    SEVERITY_WEIGHT,
     Finding,
     RepoStatus,
     Severity,
@@ -16,7 +15,7 @@ from pch.model.findings import (
 )
 from pch.settings import Policy
 
-CREDIT = {Status.PASS: 1.0, Status.WARN: 0.5, Status.FAIL: 0.0}
+CREDIT = {Status.PASS: 1.0, Status.WARN: 0.5, Status.FAIL: 0.0}  # WARN credit is policy.scoring.warn_credit
 # Precedence used when one rule yields several findings (pipelines/stages) for one repo.
 _PRECEDENCE = [
     Status.FAIL,
@@ -68,7 +67,9 @@ def aggregate_rule_status(statuses: list[Status]) -> Status:
 
 
 def score_repo(findings: list[Finding], policy: Policy | None = None) -> RepoScore:
-    """score = 100 * sum(weight*credit) / sum(weight*applicable), one entry per rule (worst finding wins)."""
+    """score = 100 * sum(weight*credit) / sum(weight*applicable), one entry per rule (worst finding wins).
+
+    weight = severity weight x category weight, both from ``policy.scoring`` (defaults: 10/5/3/1/0 and 1)."""
     policy = policy or Policy()
     per_rule: dict[str, list[Finding]] = defaultdict(list)
     for f in findings:
@@ -91,8 +92,8 @@ def score_repo(findings: list[Finding], policy: Policy | None = None) -> RepoSco
             elif sev == Severity.HIGH:
                 high += 1
         if agg in CREDIT:
-            w = SEVERITY_WEIGHT[sev]
-            num += w * CREDIT[agg]
+            w = policy.scoring.severity_weight(sev) * policy.scoring.category_weight(fs[0].category)
+            num += w * (policy.scoring.warn_credit if agg == Status.WARN else CREDIT[agg])
             den += w
     score = round(100.0 * num / den, 1) if den else None
     if crit:

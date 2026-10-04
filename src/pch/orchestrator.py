@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from collections import Counter
 from collections.abc import Callable
@@ -33,8 +34,8 @@ from pch.collectors.ado.variable_groups import collect_variable_groups
 from pch.collectors.ado.yaml_pipeline import parse_yaml_pipeline
 from pch.collectors.redact import SECRET_NAME, value_looks_secret
 from pch.engine.migration import repo_readiness
-from pch.engine.registry import all_rules
-from pch.engine.runner import evaluate
+from pch.engine.registry import all_rules, rule_params
+from pch.engine.runner import evaluate, policy_effects
 from pch.engine.scoring import apply_waivers, score_repo
 from pch.logging_setup import bind_scan, scrub
 from pch.model.findings import Finding, Severity, Status
@@ -259,13 +260,14 @@ class Scanner:
                 facts.kind, facts.has_app_code = inferred, False
         # 3. run history
         since = cfg.now - timedelta(days=cfg.run_days)
+        crq = re.compile(rule_params(cfg.policy, "DEP-005")["crq_pattern"], re.I)  # change-request number format (policy rules.DEP-005.params)
         build_runs: dict[str, list[dict[str, Any]]] = {}
         for p in pipelines:
             try:
                 if p.platform == "ado_classic_release":
-                    await collect_release_runs(ado, project, p, since)
+                    await collect_release_runs(ado, project, p, since, crq)
                 else:
-                    build_runs[p.id] = await collect_build_runs(ado, project, p, since)
+                    build_runs[p.id] = await collect_build_runs(ado, project, p, since, crq)
             except Exception as e:
                 rerr("ado", f"runs for {p.name}: {e}")
         # 3b. lineage (what this repo produces and where it was last deployed); never fails the repo
@@ -542,7 +544,8 @@ class Scanner:
                 row.repos_failed = failed
                 row.findings_total = n_findings
                 row.duration_s = round(duration, 2)
-                row.summary = {"status_counts": dict(counts), "category_fails": dict(cat_fail), "errors": len(self.errors), "providers": sorted(providers)}
+                row.summary = {"status_counts": dict(counts), "category_fails": dict(cat_fail), "errors": len(self.errors), "providers": sorted(providers),
+                               "policy": policy_effects(cfg.policy, self.rules)}
         return ScanResult(scan_id, len(results), n_findings, len(self.errors), round(duration, 2), dict(counts))
 
 

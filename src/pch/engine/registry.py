@@ -39,6 +39,7 @@ class RuleMeta:
     platforms: frozenset[str] | None = None  # restrict to pipeline platforms
     targets: frozenset[str] | None = None  # restrict to deploy targets
     tiers: frozenset[str] | None = None  # restrict to environment tiers
+    params: dict[str, Any] = field(default_factory=dict)  # tunable knobs and their defaults (policy.yaml rules.<ID>.params)
     extra: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -65,8 +66,12 @@ def rule(
     platforms: set[str] | None = None,
     targets: set[str] | None = None,
     tiers: set[str] | None = None,
+    params: dict[str, Any] | None = None,
 ) -> Callable[[RuleFn], RuleFn]:
-    """Register a deterministic rule. The category is the id prefix (SRC, QLT, ...)."""
+    """Register a deterministic rule. The category is the id prefix (SRC, QLT, ...).
+
+    ``params`` declares the rule's tunable knobs with their defaults; an org overrides them in ``policy.yaml``
+    (``rules: {ID: {params: {...}}}``) and the rule reads the merged values with ``rule_params(policy, id)``."""
 
     def deco(fn: RuleFn) -> RuleFn:
         if id in REGISTRY:
@@ -83,10 +88,19 @@ def rule(
             platforms=frozenset(platforms) if platforms else None,
             targets=frozenset(targets) if targets else None,
             tiers=frozenset(tiers) if tiers else None,
+            params=dict(params or {}),
         )
         return fn
 
     return deco
+
+
+def rule_params(policy: Any, rule_id: str) -> dict[str, Any]:
+    """The rule's params: registry defaults overridden by ``policy.rules[rule_id].params`` (validated at load time)."""
+    load_rules()
+    meta = REGISTRY[rule_id]
+    ov = policy.rules.get(rule_id)
+    return {**meta.params, **(ov.params if ov else {})}
 
 
 def load_rules() -> dict[str, RuleMeta]:

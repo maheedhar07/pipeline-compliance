@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pch.engine.helpers import lookup
-from pch.engine.registry import rule
+from pch.engine.registry import rule, rule_params
 from pch.model.findings import RuleResult
 from pch.model.pipeline import Pipeline
 from pch.model.repo import RepoContext
@@ -36,18 +36,20 @@ def sec_001(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
     "Key Vault-linked groups keep secrets out of Azure DevOps and give central rotation and audit.",
     {"any": "Link the production variable group to Azure Key Vault (Library > variable group > 'Link secrets from an Azure key vault')."},
     tiers={"prod"},
+    params={"prod_name_hints": ["prod"]},
 )
 def sec_002(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
     prod = {s.name for s in p.stages if s.env_tier == "prod"}
     groups = [g for g in p.variable_groups if g.scope is None or g.scope in prod]
     if not groups:
         return RuleResult.na("no variable groups")
+    hints = [h.lower() for h in rule_params(policy, "SEC-002")["prod_name_hints"]]
     unknown, plain = [], []
     for g in groups:
         vg = lookup(ctx.variable_groups, g.id or "") or lookup(ctx.variable_groups, g.name)
         if vg is None:
             unknown.append(g.name)
-        elif not vg.key_vault_linked and (vg.has_secrets or "prod" in vg.name.lower()):
+        elif not vg.key_vault_linked and (vg.has_secrets or any(h in vg.name.lower() for h in hints)):
             plain.append(g.name)
     if plain:
         return RuleResult.failed("not Key Vault-linked: " + ", ".join(plain), groups=plain)
@@ -108,24 +110,27 @@ def sec_004(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
     "A subscription-wide connection used in production gives a pipeline far more access than it needs.",
     {"any": "Recreate the production service connection scoped to the target resource group."},
     tiers={"prod"},
+    params={"fail_scope_levels": ["managementgroup", "management group"], "warn_scope_levels": ["subscription"]},
 )
 def sec_005(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
     names = _prod_stage_connections(p)
     if not names:
         return RuleResult.na("no service connections in production stages")
+    prm = rule_params(policy, "SEC-005")
+    fail_levels, warn_levels = {x.lower() for x in prm["fail_scope_levels"]}, {x.lower() for x in prm["warn_scope_levels"]}
     sub, mg, unknown = [], [], []
     for n in names:
         sc = lookup(ctx.service_connections, n)
         if sc is None or not sc.scope_level:
             unknown.append(n)
-        elif sc.scope_level.lower() == "subscription":
-            sub.append(n)
-        elif sc.scope_level.lower() in ("managementgroup", "management group"):
+        elif sc.scope_level.lower() in fail_levels:
             mg.append(n)
+        elif sc.scope_level.lower() in warn_levels:
+            sub.append(n)
     if mg:
-        return RuleResult.failed("management-group scoped connection in production: " + ", ".join(mg), connections=mg)
+        return RuleResult.failed("broadly scoped connection in production: " + ", ".join(mg), connections=mg)
     if sub:
-        return RuleResult.warn("subscription-scoped connection in production: " + ", ".join(sub), connections=sub)
+        return RuleResult.warn("widely scoped connection in production: " + ", ".join(sub), connections=sub)
     if unknown and len(unknown) == len(names):
         return RuleResult.unknown("connection scope unknown: " + ", ".join(unknown))
     return RuleResult.passed("production connections are resource-group scoped")

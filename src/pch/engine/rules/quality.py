@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from datetime import timedelta
 
-from pch.engine.registry import rule
+from pch.engine.registry import rule, rule_params
 from pch.model.findings import RuleResult, Status
 from pch.model.pipeline import Pipeline
 from pch.model.repo import RepoContext
@@ -13,7 +13,6 @@ from pch.normalize.capabilities import is_security_or_test_cap
 from pch.settings import Policy
 
 NO_SONAR_KINDS = {"docs", "adf", "synapse", "iac"}
-QG_WAIT = re.compile(r"sonar\.qualitygate\.wait\s*[=:]\s*true", re.I)
 
 
 def _na_kind(ctx: RepoContext) -> RuleResult | None:
@@ -27,6 +26,7 @@ def _na_kind(ctx: RepoContext) -> RuleResult | None:
     "Static analysis must run on every build; a partially configured Sonar integration silently stops reporting.",
     {"classic": "Add SonarQube Prepare (before build), Analyze (after tests) and Publish Quality Gate Result tasks to the build definition.",
      "yaml": "Add SonarQubePrepare@5, SonarQubeAnalyze@5 and SonarQubePublish@5 to the build stage."},
+    params={"required_steps": ["sonar:prepare", "sonar:analyze", "sonar:publish"]},
 )
 def qlt_001(ctx: RepoContext, policy: Policy) -> RuleResult:
     if (na := _na_kind(ctx)) is not None:
@@ -34,7 +34,7 @@ def qlt_001(ctx: RepoContext, policy: Policy) -> RuleResult:
     builds = ctx.build_pipelines()
     if not builds:
         return RuleResult.failed("no build pipeline found for this repo")
-    need = {"sonar:prepare", "sonar:analyze", "sonar:publish"}
+    need = set(rule_params(policy, "QLT-001")["required_steps"])
     best_missing = need
     for p in builds:
         have = p.capabilities(enabled_only=True)
@@ -50,6 +50,7 @@ def qlt_001(ctx: RepoContext, policy: Policy) -> RuleResult:
     "QLT-002", "Sonar quality gate is enforced (breaks the build)", "high", "repo",
     "A quality gate that only reports does not prevent bad code from shipping.",
     {"any": "Set sonar.qualitygate.wait=true (extraProperties on Prepare) or add a quality-gate breaker step that fails the pipeline."},
+    params={"wait_pattern": r"sonar\.qualitygate\.wait\s*[=:]\s*true"},
 )
 def qlt_002(ctx: RepoContext, policy: Policy) -> RuleResult:
     if (na := _na_kind(ctx)) is not None:
@@ -57,11 +58,12 @@ def qlt_002(ctx: RepoContext, policy: Policy) -> RuleResult:
     sonar_steps = [(p, s) for p in ctx.build_pipelines() for s in p.all_steps() if s.enabled and any(c.startswith("sonar:") for c in s.capabilities)]
     if not sonar_steps:
         return RuleResult.na("no Sonar integration in the pipelines (see QLT-001)")
+    wait = re.compile(rule_params(policy, "QLT-002")["wait_pattern"], re.I)
     for p, s in sonar_steps:
         if "sonar:gate-breaker" in s.capabilities:
             return RuleResult.passed("quality-gate breaker step present", pipeline=p.name)
         blob = " ".join(str(v) for v in s.inputs.values())
-        if QG_WAIT.search(blob):
+        if wait.search(blob):
             return RuleResult.passed("sonar.qualitygate.wait=true", pipeline=p.name)
     return RuleResult.warn("quality gate is reported only; the pipeline is not broken when the gate fails")
 

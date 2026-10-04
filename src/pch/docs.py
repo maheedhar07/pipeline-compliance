@@ -13,8 +13,12 @@ HEADER = """# Rule catalog
 > A test (`tests/test_docs.py`) fails when this file is out of date.
 
 Every rule is deterministic Python. A rule returns `PASS`, `FAIL`, `WARN`, `NOT_APPLICABLE` or `UNKNOWN`
-with an evidence dict and a deep link. Scoring weights: critical 10, high 5, medium 3, low 1, info 0.
+with an evidence dict and a deep link. Default scoring weights: critical 10, high 5, medium 3, low 1, info 0.
 `WARN` earns half credit; `NOT_APPLICABLE`, `UNKNOWN` and `WAIVED` are excluded from the score.
+
+Standards are configuration, not code: in `config/policy.yaml` any rule can be disabled or re-rated
+(`rules: {ID: {enabled, severity, params}}`), and the weights can be changed (`scoring:`). The "Tunable params"
+line of a rule lists its knobs with their defaults. See [STANDARDS.md](STANDARDS.md) for where every standard lives.
 """
 
 PLATFORM_LABEL = {"any": "All platforms", "classic": "Classic pipelines", "yaml": "YAML pipelines", "gha": "GitHub Actions"}
@@ -45,6 +49,8 @@ def render_rules_md() -> str:
             out.append(f"- Severity: **{r.severity.value}**")
             out.append(f"- Evaluated per: **{r.scope}**")
             out.append(f"- Applies to: {'; '.join(applies) if applies else 'all'}")
+            if r.params:
+                out.append("- Tunable params (`policy.yaml` `rules." + r.id + ".params`): " + ", ".join(f"`{k}` = `{v!r}`" for k, v in r.params.items()))
             out.append(f"- Why it matters: {r.rationale}")
             out.append("- Remediation:")
             for plat, text in r.remediation.items():

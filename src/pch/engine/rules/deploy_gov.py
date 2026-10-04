@@ -6,7 +6,7 @@ from typing import Any
 
 from pch.collectors.servicenow import change_is_valid, window_covers
 from pch.engine.helpers import ancestors, prod_stages
-from pch.engine.registry import rule
+from pch.engine.registry import rule, rule_params
 from pch.model.findings import RuleResult
 from pch.model.pipeline import Pipeline
 from pch.model.repo import RepoContext
@@ -85,13 +85,14 @@ def dep_003(ctx, policy: Policy, t) -> RuleResult:
     {"classic": "Production stage > Pre-deployment conditions > trigger 'After stage' = UAT (not 'After release').",
      "yaml": "Set dependsOn on the production stage to the UAT/test stage."},
     tiers={"prod"},
+    params={"lower_tiers": ["dev", "test", "uat"]},
 )
 def dep_004(ctx, policy: Policy, t) -> RuleResult:
     p, st = t.pipeline, t.stage
     if not st.is_deploy:
         return RuleResult.na("not a deployment stage")
     anc = ancestors(p, st)
-    lower = [a.name for a in anc if a.env_tier in ("dev", "test", "uat")]
+    lower = [a.name for a in anc if a.env_tier in rule_params(policy, "DEP-004")["lower_tiers"]]
     if lower:
         return RuleResult.passed("depends on lower environment(s)", lower=lower)
     deployish = [a.name for a in anc if a.is_deploy]
@@ -105,6 +106,7 @@ def dep_004(ctx, policy: Policy, t) -> RuleResult:
     "Detective control: proves production changes were authorised and inside their change window.",
     {"any": "Put the CRQ number in the release name/description (or a pipeline parameter) and make the CRQ gate mandatory."},
     tiers={"prod"},
+    params={"crq_pattern": r"\b(CHG\d{6,9}|CRQ\d{6,12})\b", "window_slack_hours": 2},
 )
 def dep_005(ctx: RepoContext, policy: Policy) -> RuleResult:
     deps = [(p, d) for p in ctx.pipelines for d in p.deployments_90d if d.env_tier == "prod"]
@@ -112,6 +114,7 @@ def dep_005(ctx: RepoContext, policy: Policy) -> RuleResult:
         return RuleResult.na("no production deployments in the last 90 days")
     if not ctx.snow.available:
         return RuleResult.unknown("ServiceNow was not queried; cannot correlate deployments")
+    slack = rule_params(policy, "DEP-005")["window_slack_hours"]
     ok = 0
     bad: list[dict[str, Any]] = []
     unlinked: list[dict[str, Any]] = []
@@ -123,7 +126,7 @@ def dep_005(ctx: RepoContext, policy: Policy) -> RuleResult:
                 break
         if cr is None and not d.change_refs and d.completed_at:
             for c in ctx.snow.ci_changes:  # fall back to CI + time window
-                if window_covers(c, d.completed_at):
+                if window_covers(c, d.completed_at, slack):
                     cr = c
                     break
         if cr is None:
@@ -133,7 +136,7 @@ def dep_005(ctx: RepoContext, policy: Policy) -> RuleResult:
             continue
         if not change_is_valid(cr):
             bad.append({"deployment": d.id, "pipeline": p.name, "crq": cr.number, "reason": f"CRQ state '{cr.state}' / approval '{cr.approval}'"})
-        elif d.completed_at and not window_covers(cr, d.completed_at):
+        elif d.completed_at and not window_covers(cr, d.completed_at, slack):
             bad.append({"deployment": d.id, "pipeline": p.name, "crq": cr.number, "reason": "deployed outside the CRQ window"})
         else:
             ok += 1

@@ -5,13 +5,12 @@ from __future__ import annotations
 import re
 
 from pch.engine.helpers import SCRIPT_TASKS, step_blob
-from pch.engine.registry import rule
+from pch.engine.registry import rule, rule_params
 from pch.model.findings import RuleResult
 from pch.model.pipeline import Pipeline
 from pch.model.repo import RepoContext
 from pch.settings import Policy
 
-LATEST = re.compile(r":latest\b", re.I)
 ACR = re.compile(r"\b([a-z0-9]+\.azurecr\.io)\b", re.I)
 IMMUTABLE = re.compile(r"@sha256:|\$\((Build\.BuildId|Build\.BuildNumber|Build\.SourceVersion|Build\.BuildId)\)|\$\{\{\s*variables\['Build|\$\(tag\)|\$\(imageTag\)", re.I)
 
@@ -41,9 +40,11 @@ def sup_001(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
     "Unpinned tasks change behaviour silently; deprecated tasks stop receiving fixes.",
     {"classic": "Pin each task to a major version (e.g. 2.*) and upgrade deprecated tasks.",
      "yaml": "Use Task@<major> and replace deprecated tasks (see data/deprecated_tasks.yaml)."},
+    params={"ignored_tasks": sorted(SCRIPT_TASKS)},
 )
 def sup_002(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
-    tasks = [s for s in p.all_steps() if s.task and s.task.split("@")[0].lower() not in SCRIPT_TASKS and s.enabled]
+    ignored = {t.lower() for t in rule_params(policy, "SUP-002")["ignored_tasks"]}
+    tasks = [s for s in p.all_steps() if s.task and s.task.split("@")[0].lower() not in ignored and s.enabled]
     if not tasks:
         return RuleResult.na("no task steps")
     unpinned = sorted({(s.task or "").split("@")[0] for s in tasks if s.task_version is None})
@@ -77,18 +78,23 @@ def sup_003(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
     "Mutable tags make deployments non-reproducible; unapproved registries bypass vulnerability scanning.",
     {"any": "Push to the approved ACR and deploy by digest (@sha256) or an immutable tag such as $(Build.BuildId). Never use :latest."},
     targets={"aks"},
+    params={"forbidden_tags": ["latest"]},
 )
 def sup_004(ctx: RepoContext, policy: Policy, p: Pipeline) -> RuleResult:
     blobs = [step_blob(s) for s in p.all_steps() if s.enabled]
     text = " ".join(blobs)
     tags_inputs = [str(s.inputs.get("tags", "")) for s in p.all_steps() if s.enabled]
-    latest = bool(LATEST.search(text)) or any("latest" in t.lower().split() or t.strip().lower() == "latest" for t in tags_inputs)
+    tags = [t.lower() for t in rule_params(policy, "SUP-004")["forbidden_tags"]]
+    in_text = re.search(r":(" + "|".join(re.escape(t) for t in tags) + r")\b", text, re.I) if tags else None
+    in_inputs = next((x for t in tags_inputs for x in [*t.lower().split(), t.strip().lower()] if x in tags), None)
+    forbidden = in_text.group(1).lower() if in_text else in_inputs
+    latest = forbidden is not None
     registries = sorted({m.lower() for m in ACR.findall(text)})
     approved = {r.lower() for r in policy.approved_registries}
     bad_reg = [r for r in registries if approved and r not in approved]
     ev = {"registries": registries, "uses_latest": latest}
     if latest:
-        return RuleResult.failed("image tag ':latest' is used", **ev)
+        return RuleResult.failed(f"image tag ':{forbidden}' is used", **ev)
     if bad_reg:
         return RuleResult.failed(f"image registry not approved: {bad_reg}", approved=sorted(approved), **ev)
     if not IMMUTABLE.search(text):

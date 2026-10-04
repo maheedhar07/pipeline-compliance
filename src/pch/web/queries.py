@@ -126,9 +126,18 @@ def csv_rows(rows: list[dict[str, Any]]) -> list[list[Any]]:
 
 
 # ------------------------------------------------------------------ rule stats
+def policy_effects(s: Session, scan_id: str) -> dict[str, Any]:
+    """What policy.yaml did in this scan (``{"disabled": [...], "severity": {id: {from, to}}}``); empty for older scans."""
+    row = store.get_scan(s, scan_id)
+    return dict((row.summary or {}).get("policy") or {}) if row else {}
+
+
 def rule_stats(s: Session, scan_id: str, rows: list[RepoResultRow] | None = None) -> list[dict[str, Any]]:
     """Per-rule status counts across repos (worst finding per repo/rule)."""
     rows = rows if rows is not None else store.repo_results(s, scan_id)
+    eff = policy_effects(s, scan_id)
+    disabled = set(eff.get("disabled", []))
+    sev_over = eff.get("severity", {})
     counts: dict[str, Counter[str]] = defaultdict(Counter)
     for r in rows:
         for rid, st in (r.rule_status or {}).items():
@@ -138,8 +147,9 @@ def rule_stats(s: Session, scan_id: str, rows: list[RepoResultRow] | None = None
         c = counts.get(meta.id, Counter())
         scored = c["PASS"] + c["FAIL"] + c["WARN"]
         out.append({
-            "id": meta.id, "title": meta.title, "category": meta.category, "category_name": meta.category_name, "severity": meta.severity.value,
-            "scope": meta.scope, "pass": c["PASS"], "fail": c["FAIL"], "warn": c["WARN"], "unknown": c["UNKNOWN"], "waived": c["WAIVED"],
+            "id": meta.id, "title": meta.title, "category": meta.category, "category_name": meta.category_name,
+            "severity": sev_over.get(meta.id, {}).get("to", meta.severity.value), "severity_default": sev_over[meta.id]["from"] if meta.id in sev_over else None,
+            "disabled": meta.id in disabled, "scope": meta.scope, "pass": c["PASS"], "fail": c["FAIL"], "warn": c["WARN"], "unknown": c["UNKNOWN"], "waived": c["WAIVED"],
             "applicable": scored + c["UNKNOWN"] + c["WAIVED"],
             "pass_rate": round(100 * (c["PASS"] + 0.5 * c["WARN"]) / scored, 1) if scored else None,
         })
@@ -151,15 +161,16 @@ def rule_detail(s: Session, scan_id: str, rule_id: str) -> dict[str, Any] | None
     if not meta:
         return None
     stats = next(x for x in rule_stats(s, scan_id) if x["id"] == rule_id)
+    eff = policy_effects(s, scan_id)
     fs = store.findings(s, scan_id, rule_id=rule_id)
     fs.sort(key=lambda f: (FINDING_RANK.get(f.status, 9), f.repo_key))
     prov = provider_map(s, scan_id)
     return {
-        "rule": {"id": meta.id, "title": meta.title, "category": meta.category, "category_name": meta.category_name, "severity": meta.severity.value,
-                 "scope": meta.scope, "rationale": meta.rationale, "remediation": meta.remediation,
+        "rule": {"id": meta.id, "title": meta.title, "category": meta.category, "category_name": meta.category_name, "severity": stats["severity"],
+                 "severity_default": stats["severity_default"], "disabled": stats["disabled"], "params": meta.params, "scope": meta.scope, "rationale": meta.rationale, "remediation": meta.remediation,
                  "platforms": sorted(meta.platforms or []), "targets": sorted(meta.targets or []), "tiers": sorted(meta.tiers or [])},
         "stats": stats,
-        "findings": [finding_dict(f, providers=prov) for f in fs if f.status != "PASS"][:500],
+        "findings": [finding_dict(f, providers=prov, eff=eff) for f in fs if f.status != "PASS"][:500],
         "passing_repos": sorted({f.repo_key for f in fs if f.status == "PASS"}),
     }
 
@@ -168,12 +179,14 @@ def provider_map(s: Session, scan_id: str) -> dict[str, str]:
     return {r.repo_key: provider_of_row(r) for r in store.repo_results(s, scan_id)}
 
 
-def finding_dict(f: FindingRow, meta: dict[str, RuleMeta] | None = None, platform: str | None = None, providers: dict[str, str] | None = None) -> dict[str, Any]:
+def finding_dict(f: FindingRow, meta: dict[str, RuleMeta] | None = None, platform: str | None = None, providers: dict[str, str] | None = None,
+                 eff: dict[str, Any] | None = None) -> dict[str, Any]:
     meta = meta or rule_index()
+    over = ((eff or {}).get("severity") or {}).get(f.rule_id)
     m = meta.get(f.rule_id)
     return {
         "rule_id": f.rule_id, "title": m.title if m else "Collection error", "category": f.category,
-        "category_name": CATEGORY_NAMES.get(f.category, "System"), "severity": f.severity, "status": f.status, "repo_key": f.repo_key,
+        "category_name": CATEGORY_NAMES.get(f.category, "System"), "severity": f.severity, "severity_default": over["from"] if over else None, "status": f.status, "repo_key": f.repo_key,
         "project": project_of(f.repo_key), "provider": (providers or {}).get(f.repo_key, "azure_repos"), "pipeline_id": f.pipeline_id, "pipeline_name": f.pipeline_name, "stage": f.stage, "message": f.message,
         "evidence": f.evidence or {}, "link": f.link, "waiver": f.waiver, "original_status": f.original_status,
         "rationale": m.rationale if m else "", "remediation": m.remediation_for(platform) if m else "",
@@ -200,7 +213,8 @@ def findings_list(s: Session, scan_id: str, *, project: str | None = None, categ
     rows.sort(key=lambda f: (SEV_RANK.get(f.severity, 9), FINDING_RANK.get(f.status, 9), f.repo_key, f.rule_id))
     meta = rule_index()
     prov = provider_map(s, scan_id)
-    return {"total": total, "limit": limit, "offset": offset, "items": [finding_dict(f, meta, providers=prov) for f in rows[offset : offset + limit]]}
+    eff = policy_effects(s, scan_id)
+    return {"total": total, "limit": limit, "offset": offset, "items": [finding_dict(f, meta, providers=prov, eff=eff) for f in rows[offset : offset + limit]]}
 
 
 # ------------------------------------------------------------------ overview
@@ -356,10 +370,11 @@ def repo_detail(s: Session, scan_id: str, project: str, repo: str) -> dict[str, 
     platform_hint = "ado_yaml" if any(p["platform"] == "ado_yaml" for p in r.pipelines) else "ado_classic_release"
     pipe_platform = {p["id"]: p["platform"] for p in r.pipelines}
     fs = store.findings(s, scan_id, repo_key=key)
+    eff = policy_effects(s, scan_id)
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     cat_counts: dict[str, Counter[str]] = defaultdict(Counter)
     for f in fs:
-        d = finding_dict(f, meta, pipe_platform.get(f.pipeline_id or "", platform_hint), {key: provider_of_row(r)})
+        d = finding_dict(f, meta, pipe_platform.get(f.pipeline_id or "", platform_hint), {key: provider_of_row(r)}, eff)
         groups[f.category].append(d)
         cat_counts[f.category][f.status] += 1
     for lst in groups.values():

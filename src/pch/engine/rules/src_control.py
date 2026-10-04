@@ -5,7 +5,7 @@ from __future__ import annotations
 import fnmatch
 
 from pch.engine.helpers import branch_allowed
-from pch.engine.registry import rule
+from pch.engine.registry import rule, rule_params
 from pch.model.findings import RuleResult
 from pch.model.pipeline import Pipeline
 from pch.model.repo import RepoContext
@@ -16,6 +16,7 @@ from pch.settings import Policy
     "SRC-001", "Default branch requires 2+ reviewers (creator vote excluded, reset on push)", "high", "repo",
     "Peer review on the default branch is the primary preventive control for unreviewed code reaching production.",
     {"any": "Repos > Branches > main > Branch policies: set minimum reviewers to 2, disable 'Allow requestors to approve their own changes', enable 'Reset all approval votes' on new changes."},
+    params={"allow_creator_vote": False, "require_reset_on_push": True},
 )
 def src_001(ctx: RepoContext, policy: Policy) -> RuleResult:
     pol = ctx.policies
@@ -25,9 +26,10 @@ def src_001(ctx: RepoContext, policy: Policy) -> RuleResult:
     need = policy.min_reviewers
     if (pol.min_reviewers or 0) < need:
         problems.append(f"minimum reviewers is {pol.min_reviewers or 0}, need >= {need}")
-    if pol.creator_vote_counts:
+    prm = rule_params(policy, "SRC-001")
+    if pol.creator_vote_counts and not prm["allow_creator_vote"]:
         problems.append("creator's own vote counts")
-    if not pol.reset_on_push:
+    if not pol.reset_on_push and prm["require_reset_on_push"]:
         problems.append("approvals are not reset on new pushes")
     ev = {"min_reviewers": pol.min_reviewers, "creator_vote_counts": pol.creator_vote_counts, "reset_on_push": pol.reset_on_push}
     if problems:

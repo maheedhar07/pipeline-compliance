@@ -15,7 +15,15 @@ from sqlalchemy import text
 from sqlalchemy.engine import make_url
 
 from pch.providers.secrets import SOURCE_SECRETS
-from pch.settings import ConfigError, Settings, format_validation_error, load_policy, load_scope
+from pch.settings import (
+    ConfigError,
+    Policy,
+    Scope,
+    Settings,
+    format_validation_error,
+    load_policy,
+    load_scope,
+)
 
 OK, WARN, FAIL = "OK", "WARN", "FAIL"
 
@@ -36,18 +44,37 @@ def check_settings() -> tuple[Settings | None, Check]:
     return s, Check("settings", OK, f"APP_ENV={s.app_env}")
 
 
+def _config_summary(cfg: Scope | Policy) -> str:
+    """What the loaded file switches on, so `pch doctor` shows the effective standards at a glance."""
+    if isinstance(cfg, Scope):
+        return f" (code_hosts: {', '.join(cfg.code_hosts)})"
+    parts = []
+    off = sorted(r for r, o in cfg.rules.items() if not o.enabled)
+    sev = sorted(r for r, o in cfg.rules.items() if o.enabled and o.severity is not None)
+    prm = sorted(r for r, o in cfg.rules.items() if o.params)
+    if off:
+        parts.append(f"disabled rules: {', '.join(off)}")
+    if sev:
+        parts.append(f"severity overrides: {', '.join(sev)}")
+    if prm:
+        parts.append(f"param overrides: {', '.join(prm)}")
+    if cfg.scoring.model_fields_set:
+        parts.append("custom scoring")
+    return f" ({'; '.join(parts)})" if parts else ""
+
+
 def check_config_files(s: Settings, scope_path: Path | None, policy_path: Path | None) -> list[Check]:
     scope_p = scope_path or s.config_dir / "scope.yaml"
     policy_p = policy_path or s.config_dir / "policy.yaml"
     out: list[Check] = []
     for name, path, loader in (("scope.yaml", scope_p, lambda p: load_scope(p, required=s.is_prod)), ("policy.yaml", policy_p, load_policy)):
         try:
-            loader(path)
+            cfg = loader(path)
         except ConfigError as exc:
             out.append(Check(name, FAIL, str(exc)))
             continue
         if path.exists():
-            out.append(Check(name, OK, str(path)))
+            out.append(Check(name, OK, f"{path}{_config_summary(cfg)}"))
         else:
             out.append(Check(name, WARN, f"{path} not found, using defaults"))
     return out

@@ -22,14 +22,17 @@ def parse_dt(v: str | None) -> datetime | None:
     return d.astimezone(UTC).replace(tzinfo=None) if d.tzinfo else d
 
 
-def change_refs(*texts: Any) -> list[str]:
+def change_refs(*texts: Any, pattern: re.Pattern[str] | None = None) -> list[str]:
+    """Change-request numbers found in the texts. ``pattern`` = DEP-005 param ``crq_pattern`` (default: CHG/CRQ numbers)."""
+    rx = pattern or CRQ_RE
     out: list[str] = []
     for t in texts:
         if t is None:
             continue
-        for m in CRQ_RE.findall(str(t)):
-            if m.upper() not in out:
-                out.append(m.upper())
+        for m in rx.finditer(str(t)):
+            ref = m.group(0).upper()
+            if ref not in out:
+                out.append(ref)
     return out
 
 
@@ -55,7 +58,7 @@ def stats_from_builds(builds: list[dict[str, Any]]) -> tuple[RunStats, RunSummar
     return st, last
 
 
-async def collect_build_runs(client: AdoClient, project: str, p: Pipeline, since: datetime) -> list[dict[str, Any]]:
+async def collect_build_runs(client: AdoClient, project: str, p: Pipeline, since: datetime, crq: re.Pattern[str] | None = None) -> list[dict[str, Any]]:
     """Collect completed builds (run stats, last run, prod deployments). Returns the raw items for the lineage view."""
     items = await client.paged(
         project, "_apis/build/builds",
@@ -75,14 +78,14 @@ async def collect_build_runs(client: AdoClient, project: str, p: Pipeline, since
                     env_tier="prod",
                     completed_at=parse_dt(b.get("finishTime")),
                     status=res,
-                    change_refs=change_refs(b.get("parameters"), b.get("buildNumber"), b.get("tags"), b.get("triggerInfo")),
+                    change_refs=change_refs(b.get("parameters"), b.get("buildNumber"), b.get("tags"), b.get("triggerInfo"), pattern=crq),
                     requested_by=(b.get("requestedFor") or {}).get("uniqueName"),
                 )
             )
     return items
 
 
-async def collect_release_runs(client: AdoClient, project: str, p: Pipeline, since: datetime) -> None:
+async def collect_release_runs(client: AdoClient, project: str, p: Pipeline, since: datetime, crq: re.Pattern[str] | None = None) -> None:
     items = await client.paged(
         project, "_apis/release/deployments",
         {"definitionId": p.id, "minStartedTime": since.strftime("%Y-%m-%dT%H:%M:%SZ"), "$top": 200},
@@ -116,7 +119,7 @@ async def collect_release_runs(client: AdoClient, project: str, p: Pipeline, sin
                     completed_at=completed,
                     status=status,
                     # VERIFY: the CRQ number is expected in the release name/description or a release variable.
-                    change_refs=change_refs(rel.get("name"), rel.get("description"), d.get("description"), rel.get("variables")),
+                    change_refs=change_refs(rel.get("name"), rel.get("description"), d.get("description"), rel.get("variables"), pattern=crq),
                     requested_by=(d.get("requestedFor") or {}).get("uniqueName"),
                 )
             )

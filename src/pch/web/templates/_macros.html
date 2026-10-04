@@ -3,9 +3,9 @@
 <span class="inline-block whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-semibold tracking-wide {{ cls.get(s, 'bg-slate-100 text-slate-700') }}">{{ s | replace('_',' ') }}</span>
 {%- endmacro %}
 
-{% macro sev_badge(s) -%}
+{% macro sev_badge(s, was=none) -%}
 {%- set cls = {'critical':'bg-red-600 text-white','high':'bg-orange-500 text-white','medium':'bg-amber-400 text-slate-900','low':'bg-sky-200 text-sky-900 dark:bg-sky-800 dark:text-sky-100','info':'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200'} -%}
-<span class="inline-block rounded px-1.5 py-0.5 text-[10px] font-bold uppercase {{ cls.get(s, 'bg-slate-200') }}">{{ s }}</span>
+<span class="inline-block rounded px-1.5 py-0.5 text-[10px] font-bold uppercase {{ cls.get(s, 'bg-slate-200') }}">{{ s }}</span>{% if was %}<span class="ml-1 text-[10px] italic text-indigo-600 dark:text-indigo-300" title="severity overridden by policy (default: {{ was }})">overridden</span>{% endif %}
 {%- endmacro %}
 
 {% macro test_badge(s) -%}

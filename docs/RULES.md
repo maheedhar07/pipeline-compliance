@@ -5,8 +5,12 @@
 > A test (`tests/test_docs.py`) fails when this file is out of date.
 
 Every rule is deterministic Python. A rule returns `PASS`, `FAIL`, `WARN`, `NOT_APPLICABLE` or `UNKNOWN`
-with an evidence dict and a deep link. Scoring weights: critical 10, high 5, medium 3, low 1, info 0.
+with an evidence dict and a deep link. Default scoring weights: critical 10, high 5, medium 3, low 1, info 0.
 `WARN` earns half credit; `NOT_APPLICABLE`, `UNKNOWN` and `WAIVED` are excluded from the score.
+
+Standards are configuration, not code: in `config/policy.yaml` any rule can be disabled or re-rated
+(`rules: {ID: {enabled, severity, params}}`), and the weights can be changed (`scoring:`). The "Tunable params"
+line of a rule lists its knobs with their defaults. See [STANDARDS.md](STANDARDS.md) for where every standard lives.
 
 **53 rules** in 8 categories.
 
@@ -75,6 +79,7 @@ with an evidence dict and a deep link. Scoring weights: critical 10, high 5, med
 - Severity: **high**
 - Evaluated per: **repo**
 - Applies to: all
+- Tunable params (`policy.yaml` `rules.SRC-001.params`): `allow_creator_vote` = `False`, `require_reset_on_push` = `True`
 - Why it matters: Peer review on the default branch is the primary preventive control for unreviewed code reaching production.
 - Remediation:
   - All platforms: Repos > Branches > main > Branch policies: set minimum reviewers to 2, disable 'Allow requestors to approve their own changes', enable 'Reset all approval votes' on new changes.
@@ -146,6 +151,7 @@ with an evidence dict and a deep link. Scoring weights: critical 10, high 5, med
 - Severity: **high**
 - Evaluated per: **repo**
 - Applies to: all
+- Tunable params (`policy.yaml` `rules.QLT-001.params`): `required_steps` = `['sonar:prepare', 'sonar:analyze', 'sonar:publish']`
 - Why it matters: Static analysis must run on every build; a partially configured Sonar integration silently stops reporting.
 - Remediation:
   - Classic pipelines: Add SonarQube Prepare (before build), Analyze (after tests) and Publish Quality Gate Result tasks to the build definition.
@@ -158,6 +164,7 @@ with an evidence dict and a deep link. Scoring weights: critical 10, high 5, med
 - Severity: **high**
 - Evaluated per: **repo**
 - Applies to: all
+- Tunable params (`policy.yaml` `rules.QLT-002.params`): `wait_pattern` = `'sonar\\.qualitygate\\.wait\\s*[=:]\\s*true'`
 - Why it matters: A quality gate that only reports does not prevent bad code from shipping.
 - Remediation:
   - All platforms: Set sonar.qualitygate.wait=true (extraProperties on Prepare) or add a quality-gate breaker step that fails the pipeline.
@@ -273,6 +280,7 @@ with an evidence dict and a deep link. Scoring weights: critical 10, high 5, med
 - Severity: **medium**
 - Evaluated per: **pipeline**
 - Applies to: all
+- Tunable params (`policy.yaml` `rules.TST-004.params`): `required_published` = `['test-results-publish', 'coverage-publish']`
 - Why it matters: Published results give traceable evidence that tests ran and what they covered.
 - Remediation:
   - Classic pipelines: Add Publish Test Results and Publish Code Coverage Results tasks.
@@ -323,6 +331,7 @@ with an evidence dict and a deep link. Scoring weights: critical 10, high 5, med
 - Severity: **medium**
 - Evaluated per: **pipeline**
 - Applies to: all
+- Tunable params (`policy.yaml` `rules.SUP-002.params`): `ignored_tasks` = `['bash', 'powershell', 'pwsh', 'script']`
 - Why it matters: Unpinned tasks change behaviour silently; deprecated tasks stop receiving fixes.
 - Remediation:
   - Classic pipelines: Pin each task to a major version (e.g. 2.*) and upgrade deprecated tasks.
@@ -346,6 +355,7 @@ with an evidence dict and a deep link. Scoring weights: critical 10, high 5, med
 - Severity: **high**
 - Evaluated per: **pipeline**
 - Applies to: targets: aks
+- Tunable params (`policy.yaml` `rules.SUP-004.params`): `forbidden_tags` = `['latest']`
 - Why it matters: Mutable tags make deployments non-reproducible; unapproved registries bypass vulnerability scanning.
 - Remediation:
   - All platforms: Push to the approved ACR and deploy by digest (@sha256) or an immutable tag such as $(Build.BuildId). Never use :latest.
@@ -384,6 +394,7 @@ with an evidence dict and a deep link. Scoring weights: critical 10, high 5, med
 - Severity: **high**
 - Evaluated per: **pipeline**
 - Applies to: environment tiers: prod
+- Tunable params (`policy.yaml` `rules.SEC-002.params`): `prod_name_hints` = `['prod']`
 - Why it matters: Key Vault-linked groups keep secrets out of Azure DevOps and give central rotation and audit.
 - Remediation:
   - All platforms: Link the production variable group to Azure Key Vault (Library > variable group > 'Link secrets from an Azure key vault').
@@ -417,6 +428,7 @@ with an evidence dict and a deep link. Scoring weights: critical 10, high 5, med
 - Severity: **medium**
 - Evaluated per: **pipeline**
 - Applies to: environment tiers: prod
+- Tunable params (`policy.yaml` `rules.SEC-005.params`): `fail_scope_levels` = `['managementgroup', 'management group']`, `warn_scope_levels` = `['subscription']`
 - Why it matters: A subscription-wide connection used in production gives a pipeline far more access than it needs.
 - Remediation:
   - All platforms: Recreate the production service connection scoped to the target resource group.
@@ -467,6 +479,7 @@ with an evidence dict and a deep link. Scoring weights: critical 10, high 5, med
 - Severity: **high**
 - Evaluated per: **stage**
 - Applies to: environment tiers: prod
+- Tunable params (`policy.yaml` `rules.DEP-004.params`): `lower_tiers` = `['dev', 'test', 'uat']`
 - Why it matters: Changes must be promoted through dev/test/UAT before production.
 - Remediation:
   - Classic pipelines: Production stage > Pre-deployment conditions > trigger 'After stage' = UAT (not 'After release').
@@ -479,6 +492,7 @@ with an evidence dict and a deep link. Scoring weights: critical 10, high 5, med
 - Severity: **high**
 - Evaluated per: **repo**
 - Applies to: environment tiers: prod
+- Tunable params (`policy.yaml` `rules.DEP-005.params`): `crq_pattern` = `'\\b(CHG\\d{6,9}|CRQ\\d{6,12})\\b'`, `window_slack_hours` = `2`
 - Why it matters: Detective control: proves production changes were authorised and inside their change window.
 - Remediation:
   - All platforms: Put the CRQ number in the release name/description (or a pipeline parameter) and make the CRQ gate mandatory.
