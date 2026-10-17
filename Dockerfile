@@ -3,7 +3,7 @@
 #   docker buildx imagetools inspect python:3.11-slim   (or Docker Hub registry API HEAD on the manifest)
 # and replace the sha256 below in BOTH stages. Dependabot (docker ecosystem) also proposes bumps.
 # ---- builder: install locked, hash-verified deps into a venv, then the project itself ----
-FROM python:3.11-slim@sha256:bab1b7ef4b450c81002278d035eff85ebe394ae94df904f7a3ba14f7e16e487b AS builder
+FROM python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170 AS builder
 ENV PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /build
 RUN python -m venv /opt/venv
@@ -21,7 +21,7 @@ COPY src ./src
 RUN pip install --no-deps .
 
 # ---- final: venv only, no build tooling beyond what the base image ships ----
-FROM python:3.11-slim@sha256:bab1b7ef4b450c81002278d035eff85ebe394ae94df904f7a3ba14f7e16e487b
+FROM python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PATH="/opt/venv/bin:$PATH"
 WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
